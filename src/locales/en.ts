@@ -1,6 +1,6 @@
 export const en = {
   header: {
-    subtitle: "AI-Powered YouTube Viral Hook & Hotspot Finder",
+    subtitle: "AI Powered YouTube Auto Clipper",
     supportProject: "Support This Project",
   },
   form: {
@@ -21,7 +21,7 @@ export const en = {
     aiModelLabel: "AI Model Selection",
     fetchingModels: "Fetching available...",
     resilienceTip: "Free Tier Resilience:",
-    resilienceDesc: "If a model encounters quota limits or errors, Cheat Clip automatically tries all newer and older Flash models (3.x, 2.5, 2.0, 1.5) fetched from your API key until clips are successfully found!",
+    resilienceDesc: "If a model encounters quota limits or errors, Cheat Clip Pro automatically tries all newer and older Flash models (3.x, 2.5, 2.0, 1.5) fetched from your API key until clips are successfully found!",
     
     // Customization
     clipCustomizationTitle: "Clip Customization",
@@ -112,6 +112,8 @@ export const en = {
   },
   results: {
     refreshPlayer: "🔄 Refresh Player",
+    downloadRawVideo: "⬇️ Download Raw Video",
+    downloadingRawVideo: "⏳ Downloading 1080p...",
     videoSummary: "Video Summary",
     generatedClipsOverview: (count: number) => `Generated Clips Overview (${count})`,
     recommendedClips: "Recommended Clips",

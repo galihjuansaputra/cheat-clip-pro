@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { HeatmapTimeline } from './components/HeatmapTimeline';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
+import { ClipStudioSection } from './components/ClipStudioSection';
+import { CookiesModal } from './components/CookiesModal';
 import { useLanguage } from './locales';
-import type { AnalyzeResponse, ViralClip } from './types';
+import type { AnalyzeResponse, ViralClip, RenderSettings, BatchRenderProgress } from './types';
 
 // Declare YT global variables for TypeScript
 declare global {
@@ -18,6 +20,21 @@ export default function App() {
   const [durationPref, setDurationPref] = useState<'15s' | '30s' | '60s'>('30s');
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('cheat_clip_gemini_api_key') || '');
   const [showApiKey, setShowApiKey] = useState(false);
+  const [isCookiesModalOpen, setIsCookiesModalOpen] = useState(false);
+  const [hasCookies, setHasCookies] = useState(false);
+  const [isDownloadingRaw, setIsDownloadingRaw] = useState(false);
+  const [rawDownloadProgress, setRawDownloadProgress] = useState<{
+    jobId: string;
+    status: string;
+    percent: number;
+    downloaded: string;
+    total: string;
+    speed: string;
+    eta: string;
+    downloadUrl?: string;
+    filename?: string;
+    error?: string;
+  } | null>(null);
 
   // AI model selection and custom focus prompt states
   const [selectedModel, setSelectedModel] = useState<string>(() => {
@@ -98,6 +115,18 @@ export default function App() {
     };
   }, [loading]);
 
+  // Check YouTube cookies configuration on mount
+  useEffect(() => {
+    fetch('/api/cookies')
+      .then(res => res.json())
+      .then(data => {
+        if (data && typeof data.exists === 'boolean') {
+          setHasCookies(data.exists);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
   // Results
   const [result, setResult] = useState<AnalyzeResponse | null>(null);
   const [activeClip, setActiveClip] = useState<ViralClip | null>(null);
@@ -137,6 +166,94 @@ export default function App() {
   const [markedClips, setMarkedClips] = useState<Record<string, boolean>>({});
   const [loadingDetails, setLoadingDetails] = useState('');
 
+  // Clip Studio & Auto-Clipper states
+  const [batchProgress, setBatchProgress] = useState<BatchRenderProgress | null>(null);
+  const [isLaunchingRender, setIsLaunchingRender] = useState(false);
+
+  const markedClipsList = useMemo(() => {
+    if (!result?.clips) return [];
+    return result.clips.filter(c => !!markedClips[`${c.start_time}_${c.end_time}`]);
+  }, [result?.clips, markedClips]);
+
+  const handleStartBatchRender = async (settings: RenderSettings) => {
+    if (!result) return;
+    setIsLaunchingRender(true);
+    try {
+      const resp = await fetch('/api/render-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_url: url || `https://www.youtube.com/watch?v=${result.video_id}`,
+          video_id: result.video_id,
+          clips: settings.selectedClips,
+          settings: {
+            aspect_ratio: settings.aspectRatio,
+            background_style: settings.backgroundStyle,
+            enable_face_tracking: settings.enableFaceTracking,
+            streamer_preset: settings.streamerPreset,
+            title_text: settings.titleText,
+            title_position: settings.titlePosition,
+            caption_style: settings.captionStyle,
+            caption_font: settings.captionFont,
+            font_size: settings.fontSize,
+            text_case: settings.textCase,
+            title_y_percent: settings.titleYPercent,
+            subtitle_y_percent: settings.subtitleYPercent,
+            subtitle_position_mode: settings.subtitlePositionMode || 'bottom',
+            subtitle_center_y_percent: settings.subtitleCenterYPercent !== undefined ? settings.subtitleCenterYPercent : 50.0,
+            title_duration: settings.titleDuration || 'entire',
+          },
+          transcript: result.transcript,
+        }),
+      });
+
+      if (!resp.ok) {
+        const errJson = await resp.json().catch(() => ({}));
+        throw new Error(errJson.detail || 'Failed to start batch render job');
+      }
+
+      const data = await resp.json();
+      const batchId = data.batch_id;
+
+      // Initialize inline batch progress on the side under live preview (no modal)
+      setBatchProgress({
+        batch_id: batchId,
+        total_clips: settings.selectedClips.length,
+        current_clip_index: 0,
+        overall_status: 'running',
+        clips: settings.selectedClips.map((c, i) => ({
+          clip_index: i,
+          title: c.title_suggestion || c.title || `Clip #${i + 1}`,
+          status: 'pending',
+          progress_percent: 0,
+        }))
+      });
+
+      // Listen to SSE progress
+      const eventSource = new EventSource(`/api/render-progress/${batchId}`);
+      eventSource.onmessage = (event) => {
+        try {
+          const progressData: BatchRenderProgress = JSON.parse(event.data);
+          setBatchProgress(progressData);
+          if (progressData.overall_status === 'completed' || progressData.overall_status === 'error') {
+            eventSource.close();
+          }
+        } catch (err) {
+          console.error('Failed to parse progress SSE:', err);
+        }
+      };
+
+      eventSource.onerror = (err) => {
+        console.error('SSE connection error:', err);
+        eventSource.close();
+      };
+    } catch (err: any) {
+      alert(err.message || 'Error launching batch render');
+    } finally {
+      setIsLaunchingRender(false);
+    }
+  };
+
   // History feature: previously analyzed videos from localStorage
   interface HistoryEntry {
     video_id: string;
@@ -163,6 +280,32 @@ export default function App() {
   const clipEndIntervalRef = useRef<number | null>(null);
   const loadingSectionRef = useRef<HTMLElement | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isClearingGlobalTemp, setIsClearingGlobalTemp] = useState<boolean>(false);
+
+  const handleGlobalClearTemp = async () => {
+    if (isClearingGlobalTemp) return;
+    if (!window.confirm('Are you sure you want to clear all temporary downloaded files and render cache?')) {
+      return;
+    }
+    setIsClearingGlobalTemp(true);
+    try {
+      const resp = await fetch('/api/clear-temp', { method: 'POST' });
+      if (resp.ok) {
+        const data = await resp.json();
+        setToastMessage(data.message || 'Cleared temporary download folder!');
+        setTimeout(() => setToastMessage(null), 3500);
+      } else {
+        setToastMessage('Failed to clear temp download folder');
+        setTimeout(() => setToastMessage(null), 3000);
+      }
+    } catch (e) {
+      console.error('Failed to clear temp folder:', e);
+      setToastMessage('Error clearing temp folder');
+      setTimeout(() => setToastMessage(null), 3000);
+    } finally {
+      setIsClearingGlobalTemp(false);
+    }
+  };
   const [copyTimestampMenuTarget, setCopyTimestampMenuTarget] = useState<'toolbar' | 'overview' | null>(null);
 
   // Close timestamp format menu on click outside or escape
@@ -920,6 +1063,103 @@ export default function App() {
     }
   };
 
+  const handleDownloadRawVideo = async () => {
+    if (!result || !result.video_id) return;
+    const targetUrl = url.trim() || `https://www.youtube.com/watch?v=${result.video_id}`;
+    setIsDownloadingRaw(true);
+    setRawDownloadProgress({
+      jobId: '',
+      status: 'starting',
+      percent: 0,
+      downloaded: '',
+      total: '',
+      speed: '',
+      eta: ''
+    });
+    setToastMessage("Initiating 1080p source download from YouTube...");
+
+    try {
+      const res = await fetch("/api/download-raw-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          video_url: targetUrl,
+          video_id: result.video_id
+        })
+      });
+      const startData = await res.json();
+      if (!res.ok || !startData.job_id) {
+        throw new Error(startData.detail || "Failed to start raw video download job.");
+      }
+
+      const jobId = startData.job_id;
+      setRawDownloadProgress({
+        jobId,
+        status: 'downloading',
+        percent: 0,
+        downloaded: '',
+        total: '',
+        speed: '',
+        eta: ''
+      });
+
+      // Poll download progress every 750ms
+      await new Promise<void>((resolve, reject) => {
+        const intervalId = setInterval(async () => {
+          try {
+            const statusRes = await fetch(`/api/download-raw-status/${jobId}`);
+            if (!statusRes.ok) {
+              clearInterval(intervalId);
+              reject(new Error("Failed to check download status."));
+              return;
+            }
+            const statusData = await statusRes.json();
+            setRawDownloadProgress({
+              jobId,
+              status: statusData.status,
+              percent: statusData.progress_percent || 0,
+              downloaded: statusData.downloaded || '',
+              total: statusData.total || '',
+              speed: statusData.speed || '',
+              eta: statusData.eta || '',
+              downloadUrl: statusData.download_url,
+              filename: statusData.filename,
+              error: statusData.error
+            });
+
+            if (statusData.status === 'ready') {
+              clearInterval(intervalId);
+              setToastMessage("Raw video downloaded successfully! File download starting...");
+              const a = document.createElement("a");
+              a.href = statusData.download_url || `/api/download-rendered/${statusData.filename}`;
+              a.download = statusData.filename || `raw_${result.video_id}.mp4`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              setTimeout(() => {
+                setIsDownloadingRaw(false);
+                setRawDownloadProgress(null);
+              }, 4000);
+              resolve();
+            } else if (statusData.status === 'failed') {
+              clearInterval(intervalId);
+              setIsDownloadingRaw(false);
+              reject(new Error(statusData.error || "Failed to download raw video. If restricted by YouTube, please configure cookies."));
+            }
+          } catch (pollErr) {
+            clearInterval(intervalId);
+            setIsDownloadingRaw(false);
+            reject(pollErr);
+          }
+        }, 750);
+      });
+    } catch (err: any) {
+      setError(err.message || "Failed to download raw video.");
+      setIsDownloadingRaw(false);
+      setRawDownloadProgress(null);
+    }
+  };
+
   const handleCopyClip = (clip: ViralClip, e: React.MouseEvent) => {
     e.stopPropagation(); // Prevent card trigger
     let copyText = `CLIP: ${clip.title}
@@ -1053,7 +1293,7 @@ Transcript:
     const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(result.clips, null, 2));
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `cheat_clip_${result.video_id}.json`);
+    downloadAnchor.setAttribute("download", `cheat_clip_pro_${result.video_id}.json`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
@@ -1087,7 +1327,7 @@ Transcript:
     const dataStr = "data:text/plain;charset=utf-8," + encodeURIComponent(srtText);
     const downloadAnchor = document.createElement('a');
     downloadAnchor.setAttribute("href", dataStr);
-    downloadAnchor.setAttribute("download", `cheat_clip_${result.video_id}.srt`);
+    downloadAnchor.setAttribute("download", `cheat_clip_pro_${result.video_id}.srt`);
     document.body.appendChild(downloadAnchor);
     downloadAnchor.click();
     downloadAnchor.remove();
@@ -1181,9 +1421,15 @@ Transcript:
     });
   }, [history, historySearchQuery]);
 
-  // Smooth scroll active clip card into view in the sidebar list
+  // Smooth scroll active clip card into view in the sidebar list ONLY when activeClip changes
+  const prevActiveClipKeyRef = useRef<string | null>(null);
   useEffect(() => {
-    if (activeClip && sortedClips) {
+    if (!activeClip) return;
+    const clipKey = `${activeClip.start_time}_${activeClip.end_time}`;
+    if (prevActiveClipKeyRef.current === clipKey) return;
+    prevActiveClipKeyRef.current = clipKey;
+
+    if (sortedClips) {
       const index = sortedClips.findIndex(
         c => c.start_time === activeClip.start_time && c.end_time === activeClip.end_time
       );
@@ -1194,11 +1440,11 @@ Transcript:
         }
       }
     }
-  }, [activeClip, sortedClips]);
+  }, [activeClip]);
 
-  // Find current subtitle line
+  // Find current subtitle line with slight gap tolerance to prevent jitter
   const currentSubtitle = result?.transcript?.find(
-    line => currentTime >= line.start && currentTime <= line.end
+    line => currentTime >= (line.start - 0.05) && currentTime <= (line.end + 0.25)
   );
 
   return (
@@ -1216,13 +1462,69 @@ Transcript:
       {/* Header Area */}
       <header className="app-header">
         <div className="header-logo">
-          <span style={{ fontSize: '2.5rem' }}>⚡</span>
+          <span className="logo-emoji">⚡</span>
           <div>
-            <h1 className="text-gradient logo-title">CHEAT CLIP</h1>
+            <div className="logo-title-row">
+              <h1 className="text-gradient logo-title">CHEAT CLIP</h1>
+              <span className="pro-badge" title="Cheat Clip Pro Edition">
+                <svg className="pro-badge-icon" width="13" height="13" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M5 16L3 5L8.5 10L12 4L15.5 10L21 5L19 16H5M19 19C19 19.6 18.6 20 18 20H6C5.4 20 5 19.6 5 19V17H19V19Z" />
+                </svg>
+                PRO
+              </span>
+            </div>
             <p className="header-subtitle">{t.header.subtitle}</p>
           </div>
         </div>
         <div className="header-nav" style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+          <button
+            type="button"
+            className="cookie-header-btn"
+            onClick={() => setIsCookiesModalOpen(true)}
+            style={{
+              padding: '0.45rem 0.85rem',
+              fontSize: '0.8rem',
+              fontWeight: 600,
+              borderRadius: '8px',
+              background: hasCookies ? 'rgba(34, 197, 94, 0.12)' : 'rgba(255, 255, 255, 0.05)',
+              border: hasCookies ? '1px solid rgba(34, 197, 94, 0.35)' : '1px solid rgba(255, 255, 255, 0.1)',
+              color: hasCookies ? '#4ade80' : 'var(--text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease'
+            }}
+            title={hasCookies ? 'YouTube cookies active (1080p source enabled)' : 'Configure YouTube cookies for 1080p source downloads'}
+          >
+            <span>🍪 Cookies</span>
+            <span style={{ fontSize: '0.7rem', opacity: 0.85 }}>
+              {hasCookies ? '● 1080p' : '○ Setup'}
+            </span>
+          </button>
+          <button
+            type="button"
+            className="cookie-header-btn"
+            onClick={handleGlobalClearTemp}
+            disabled={isClearingGlobalTemp}
+            style={{
+              padding: '0.45rem 0.85rem',
+              fontSize: '0.8rem',
+              fontWeight: 600,
+              borderRadius: '8px',
+              background: 'rgba(255, 255, 255, 0.05)',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              color: 'var(--text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              cursor: isClearingGlobalTemp ? 'not-allowed' : 'pointer',
+              transition: 'all 0.2s ease'
+            }}
+            title="Clear temporary downloaded clip segments, audio slices, and ASS files from disk"
+          >
+            <span>🧹 {isClearingGlobalTemp ? 'Clearing...' : 'Clear Temp'}</span>
+          </button>
           <LanguageSwitcher />
           <a
             href="https://tako.id/johansa"
@@ -2250,7 +2552,8 @@ Transcript:
               </div>
 
               {/* Refresh Player control */}
-              <div style={{ display: 'flex', marginTop: '0.25rem', marginBottom: '0.25rem' }}>
+              {/* Player control buttons: Refresh Player & Download Raw Video */}
+              <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.25rem', marginBottom: '0.25rem' }}>
                 <button
                   type="button"
                   className="form-input"
@@ -2266,13 +2569,85 @@ Transcript:
                     borderRadius: '8px',
                     cursor: 'pointer',
                     background: 'rgba(255, 255, 255, 0.03)',
-                    border: '1px solid rgba(255, 255, 255, 0.05)',
+                    border: '1px solid rgba(255, 255, 255, 0.08)',
                     color: 'var(--text-primary)'
                   }}
                 >
                   {t.results.refreshPlayer}
                 </button>
+
+                <button
+                  type="button"
+                  className="form-input glowing-btn"
+                  onClick={handleDownloadRawVideo}
+                  disabled={isDownloadingRaw}
+                  title="Download raw original YouTube video at highest 1080p resolution"
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.4rem',
+                    fontSize: '0.8rem',
+                    padding: '0.5rem 1rem',
+                    borderRadius: '8px',
+                    cursor: isDownloadingRaw ? 'not-allowed' : 'pointer',
+                    background: 'linear-gradient(135deg, rgba(59, 130, 246, 0.25) 0%, rgba(37, 99, 235, 0.45) 100%)',
+                    border: '1px solid rgba(59, 130, 246, 0.5)',
+                    color: '#ffffff',
+                    fontWeight: 600
+                  }}
+                >
+                  {isDownloadingRaw ? (
+                    <>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
+                        <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                      </svg>
+                      {t.results.downloadingRawVideo}
+                    </>
+                  ) : (
+                    <>{t.results.downloadRawVideo}</>
+                  )}
+                </button>
               </div>
+
+              {/* Raw Video Download Real-time Progress Bar */}
+              {rawDownloadProgress && (
+                <div className="raw-download-progress-card">
+                  <div className="progress-card-header">
+                    <span className="progress-card-title">
+                      {rawDownloadProgress.status === 'ready' ? (
+                        <span style={{ color: '#4ade80' }}>✅ 1080p Download Ready</span>
+                      ) : (
+                        <>
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon">
+                            <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                          </svg>
+                          <span>Downloading 1080p Source ({rawDownloadProgress.percent.toFixed(1)}%)</span>
+                        </>
+                      )}
+                    </span>
+                    {rawDownloadProgress.eta && rawDownloadProgress.status !== 'ready' && (
+                      <span className="progress-card-eta">ETA: {rawDownloadProgress.eta}</span>
+                    )}
+                  </div>
+                  <div className="progress-track">
+                    <div
+                      className="progress-fill-bar"
+                      style={{
+                        width: `${Math.min(100, Math.max(0, rawDownloadProgress.percent))}%`,
+                        background: rawDownloadProgress.status === 'ready' ? 'linear-gradient(90deg, #22c55e 0%, #4ade80 100%)' : undefined
+                      }}
+                    />
+                  </div>
+                  <div className="progress-card-meta">
+                    <span>
+                      {rawDownloadProgress.downloaded || 'Connecting...'} {rawDownloadProgress.total ? `/ ${rawDownloadProgress.total}` : ''}
+                    </span>
+                    <span>{rawDownloadProgress.speed || ''}</span>
+                  </div>
+                </div>
+              )}
 
               {/* Heatmap Timeline component */}
               <HeatmapTimeline
@@ -2882,6 +3257,28 @@ Transcript:
           color: var(--primary) !important;
         }
       `}</style>
+      {/* Embedded Clip Studio Section with side inline batch progress */}
+      {result && (
+        <ClipStudioSection
+          videoUrl={url}
+          videoId={result.video_id}
+          allClips={result.clips}
+          markedClips={markedClipsList}
+          activeClip={activeClip}
+          onStartRender={handleStartBatchRender}
+          isRendering={isLaunchingRender}
+          onToggleMarkClip={(clip) => toggleMarkedClip(`${clip.start_time}_${clip.end_time}`)}
+          batchProgress={batchProgress}
+          onDismissProgress={() => setBatchProgress(null)}
+        />
+      )}
+
+      {/* YouTube Cookies Modal */}
+      <CookiesModal
+        isOpen={isCookiesModalOpen}
+        onClose={() => setIsCookiesModalOpen(false)}
+        onCookieStatusChange={setHasCookies}
+      />
     </div>
   );
 }

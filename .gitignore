@@ -41,8 +41,22 @@ venv/
 env/
 ENV/
 
-# Temp downloads
+# ─── SENSITIVE CREDENTIALS & COOKIES ──────────────────────────
+cookies.txt
+*cookies*.txt
+backend/cookies.txt
+*.cookies
+
+# Temp downloads and exports
+backend/temp/
 backend/temp_downloads/
+backend/temp_clips/
+backend/exports/
+*.ass
+*.mp4
+*.m4a
+*.webm
+*.mkv
 
 
 # Distribution / packaging

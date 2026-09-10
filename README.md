@@ -1,7 +1,8 @@
-# 🎬 CHEAT CLIP
+# 🎬 CHEAT CLIP PRO
 
-> **AI-Powered YouTube Viral Hotspot Finder** — Discover the most re-watched, high-energy moments in any YouTube video and turn them into viral Shorts, Reels, and TikToks in seconds.
+> **AI Powered YouTube Auto Clipper** — Discover the most re-watched, high-energy moments in any YouTube video and turn them into viral Shorts, Reels, and TikToks in seconds.
 
+[![Edition: PRO](https://img.shields.io/badge/Edition-PRO-ff007a.svg?style=flat&logo=star&logoColor=white)](#)
 [![React](https://img.shields.io/badge/React-19-blue.svg)](https://react.dev/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green.svg)](https://fastapi.tiangolo.com/)
 [![Google Gemini](https://img.shields.io/badge/Google_Gemini-2.5_Flash_/_Pro-orange.svg)](https://aistudio.google.com/)
@@ -14,7 +15,7 @@
 - [✨ Features](#-features)
 - [⚡ Quick Start](#-quick-start)
 - [🔑 How to Get a Free Google Gemini API Key](#-how-to-get-a-free-google-gemini-api-key)
-- [🎯 How to Use Cheat Clip](#-how-to-use-cheat-clip)
+- [🎯 How to Use Cheat Clip Pro](#-how-to-use-cheat-clip-pro)
   - [Using the "Copy Timestamp" Features](#using-the-copy-timestamp-features)
   - [Searching Your Clip History](#searching-your-clip-history)
   - [Testing with Mock Mode (No Key Needed)](#testing-with-mock-mode-no-key-needed)
@@ -53,8 +54,8 @@
 
 1. **Clone the repository**:
    ```bash
-   git clone https://github.com/your-username/cheat-clip.git
-   cd cheat-clip
+   git clone https://github.com/your-username/cheat-clip-pro.git
+   cd cheat-clip-pro
    ```
 
 2. **Install dependencies**:
@@ -73,19 +74,19 @@
 
 ## 🔑 How to Get a Free Google Gemini API Key
 
-Cheat Clip uses Google's AI to find viral moments. Getting a key is **100% free** and requires **no credit card**:
+Cheat Clip Pro uses Google's AI to find viral moments. Getting a key is **100% free** and requires **no credit card**:
 
 1. Go to **[Google AI Studio](https://aistudio.google.com/)**.
 2. Sign in with any Google account.
 3. Click the blue **"Get API key"** button (or click **"Create API key"**).
 4. Select a project (or click *"Create API key in new project"*).
 5. Copy the generated key (it starts with `AIzaSy...`).
-6. Paste it into the **Gemini API Key** field in the Cheat Clip app.
+6. Paste it into the **Gemini API Key** field in the Cheat Clip Pro app.
    - The app will securely save your key in your browser's local storage so you won't have to enter it again!
 
 ---
 
-## 🎯 How to Use Cheat Clip
+## 🎯 How to Use Cheat Clip Pro
 
 1. **Paste a YouTube URL** into the main input box (e.g. `https://www.youtube.com/watch?v=dQw4w9WgXcQ`).
 2. **Enter your Gemini API Key** (or enter `mock` to try test data).
@@ -101,7 +102,7 @@ Cheat Clip uses Google's AI to find viral moments. Getting a key is **100% free*
 
 ### Using the "Copy Timestamp" Features
 
-Cheat Clip makes copying timestamps fast for video editors and YouTube creators:
+Cheat Clip Pro makes copying timestamps fast for video editors and YouTube creators:
 
 - **Copy a Single Timestamp**:
   - Click the **`⏱️ 01:23 - 01:53`** badge on any clip card, or click the **`⏱️ Copy Timestamp`** button at the bottom of the card.
@@ -116,7 +117,7 @@ Cheat Clip makes copying timestamps fast for video editors and YouTube creators:
 
 ### Searching Your Clip History
 
-Cheat Clip keeps a highlighted **Previously Analyzed Clips** panel on your dashboard:
+Cheat Clip Pro keeps a highlighted **Previously Analyzed Clips** panel on your dashboard:
 - Type in the search box to filter past videos by **video title**, **YouTube link**, **clip title**, or **spoken quote**.
 - Click **"📂 Load Results"** on any past video to instantly view the heatmap and clips again without using any API quota!
 - Accidental deletion protection: The **"🗑 Clear All"** button includes a confirmation prompt to keep your history safe.
@@ -153,7 +154,7 @@ Want to see how the app looks before getting an API key?
 ---
 
 ### ❓ "Port 8000 or 5173 is already in use"
-- **Why this happens:** An earlier instance of Cheat Clip or another server is still running in the background.
+- **Why this happens:** An earlier instance of Cheat Clip Pro or another server is still running in the background.
 - **Solution:**
   - On Windows: Press `Ctrl + Shift + Esc` (Task Manager), look for `node.exe` or `python.exe`, and click "End Task".
   - Or restart your computer.
@@ -164,14 +165,14 @@ Want to see how the app looks before getting an API key?
 - **Why this happens:** The YouTube video has disabled captions or has no spoken dialogue.
 - **Solution:**
   - Select the **"Manual Upload (SRT / Text)"** option right below the URL bar.
-  - Paste any transcript text or upload an `.srt` file, and Cheat Clip will analyze it seamlessly!
+  - Paste any transcript text or upload an `.srt` file, and Cheat Clip Pro will analyze it seamlessly!
 
 ---
 
 ### ❓ "Quota limit reached / Error 429"
 - **Why this happens:** Google's free Gemini tier has minute/day rate limits.
 - **Solution:**
-  - Cheat Clip **automatically tries all available Flash models** (3.7, 3.5, 2.5, 2.0, 1.5) before giving up!
+  - Cheat Clip Pro **automatically tries all available Flash models** (3.7, 3.5, 2.5, 2.0, 1.5) before giving up!
   - If all free models are temporarily busy, wait 1-2 minutes and try again.
   - You can also click the red **"🔑 Change API Key"** button to generate a new free key from a different Google account.
 
@@ -193,12 +194,12 @@ graph TD
 
 | Layer | Technology | Key Files |
 |---|---|---|
-| **Frontend** | React 19 · TypeScript · Vite · Canvas API | [src/App.tsx](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/src/App.tsx) · [src/main.tsx](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/src/main.tsx) |
-| **Styling** | Vanilla CSS Dark System · Glassmorphism | [src/index.css](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/src/index.css) |
-| **Backend** | Python 3.10+ · FastAPI · Uvicorn (SSE streaming) | [backend/main.py](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/backend/main.py) |
-| **Video Processing** | `yt-dlp` · `youtube-transcript-api` | [backend/main.py](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/backend/main.py) · [backend/requirements.txt](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/backend/requirements.txt) |
-| **AI Integration** | `google-genai` Python SDK with dynamic version fallback | [backend/main.py](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/backend/main.py) |
-| **Localization** | Custom bilingual reactivity (English / Indonesian) | [src/locales/en.ts](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/src/locales/en.ts) · [src/locales/id.ts](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/src/locales/id.ts) |
+| **Frontend** | React 19 · TypeScript · Vite · Canvas API | [src/App.tsx](file:///e:/PROJECT/CLIPPER/cheat-clip-pro/src/App.tsx) · [src/main.tsx](file:///e:/PROJECT/CLIPPER/cheat-clip-pro/src/main.tsx) |
+| **Styling** | Vanilla CSS Dark System · Glassmorphism | [src/index.css](file:///e:/PROJECT/CLIPPER/cheat-clip-pro/src/index.css) |
+| **Backend** | Python 3.10+ · FastAPI · Uvicorn (SSE streaming) | [backend/main.py](file:///e:/PROJECT/CLIPPER/cheat-clip-pro/backend/main.py) |
+| **Video Processing** | `yt-dlp` · `youtube-transcript-api` | [backend/main.py](file:///e:/PROJECT/CLIPPER/cheat-clip-pro/backend/main.py) · [backend/requirements.txt](file:///e:/PROJECT/CLIPPER/cheat-clip-pro/backend/requirements.txt) |
+| **AI Integration** | `google-genai` Python SDK with dynamic version fallback | [backend/main.py](file:///e:/PROJECT/CLIPPER/cheat-clip-pro/backend/main.py) |
+| **Localization** | Custom bilingual reactivity (English / Indonesian) | [src/locales/en.ts](file:///e:/PROJECT/CLIPPER/cheat-clip-pro/src/locales/en.ts) · [src/locales/id.ts](file:///e:/PROJECT/CLIPPER/cheat-clip-pro/src/locales/id.ts) |
 
 ---
 
@@ -222,7 +223,7 @@ The backend exposes the following REST & streaming endpoints at `http://localhos
 ### 1. `GET /api/health`
 Returns the status of the backend API.
 ```json
-{ "status": "ok", "message": "CHEAT CLIP API is active" }
+{ "status": "ok", "message": "CHEAT CLIP PRO API is active" }
 ```
 
 ### 2. `GET /api/models?api_key=AIza...`
@@ -256,7 +257,7 @@ Starts video scraping and AI extraction. Streams progress updates in real time u
 ## 📁 Project Structure
 
 ```text
-cheat-clip/
+cheat-clip-pro/
 ├── backend/
 │   ├── main.py              # FastAPI server, yt-dlp extractor, Gemini model fallback
 │   ├── requirements.txt     # Python backend dependencies

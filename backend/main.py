@@ -23,7 +23,10 @@ import re
 import logging
 import asyncio
 import json
-from typing import List, Optional
+import time
+import uuid
+import zipfile
+from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse, RedirectResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,11 +35,36 @@ import yt_dlp
 from youtube_transcript_api import YouTubeTranscriptApi
 from google import genai
 from google.genai import types
+
+try:
+    from backend.video_engine import (
+        TEMP_DIR,
+        EXPORTS_DIR,
+        COOKIES_PATH,
+        download_clip_segment,
+        download_full_raw_video,
+        transcribe_clip_words,
+        generate_ass_file,
+        render_clip_to_mp4,
+        extract_clip_frame
+    )
+except ImportError:
+    from video_engine import (
+        TEMP_DIR,
+        EXPORTS_DIR,
+        COOKIES_PATH,
+        download_clip_segment,
+        download_full_raw_video,
+        transcribe_clip_words,
+        generate_ass_file,
+        render_clip_to_mp4,
+        extract_clip_frame
+    )
 # Setup logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("cheat-clip")
+logger = logging.getLogger("cheat-clip-pro")
 
-app = FastAPI(title="CHEAT CLIP API", description="AI-powered YouTube Viral Hotspot Finder")
+app = FastAPI(title="CHEAT CLIP PRO API", description="AI Powered YouTube Auto Clipper")
 
 # Configure CORS
 app.add_middleware(
@@ -273,6 +301,9 @@ def fetch_video_metadata(url: str):
         'nocheckcertificate': True,
         'socket_timeout': 10
     }
+    if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 0:
+        ydl_opts['cookiefile'] = str(COOKIES_PATH)
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -312,6 +343,9 @@ def fetch_transcript_ytdlp(video_id: str) -> List[dict]:
         'nocheckcertificate': True,
         'socket_timeout': 8
     }
+    if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 0:
+        ydl_opts['cookiefile'] = str(COOKIES_PATH)
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
@@ -463,7 +497,7 @@ def health_check():
     has_gemini = bool(os.environ.get("GEMINI_API_KEY"))
     return {
         "status": "ok",
-        "message": "CHEAT CLIP API is active",
+        "message": "CHEAT CLIP PRO API is active",
         "gemini_env_configured": has_gemini
     }
 
@@ -856,9 +890,9 @@ async def analyze_video(request: AnalyzeRequest):
                 ViralClip(title="Introductory overview of the tool", start_time=0.0,  end_time=11.0, hook_time=3.0, virality_score=72,
                           key_quotes=["Hello and welcome.", "Finds viral hotspots."],
                           transcript="Hello and welcome. It finds viral hotspots and highlights them.",
-                          title_suggestion="Meet Cheat Clip AI",
+                          title_suggestion="Meet Cheat Clip Pro AI",
                           caption_suggestion="Say hello to your new AI co-editor. Find the absolute best parts of any video instantly.",
-                          hashtag_suggestion="#cheatclip #aiediting #growthmindset"),
+                          hashtag_suggestion="#cheatclippro #aiediting #growthmindset"),
             ]
             mock_heatmap = [
                 HeatmapPoint(start_time=i*10.0, end_time=(i+1)*10.0,
@@ -873,7 +907,7 @@ async def analyze_video(request: AnalyzeRequest):
             result = AnalyzeResponse(
                 video_id=video_id, title=title, duration=duration or 200.0,
                 heatmap=mock_heatmap,
-                summary="Mock analysis: this video explains how CHEAT CLIP works. #aitools #videoediting #productivity",
+                summary="Mock analysis: this video explains how CHEAT CLIP PRO works. #aitools #videoediting #productivity",
                 clips=mock_clips,
                 model="Mock Gemini"
             )
@@ -1320,4 +1354,480 @@ async def analyze_video(request: AnalyzeRequest):
             "X-Accel-Buffering": "no",
         }
     )
+
+
+# ----------------------------------------------------------------
+# Batch Auto-Clipper & Video Studio Endpoints
+# ----------------------------------------------------------------
+
+class RenderSettingsModel(BaseModel):
+    aspect_ratio: str = "9:16"
+    background_style: str = "black"
+    enable_face_tracking: bool = True
+    streamer_preset: str = "none"
+    title_text: Optional[str] = None
+    title_position: str = "auto"
+    title_duration: Optional[str] = "entire"
+    caption_style: str = "viral_pop"
+    caption_font: str = "Outfit"
+    font_size: str = "medium"
+    text_case: str = "uppercase"
+    title_y_percent: Optional[float] = 14.0
+    subtitle_y_percent: Optional[float] = 18.0
+    subtitle_position_mode: Optional[str] = "bottom"
+    subtitle_center_y_percent: Optional[float] = 50.0
+
+
+class RenderBatchRequest(BaseModel):
+    video_url: str
+    video_id: str
+    clips: List[Dict[str, Any]]
+    settings: RenderSettingsModel
+    transcript: Optional[List[Dict[str, Any]]] = None
+
+
+RENDER_BATCHES: Dict[str, Dict[str, Any]] = {}
+
+
+async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
+    batch = RENDER_BATCHES.get(batch_id)
+    if not batch:
+        return
+
+    clips = request.clips
+    settings = request.settings
+
+    # Normalize video URL for history or direct URL
+    target_url = (request.video_url or "").strip()
+    if not target_url.startswith("http"):
+        target_url = f"https://www.youtube.com/watch?v={request.video_id or target_url}"
+
+    for idx, clip in enumerate(clips):
+        clip_status = batch["clips"][idx]
+        clip_status["status"] = "downloading"
+        clip_status["progress_percent"] = 15
+
+        try:
+            # 1. Download
+            start_t = float(clip.get("start_time", 0.0))
+            end_t = float(clip.get("end_time", start_t + 30.0))
+            seg_filename = f"{batch_id}_clip_{idx}_raw.mp4"
+
+            raw_path = await asyncio.to_thread(
+                download_clip_segment,
+                target_url,
+                start_t,
+                end_t,
+                seg_filename
+            )
+
+            # 2. Transcribe & Generate Subtitles / Title (.ass)
+            clip_status["status"] = "transcribing"
+            clip_status["progress_percent"] = 40
+
+            display_title = None
+            if settings.title_position != "none":
+                display_title = settings.title_text if settings.title_text else clip.get("title_suggestion") or clip.get("title")
+
+            ass_path = None
+            duration_sec = max(1.0, end_t - start_t)
+            if settings.caption_style != "none" or (display_title and settings.title_position != "none"):
+                words = []
+                if settings.caption_style != "none":
+                    words = await asyncio.to_thread(
+                        transcribe_clip_words,
+                        raw_path,
+                        request.transcript,
+                        start_t,
+                        end_t
+                    )
+                ass_filename = f"{batch_id}_clip_{idx}.ass"
+                ass_path = str(TEMP_DIR / ass_filename)
+                await asyncio.to_thread(
+                    generate_ass_file,
+                    words=words,
+                    style_preset=settings.caption_style,
+                    font_name=settings.caption_font,
+                    output_ass_path=ass_path,
+                    target_aspect_ratio=settings.aspect_ratio,
+                    font_size_preset=settings.font_size,
+                    text_case=settings.text_case,
+                    title_text=display_title,
+                    title_position=settings.title_position,
+                    title_duration=settings.title_duration if settings.title_duration else "entire",
+                    duration_seconds=duration_sec,
+                    title_y_percent=settings.title_y_percent if settings.title_y_percent is not None else 14.0,
+                    subtitle_y_percent=settings.subtitle_y_percent if settings.subtitle_y_percent is not None else 18.0,
+                    subtitle_position_mode=settings.subtitle_position_mode if settings.subtitle_position_mode else "bottom",
+                    subtitle_center_y_percent=settings.subtitle_center_y_percent if settings.subtitle_center_y_percent is not None else 50.0
+                )
+
+            # 3. Render Final Vertical MP4
+            clip_status["status"] = "rendering"
+            clip_status["progress_percent"] = 70
+
+            out_filename = f"clip_{idx+1}_{batch_id}.mp4"
+            out_path = str(EXPORTS_DIR / out_filename)
+
+            await asyncio.to_thread(
+                render_clip_to_mp4,
+                video_path=raw_path,
+                output_mp4_path=out_path,
+                aspect_ratio=settings.aspect_ratio,
+                background_style=settings.background_style,
+                enable_face_tracking=settings.enable_face_tracking,
+                streamer_preset=settings.streamer_preset,
+                title_text=display_title,
+                title_position=settings.title_position,
+                ass_subtitles_path=ass_path
+            )
+
+            clip_status["status"] = "completed"
+            clip_status["progress_percent"] = 100
+            clip_status["download_url"] = f"/api/download-rendered/{out_filename}"
+            clip_status["output_path"] = out_path
+
+        except Exception as e:
+            logger.error(f"Error rendering clip {idx} in batch {batch_id}: {e}")
+            clip_status["status"] = "error"
+            clip_status["error_message"] = str(e)
+
+        batch["current_clip_index"] = idx + 1
+
+    # Generate ZIP bundle for the batch
+    try:
+        zip_filename = f"cheat_clip_pro_{batch_id}.zip"
+        zip_path = EXPORTS_DIR / zip_filename
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            for c in batch["clips"]:
+                if c.get("status") == "completed" and c.get("download_url"):
+                    fname = c["download_url"].split("/")[-1]
+                    fpath = EXPORTS_DIR / fname
+                    if fpath.exists():
+                        zipf.write(fpath, arcname=fname)
+        batch["zip_url"] = f"/api/download-batch-zip/{batch_id}"
+    except Exception as e:
+        logger.warning(f"Failed to create batch zip: {e}")
+
+    batch["overall_status"] = "completed"
+
+
+@app.post("/api/render-batch")
+async def start_batch_render(request: RenderBatchRequest, background_tasks: BackgroundTasks):
+    if not request.clips:
+        raise HTTPException(status_code=400, detail="No clips provided for rendering")
+
+    batch_id = f"batch_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+
+    clips_status = [
+        {
+            "clip_index": idx,
+            "title": c.get("title_suggestion") or c.get("title") or f"Clip {idx+1}",
+            "status": "pending",
+            "progress_percent": 0
+        }
+        for idx, c in enumerate(request.clips)
+    ]
+
+    RENDER_BATCHES[batch_id] = {
+        "batch_id": batch_id,
+        "total_clips": len(request.clips),
+        "current_clip_index": 0,
+        "overall_status": "running",
+        "clips": clips_status,
+        "zip_url": None
+    }
+
+    background_tasks.add_task(process_batch_rendering, batch_id, request)
+    return {"batch_id": batch_id, "total_clips": len(request.clips)}
+
+
+@app.get("/api/render-progress/{batch_id}")
+async def get_render_progress(batch_id: str):
+    if batch_id not in RENDER_BATCHES:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    async def stream():
+        while True:
+            batch = RENDER_BATCHES.get(batch_id)
+            if not batch:
+                break
+            yield f"data: {json.dumps(batch)}\n\n"
+            if batch.get("overall_status") in ["completed", "error"]:
+                break
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
+    )
+
+
+@app.get("/api/download-rendered/{file_name}")
+def download_rendered_file(file_name: str):
+    safe_name = os.path.basename(file_name)
+    file_path = EXPORTS_DIR / safe_name
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Rendered clip not found")
+    return FileResponse(file_path, media_type="video/mp4", filename=safe_name)
+
+
+@app.get("/api/download-batch-zip/{batch_id}")
+def download_batch_zip(batch_id: str):
+    clean_id = os.path.basename(batch_id)
+    safe_name = f"cheat_clip_pro_{clean_id}.zip"
+    file_path = EXPORTS_DIR / safe_name
+    if not file_path.exists():
+        # Attempt to package any completed clips for this batch on the fly
+        job = RENDER_BATCHES.get(batch_id)
+        if job and job.get("clips"):
+            try:
+                with zipfile.ZipFile(file_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                    for c in job["clips"]:
+                        c_out = c.get("output_path")
+                        if not c_out and c.get("download_url"):
+                            fname = c["download_url"].split("/")[-1]
+                            c_out = str(EXPORTS_DIR / fname)
+                        if c_out and os.path.exists(c_out):
+                            zipf.write(c_out, arcname=os.path.basename(c_out))
+            except Exception as e:
+                logger.error(f"Error packaging batch zip on the fly: {e}")
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Batch zip file not found")
+    return FileResponse(file_path, media_type="application/zip", filename=safe_name)
+
+
+# ----------------------------------------------------------------
+# Cookies Management & Raw Full Video Download Endpoints
+# ----------------------------------------------------------------
+
+class CookiesSaveRequest(BaseModel):
+    cookies: Optional[str] = None
+    cookies_content: Optional[str] = None
+
+
+@app.post("/api/cookies")
+def save_youtube_cookies(req: CookiesSaveRequest):
+    content = (req.cookies_content or req.cookies or "").strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Cookies content cannot be empty")
+    try:
+        with open(COOKIES_PATH, "w", encoding="utf-8") as f:
+            f.write(content)
+        return {
+            "success": True,
+            "status": "saved",
+            "exists": True,
+            "has_cookies": True,
+            "size": len(content)
+        }
+    except Exception as e:
+        logger.error(f"Failed to save cookies: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/cookies")
+def get_youtube_cookies_status():
+    if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 0:
+        sample_lines = []
+        try:
+            with open(COOKIES_PATH, "r", encoding="utf-8", errors="ignore") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        domain = line.split("\t")[0]
+                        if domain not in sample_lines:
+                            sample_lines.append(domain)
+                        if len(sample_lines) >= 6:
+                            break
+        except Exception:
+            pass
+        return {
+            "exists": True,
+            "has_cookies": True,
+            "size": COOKIES_PATH.stat().st_size,
+            "sample_lines": sample_lines
+        }
+    return {"exists": False, "has_cookies": False, "size": 0, "sample_lines": []}
+
+
+@app.delete("/api/cookies")
+def delete_youtube_cookies():
+    if COOKIES_PATH.exists():
+        try:
+            COOKIES_PATH.unlink()
+        except Exception:
+            pass
+    return {"success": True, "status": "deleted", "exists": False, "has_cookies": False}
+
+
+class RawVideoDownloadRequest(BaseModel):
+    video_url: str
+    video_id: str
+
+
+raw_download_jobs: Dict[str, dict] = {}
+
+
+async def run_raw_download_job(job_id: str, v_url: str, out_path: str, filename: str):
+    def on_progress(p: dict):
+        if job_id in raw_download_jobs:
+            raw_download_jobs[job_id]["progress_percent"] = p.get("percent", 0.0)
+            raw_download_jobs[job_id]["downloaded"] = p.get("downloaded", "")
+            raw_download_jobs[job_id]["total"] = p.get("total", "")
+            raw_download_jobs[job_id]["speed"] = p.get("speed", "")
+            raw_download_jobs[job_id]["eta"] = p.get("eta", "")
+
+    try:
+        raw_download_jobs[job_id]["status"] = "downloading"
+        await asyncio.to_thread(download_full_raw_video, v_url, out_path, on_progress)
+        raw_download_jobs[job_id]["status"] = "ready"
+        raw_download_jobs[job_id]["progress_percent"] = 100.0
+        raw_download_jobs[job_id]["download_url"] = f"/api/download-rendered/{filename}"
+        raw_download_jobs[job_id]["filename"] = filename
+    except Exception as e:
+        logger.error(f"Raw video download job {job_id} failed: {e}")
+        raw_download_jobs[job_id]["status"] = "failed"
+        raw_download_jobs[job_id]["error"] = str(e)
+
+
+@app.post("/api/download-raw-video")
+async def handle_download_raw_video(req: RawVideoDownloadRequest, background_tasks: BackgroundTasks):
+    v_url = req.video_url.strip() if req.video_url else ""
+    if not v_url.startswith("http"):
+        v_url = f"https://www.youtube.com/watch?v={req.video_id or v_url}"
+
+    job_id = str(uuid.uuid4())[:8]
+    safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', req.video_id or "youtube_video")
+    filename = f"{safe_id}_raw_{int(time.time())}.mp4"
+    out_path = str(EXPORTS_DIR / filename)
+
+    raw_download_jobs[job_id] = {
+        "job_id": job_id,
+        "status": "starting",
+        "progress_percent": 0.0,
+        "downloaded": "",
+        "total": "",
+        "speed": "",
+        "eta": "",
+        "download_url": None,
+        "filename": filename,
+        "error": None
+    }
+
+    background_tasks.add_task(run_raw_download_job, job_id, v_url, out_path, filename)
+    return {"job_id": job_id, "status": "starting"}
+
+
+@app.get("/api/download-raw-status/{job_id}")
+async def get_raw_download_status(job_id: str):
+    job = raw_download_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Download job not found")
+    return job
+
+
+@app.get("/api/clip-frame")
+async def get_clip_frame(video_id: str, timestamp: float = 0.0, video_url: Optional[str] = None):
+    """
+    Returns an extracted real video frame at timestamp for the real video preview.
+    Guarantees returning a real video frame, never a promotional thumbnail.
+    """
+    try:
+        frame_path = await asyncio.to_thread(extract_clip_frame, video_url or "", video_id, timestamp)
+        if frame_path and os.path.exists(frame_path):
+            return FileResponse(frame_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+    except Exception as e:
+        logger.warning(f"Failed to serve extracted frame for {video_id}: {e}")
+
+    raise HTTPException(status_code=404, detail="Real video frame could not be extracted yet")
+
+
+def _get_dir_size_and_count(dir_path) -> Tuple[int, int]:
+    from pathlib import Path
+    p = Path(dir_path)
+    total_bytes = 0
+    total_files = 0
+    if p.exists() and p.is_dir():
+        for item in p.rglob("*"):
+            if item.is_file():
+                try:
+                    total_bytes += item.stat().st_size
+                    total_files += 1
+                except Exception:
+                    pass
+    return total_files, total_bytes
+
+
+@app.get("/api/temp-storage-info")
+async def get_temp_storage_info():
+    """Returns total files, bytes, and formatted size of temp download storage."""
+    from pathlib import Path
+    base_dir = Path(_base_dir)
+    f1, b1 = _get_dir_size_and_count(TEMP_DIR)
+    f2, b2 = _get_dir_size_and_count(base_dir / "temp")
+    tot_files = f1 + f2
+    tot_bytes = b1 + b2
+    tot_mb = round(tot_bytes / (1024 * 1024), 2)
+    formatted = f"{tot_mb} MB" if tot_mb < 1024 else f"{round(tot_mb / 1024, 2)} GB"
+    return {
+        "total_files": tot_files,
+        "total_bytes": tot_bytes,
+        "total_mb": tot_mb,
+        "formatted_size": formatted
+    }
+
+
+@app.post("/api/clear-temp")
+async def clear_temp_folder():
+    """
+    Clears all temporary downloaded video clips, audio slices, ASS files, and frames
+    from TEMP_DIR and backend/temp. Re-creates empty directories.
+    """
+    import shutil
+    from pathlib import Path
+    base_dir = Path(_base_dir)
+    cleared_files = 0
+    cleared_bytes = 0
+
+    target_dirs = [TEMP_DIR, base_dir / "temp"]
+    for d in target_dirs:
+        if d.exists() and d.is_dir():
+            for item in list(d.iterdir()):
+                try:
+                    if item.is_file() or item.is_symlink():
+                        sz = item.stat().st_size
+                        item.unlink()
+                        cleared_files += 1
+                        cleared_bytes += sz
+                    elif item.is_dir():
+                        for sub in item.rglob("*"):
+                            if sub.is_file():
+                                cleared_files += 1
+                                cleared_bytes += sub.stat().st_size
+                        shutil.rmtree(item, ignore_errors=True)
+                except Exception as e:
+                    logger.warning(f"Could not delete temp item {item}: {e}")
+        d.mkdir(parents=True, exist_ok=True)
+
+    # Ensure frames directory inside TEMP_DIR exists
+    (TEMP_DIR / "frames").mkdir(parents=True, exist_ok=True)
+
+    cleared_mb = round(cleared_bytes / (1024 * 1024), 2)
+    formatted = f"{cleared_mb} MB" if cleared_mb < 1024 else f"{round(cleared_mb / 1024, 2)} GB"
+    logger.info(f"Cleared temp folder: {cleared_files} files, {formatted}")
+    return {
+        "success": True,
+        "cleared_files": cleared_files,
+        "cleared_bytes": cleared_bytes,
+        "cleared_mb": cleared_mb,
+        "message": f"Successfully cleared {cleared_files} temporary files ({formatted})"
+    }
+
+
 

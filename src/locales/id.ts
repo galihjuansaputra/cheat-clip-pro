@@ -2,7 +2,7 @@ import type { Translations } from './en';
 
 export const id: Translations = {
   header: {
-    subtitle: "Pencari Hook & Momen Viral YouTube Berbasis AI",
+    subtitle: "Auto Clipper YouTube Bertenaga AI",
     supportProject: "Dukung Proyek Ini",
   },
   form: {
@@ -23,7 +23,7 @@ export const id: Translations = {
     aiModelLabel: "Pilihan Model AI",
     fetchingModels: "Mengambil daftar model...",
     resilienceTip: "Ketahanan Kuota Gratis:",
-    resilienceDesc: "Jika model mencapai batas kuota atau error, Cheat Clip secara dinamis mencoba seluruh model Flash baru maupun lama (3.x, 2.5, 2.0, 1.5) dari API key Anda hingga klip berhasil ditemukan!",
+    resilienceDesc: "Jika model mencapai batas kuota atau error, Cheat Clip Pro secara dinamis mencoba seluruh model Flash baru maupun lama (3.x, 2.5, 2.0, 1.5) dari API key Anda hingga klip berhasil ditemukan!",
 
     // Customization
     clipCustomizationTitle: "Kustomisasi Klip",
@@ -114,6 +114,8 @@ export const id: Translations = {
   },
   results: {
     refreshPlayer: "🔄 Muat Ulang Pemutar",
+    downloadRawVideo: "⬇️ Unduh Video Mentah",
+    downloadingRawVideo: "⏳ Mengunduh 1080p...",
     videoSummary: "Ringkasan Video",
     generatedClipsOverview: (count: number) => `Daftar Klip Dihasilkan (${count})`,
     recommendedClips: "Rekomendasi Klip Viral",
