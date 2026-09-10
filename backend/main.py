@@ -263,44 +263,30 @@ def extract_video_id(url: str) -> Optional[str]:
         return url.strip()
     return None
 
-def get_proxy_url() -> Optional[str]:
-    """Retrieves proxy URL from environment variables (PROXY_URL or WEBSHARE_PROXY)."""
-    proxy = os.environ.get("PROXY_URL") or os.environ.get("WEBSHARE_PROXY") or ""
-    return proxy.strip() or None
-
 def fetch_video_metadata(url: str):
     """Fetches video title, duration, and viewer retention heatmap using yt-dlp."""
-    is_vercel = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-    proxy = get_proxy_url()
-    
-    # On Vercel, YouTube blocks direct datacenter IPs, so try proxy first if configured; locally try direct first
-    attempts = [proxy, None] if (is_vercel and proxy) else [None, proxy] if proxy else [None]
-    
-    for attempt_proxy in attempts:
-        ydl_opts = {
-            'skip_download': True,
-            'youtube_include_dash_manifest': False,
-            'quiet': True,
-            'no_warnings': True,
-            'nocheckcertificate': True,
-            'proxy': attempt_proxy,
-            'socket_timeout': 10
-        }
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                if not info:
-                    raise Exception("yt-dlp returned empty info dict")
-                return {
-                    "title": info.get('title') or 'Unknown YouTube Video',
-                    "duration": float(info.get('duration') or 0.0),
-                    "heatmap": info.get('heatmap') or [],
-                    "is_live": bool(info.get('is_live') or False),
-                    "live_status": info.get('live_status') or 'not_live'
-                }
-        except Exception as e:
-            logger.warning(f"yt-dlp metadata extraction failed (proxy={'yes' if attempt_proxy else 'no'}): {e}")
-            continue
+    ydl_opts = {
+        'skip_download': True,
+        'youtube_include_dash_manifest': False,
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True,
+        'socket_timeout': 10
+    }
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if not info:
+                raise Exception("yt-dlp returned empty info dict")
+            return {
+                "title": info.get('title') or 'Unknown YouTube Video',
+                "duration": float(info.get('duration') or 0.0),
+                "heatmap": info.get('heatmap') or [],
+                "is_live": bool(info.get('is_live') or False),
+                "live_status": info.get('live_status') or 'not_live'
+            }
+    except Exception as e:
+        logger.warning(f"yt-dlp metadata extraction failed: {e}")
 
     # Fallback to URL video ID parsing if yt-dlp fails
     video_id = extract_video_id(url)
@@ -315,77 +301,15 @@ def fetch_video_metadata(url: str):
     raise HTTPException(status_code=400, detail="Failed to retrieve YouTube video details from URL.")
 
 
-_supadata_key_index = 0
-
-def get_supadata_keys() -> List[str]:
-    """Retrieves list of Supadata API keys from environment variables."""
-    raw = os.environ.get("SUPADATA_API_KEYS") or os.environ.get("SUPADATA_API_KEY") or ""
-    # Extract keys starting with sd_ or split by comma/whitespace/quotes
-    keys = re.findall(r'sd_[a-zA-Z0-9]+', raw)
-    if not keys:
-        keys = [k.strip('\"\' ') for k in re.split(r'[,\s\n]+', raw) if k.strip('\"\' ')]
-    return keys
-
-def fetch_transcript_supadata(video_id: str) -> List[dict]:
-    """Fetches transcript from Supadata API, rotating through available keys if rate limits/quotas occur."""
-    global _supadata_key_index
-    import requests
-    
-    keys = get_supadata_keys()
-    if not keys:
-        return []
-
-    # Round-robin key rotation to evenly distribute load across keys
-    start_idx = _supadata_key_index % len(keys)
-    rotated_keys = keys[start_idx:] + keys[:start_idx]
-    _supadata_key_index = (_supadata_key_index + 1) % len(keys)
-
-    for key in rotated_keys:
-        masked_key = f"{key[:7]}...{key[-4:]}" if len(key) >= 11 else "***"
-        try:
-            logger.info(f"Attempting Supadata transcript fetch with key {masked_key}")
-            response = requests.get(
-                "https://api.supadata.ai/v1/youtube/transcript",
-                headers={"x-api-key": key},
-                params={"videoId": video_id},
-                timeout=25
-            )
-            if response.status_code == 200:
-                data = response.json()
-                content = data.get("content") or []
-                if content:
-                    result = []
-                    for seg in content:
-                        text = seg.get("text", "").strip()
-                        if text:
-                            start = float(seg.get("offset", 0)) / 1000.0
-                            dur = float(seg.get("duration", 0)) / 1000.0
-                            result.append({"text": text, "start": start, "duration": dur})
-                    if result:
-                        logger.info(f"Successfully retrieved {len(result)} transcript lines via Supadata ({masked_key})")
-                        return result
-            elif response.status_code in (429, 402, 403, 401):
-                logger.warning(f"Supadata key {masked_key} returned status {response.status_code} (quota/limit). Rotating to next key...")
-                continue
-            else:
-                logger.warning(f"Supadata key {masked_key} returned status {response.status_code}: {response.text[:100]}")
-        except Exception as e:
-            logger.warning(f"Supadata request with key {masked_key} failed: {e}")
-            continue
-
-    return []
-
 
 def fetch_transcript_ytdlp(video_id: str) -> List[dict]:
     """Attempts to extract captions using yt-dlp's player response directly (free, no quota used)."""
     import requests
-    proxy = get_proxy_url()
     ydl_opts = {
         'skip_download': True,
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        'proxy': proxy,
         'socket_timeout': 8
     }
     try:
@@ -404,34 +328,30 @@ def fetch_transcript_ytdlp(video_id: str) -> List[dict]:
                     formats = lang_dict.get(lang) or []
                     json3_entry = next((f['url'] for f in formats if f.get('ext') == 'json3'), None)
                     if json3_entry:
-                        # Try direct first, then proxy if needed
-                        proxies_dict = {'http': proxy, 'https': proxy} if proxy else None
-                        for p in [None, proxies_dict]:
-                            try:
-                                r = requests.get(json3_entry, proxies=p, timeout=5)
-                                if r.status_code == 200:
-                                    events = r.json().get('events', [])
-                                    result = []
-                                    for ev in events:
-                                        segs = ev.get('segs', [])
-                                        text = ''.join(s.get('utf8', '') for s in segs).strip()
-                                        if text:
-                                            start = ev.get('tStartMs', 0) / 1000.0
-                                            dur = ev.get('dDurationMs', 0) / 1000.0
-                                            result.append({'text': text, 'start': start, 'duration': dur})
-                                    if result:
-                                        logger.info(f"Transcript fetched via yt-dlp (lang={lang}, auto={is_auto})")
-                                        return result
-                            except Exception:
-                                continue
+                        try:
+                            r = requests.get(json3_entry, timeout=5)
+                            if r.status_code == 200:
+                                events = r.json().get('events', [])
+                                result = []
+                                for ev in events:
+                                    segs = ev.get('segs', [])
+                                    text = ''.join(s.get('utf8', '') for s in segs).strip()
+                                    if text:
+                                        start = ev.get('tStartMs', 0) / 1000.0
+                                        dur = ev.get('dDurationMs', 0) / 1000.0
+                                        result.append({'text': text, 'start': start, 'duration': dur})
+                                if result:
+                                    logger.info(f"Transcript fetched via yt-dlp (lang={lang}, auto={is_auto})")
+                                    return result
+                        except Exception:
+                            continue
     except Exception as e:
         logger.warning(f"yt-dlp subtitle extraction failed: {e}")
     return []
 
 
 def fetch_transcript(video_id: str) -> List[dict]:
-    """Retrieves subtitles. On Vercel / serverless cloud environments, prioritizes rotating Supadata
-    to avoid datacenter IP bans and 10s execution timeouts. Locally, prioritizes free direct fetch."""
+    """Retrieves subtitles for a YouTube video using local direct fetch and yt-dlp fallback."""
 
     def to_dict_list(fetched) -> List[dict]:
         return [
@@ -442,18 +362,6 @@ def fetch_transcript(video_id: str) -> List[dict]:
             }
             for line in fetched
         ]
-
-    keys = get_supadata_keys()
-    is_vercel = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-
-    # ── On Vercel / Serverless: Use Supadata First if Available ──────────────
-    # YouTube strictly blocks all Vercel/AWS datacenter IPs. Trying multiple scraping
-    # attempts on Vercel burns 20+ seconds and triggers Vercel Gateway Timeouts.
-    if is_vercel and keys:
-        logger.info("Vercel deployment detected — utilizing Supadata API for cloud transcript retrieval")
-        supadata_data = fetch_transcript_supadata(video_id)
-        if supadata_data:
-            return supadata_data
 
     # ── Strategy 1: Fast direct fetch (works on localhost/residential IPs) ─────
     priority_langs = ['id', 'en', 'es', 'pt', 'fr', 'de', 'ja', 'ko', 'zh-Hans', 'zh-Hant', 'ar', 'hi', 'ru']
@@ -492,12 +400,6 @@ def fetch_transcript(video_id: str) -> List[dict]:
     ytdlp_data = fetch_transcript_ytdlp(video_id)
     if ytdlp_data:
         return ytdlp_data
-
-    # ── Strategy 4: Supadata API fallback (for localhost when direct fails) ────
-    if keys:
-        supadata_data = fetch_transcript_supadata(video_id)
-        if supadata_data:
-            return supadata_data
 
     # ── All strategies exhausted ──────────────────────────────────────────────
     raise HTTPException(
@@ -558,16 +460,10 @@ def _sse(data: dict) -> str:
 
 @app.get("/api/health")
 def health_check():
-    is_vercel = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
-    keys = get_supadata_keys()
-    proxy = get_proxy_url()
     has_gemini = bool(os.environ.get("GEMINI_API_KEY"))
     return {
         "status": "ok",
         "message": "CHEAT CLIP API is active",
-        "is_vercel": is_vercel,
-        "supadata_keys_count": len(keys),
-        "proxy_configured": bool(proxy),
         "gemini_env_configured": has_gemini
     }
 

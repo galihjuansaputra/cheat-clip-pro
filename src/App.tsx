@@ -1567,7 +1567,7 @@ Transcript:
 
             {subtitlesSource === 'youtube' && (
               <span style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', opacity: 0.8, display: 'block', marginTop: '0.15rem', lineHeight: '1.4' }}>
-                💡 <strong>{t.form.vercelSubtitlesTipTitle}</strong> {t.form.vercelSubtitlesTipDesc} <a href="https://downsub.com/" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--secondary)', textDecoration: 'underline', fontWeight: '500' }}>downsub.com</a> {t.form.andUploadOption}
+                💡 <strong>{t.form.subtitlesTipTitle}</strong> {t.form.subtitlesTipDesc} <a href="https://downsub.com/" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--secondary)', textDecoration: 'underline', fontWeight: '500' }}>downsub.com</a> {t.form.andUploadOption}
               </span>
             )}
           </div>
@@ -1990,7 +1990,7 @@ Transcript:
                 <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.25rem', lineHeight: '1.5' }}>
                   {t.errors.noSubtitlesMsg}
                   <br /><br />
-                  💡 <strong>Tip for Serverless Deployment (Vercel):</strong> {t.errors.noSubtitlesTip}
+                  💡 <strong>Tip:</strong> {t.errors.noSubtitlesTip}
                 </p>
               ) : (
                 <>

@@ -12,11 +12,7 @@
 ## 🧭 Table of Contents
 
 - [✨ Features](#-features)
-- [⚡ Quick Start for Non-Programmers (Super Easy!)](#-quick-start-for-non-programmers-super-easy)
-  - [Prerequisites (Install These Free Tools)](#prerequisites-install-these-free-tools)
-  - [Option A: One-Click Automatic Setup (Recommended)](#option-a-one-click-automatic-setup-recommended)
-  - [Option B: Manual Step-by-Step Setup](#option-b-manual-step-by-step-setup)
-- [🔄 How to Update Cheat Clip (1-Click Update)](#-how-to-update-cheat-clip-1-click-update)
+- [⚡ Quick Start](#-quick-start)
 - [🔑 How to Get a Free Google Gemini API Key](#-how-to-get-a-free-google-gemini-api-key)
 - [🎯 How to Use Cheat Clip](#-how-to-use-cheat-clip)
   - [Using the "Copy Timestamp" Features](#using-the-copy-timestamp-features)
@@ -46,110 +42,32 @@
 
 ---
 
-## ⚡ Quick Start for Non-Programmers (Super Easy!)
+## ⚡ Quick Start
 
-You don't need any programming experience to run Cheat Clip on your computer. Just follow these steps:
+### Prerequisites
+- [Node.js](https://nodejs.org/) (v18+)
+- [Python](https://www.python.org/downloads/) (3.10+)
+- [Git](https://git-scm.com/)
 
-### Prerequisites (Install These Free Tools)
+### Installation & Running
 
-Before running Cheat Clip for the first time, make sure your computer has these free tools:
-
-| Software | Where to Download | Why & What to Do |
-|---|---|---|
-| **1. Git** *(Highly Recommended)* | 👉 [Download Git](https://git-scm.com/downloads) | **Makes future setup & updates 1-click simple!** Run the installer and click **Next** on all prompts with default settings. With Git installed, you can update Cheat Clip anytime just by double-clicking `update.bat` without ever re-downloading ZIP files. |
-| **2. Node.js** | 👉 [Download Node.js (LTS)](https://nodejs.org/) | Download the **LTS (Recommended for Most Users)** installer, open it, and click **Next** until finished. |
-| **3. Python** | 👉 [Download Python](https://www.python.org/downloads/) | **CRITICAL FOR WINDOWS:** When the Python installer opens, check the box at the bottom that says **`☑ Add python.exe to PATH`** before clicking "Install Now"! |
-
-> [!IMPORTANT]
-> **Windows Users:** If you forgot to check **`Add python.exe to PATH`**, Python won't work in the command prompt. If that happens, simply re-run the Python installer, select **Modify**, and check the PATH box.
-
----
-
-### Step 1 — Get the Code
-
-- **With Git (Recommended):**
-  Open your command prompt or terminal and run:
-  ```bash
-  git clone https://github.com/your-username/cheat-clip.git
-  cd cheat-clip
-  ```
-- **Without Git:**
-  Click the green **"Code"** button at the top of the GitHub page, choose **"Download ZIP"**, and extract the ZIP file to any folder on your computer.
-
----
-
-### Option A: One-Click Automatic Setup (Recommended)
-
-We've included automatic setup scripts so you don't have to type terminal commands:
-
-#### On Windows:
-1. Open the `cheat-clip` folder on your computer.
-2. Double-click the file named **`setup.bat`**.
-   - A black window will open and automatically install everything needed.
-   - When it says *"Setup Complete!"*, press any key to close the window.
-3. Double-click **`start.bat`**.
-   - Your web browser will automatically open at **`http://localhost:5173`**!
-   - Keep the black launcher window open while using Cheat Clip. When you are done, close the window or press `Ctrl + C`.
-
-#### On macOS & Linux:
-1. Open the **Terminal** app.
-2. Navigate to the project folder (`cd path/to/cheat-clip`).
-3. Run the installer:
+1. **Clone the repository**:
    ```bash
-   bash setup.sh
+   git clone https://github.com/your-username/cheat-clip.git
+   cd cheat-clip
    ```
-4. Start the app:
-   ```bash
-   bash start.sh
-   ```
-   - Your browser will open **`http://localhost:5173`** automatically.
 
----
-
-### Option B: Manual Step-by-Step Setup
-
-If you prefer using the command prompt/terminal directly:
-
-1. **Open your Terminal / Command Prompt**:
-   - *Windows Tip:* Open the `cheat-clip` folder in File Explorer, click the address bar at the top, type `cmd`, and press **Enter**.
-2. **Install frontend dependencies**:
+2. **Install dependencies**:
    ```bash
    npm install
-   ```
-3. **Install Python backend dependencies**:
-   ```bash
    python -m pip install -r backend/requirements.txt
    ```
-   *(On Mac/Linux, use `python3 -m pip install -r backend/requirements.txt` if needed)*
-4. **Start the application**:
+
+3. **Start the application**:
    ```bash
    npm run dev
    ```
-5. **Open in browser**:
-   Navigate to **[http://localhost:5173](http://localhost:5173)**.
-
----
-
-## 🔄 How to Update Cheat Clip (1-Click Update)
-
-Whenever new features, bug fixes, or new Gemini AI models are released, you can easily update your installation if you have Git installed:
-
-### On Windows:
-- Simply double-click **`update.bat`**!
-- It will automatically download the newest code from GitHub, install any updated packages, and confirm when it's done. Then double-click `start.bat` as usual.
-
-### On macOS & Linux:
-- Run:
-  ```bash
-  bash update.sh
-  ```
-- Or run manually:
-  ```bash
-  git pull && npm install && python3 -m pip install -r backend/requirements.txt
-  ```
-
-> [!TIP]
-> This is why installing **Git** is so helpful: you never need to delete, re-download, or reconfigure anything when new updates come out!
+   Both the Vite frontend (`http://localhost:5173`) and the FastAPI backend (`http://localhost:8000`) will launch concurrently.
 
 ---
 
@@ -224,7 +142,7 @@ Want to see how the app looks before getting an API key?
 
 ### ❓ "'python' is not recognized as an internal or external command"
 - **Why this happens:** Python was installed without the PATH checkbox enabled.
-- **Solution:** Re-open your downloaded Python installer, click **Modify**, and make sure **`Add Python to environment variables (PATH)`** is checked. Then close and re-open your terminal or `setup.bat`.
+- **Solution:** Re-open your downloaded Python installer, click **Modify**, and make sure **`Add Python to environment variables (PATH)`** is checked. Then close and re-open your terminal.
 
 ---
 
@@ -278,7 +196,7 @@ graph TD
 | **Frontend** | React 19 · TypeScript · Vite · Canvas API | [src/App.tsx](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/src/App.tsx) · [src/main.tsx](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/src/main.tsx) |
 | **Styling** | Vanilla CSS Dark System · Glassmorphism | [src/index.css](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/src/index.css) |
 | **Backend** | Python 3.10+ · FastAPI · Uvicorn (SSE streaming) | [backend/main.py](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/backend/main.py) |
-| **Video Processing** | `yt-dlp` · `youtube-transcript-api` · `supadata` | [backend/main.py](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/backend/main.py) · [backend/requirements.txt](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/backend/requirements.txt) |
+| **Video Processing** | `yt-dlp` · `youtube-transcript-api` | [backend/main.py](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/backend/main.py) · [backend/requirements.txt](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/backend/requirements.txt) |
 | **AI Integration** | `google-genai` Python SDK with dynamic version fallback | [backend/main.py](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/backend/main.py) |
 | **Localization** | Custom bilingual reactivity (English / Indonesian) | [src/locales/en.ts](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/src/locales/en.ts) · [src/locales/id.ts](file:///e:/PROJECT/CLIPPER/CHEAT%20CLIP/src/locales/id.ts) |
 
@@ -339,16 +257,10 @@ Starts video scraping and AI extraction. Streams progress updates in real time u
 
 ```text
 cheat-clip/
-├── setup.bat                # ⚡ 1-click Windows installer
-├── start.bat                # 🚀 1-click Windows launcher
-├── update.bat               # 🔄 1-click Windows updater (via Git)
-├── setup.sh                 # ⚡ 1-click macOS/Linux installer
-├── start.sh                 # 🚀 1-click macOS/Linux launcher
-├── update.sh                # 🔄 1-click macOS/Linux updater (via Git)
 ├── backend/
 │   ├── main.py              # FastAPI server, yt-dlp extractor, Gemini model fallback
 │   ├── requirements.txt     # Python backend dependencies
-│   ├── .env.template        # Environment template (optional transcript keys)
+│   ├── .env.template        # Environment template (local configuration)
 │   └── .env                 # Local environment config (optional)
 ├── src/
 │   ├── App.tsx              # Main dashboard, clip renderer, YouTube player, copy actions
@@ -361,8 +273,7 @@ cheat-clip/
 │   ├── index.css            # Dark mode styles, glassmorphism, animations
 │   └── main.tsx             # React entry point
 ├── package.json             # Scripts & npm dependencies
-├── vite.config.ts           # Vite configuration & proxy rules
-└── vercel.json              # Vercel deployment configuration
+└── vite.config.ts           # Vite configuration & dev server
 ```
 
 ---

@@ -42,8 +42,8 @@ export const en = {
     uploadCustomSubtitles: "Upload Custom Subtitles (.srt, .txt)",
     chooseSrtTxt: "📂 Choose SRT/TXT File",
     subtitlesLoaded: (name: string) => `Loaded: ${name}`,
-    vercelSubtitlesTipTitle: "Hosting on Vercel?",
-    vercelSubtitlesTipDesc: "Serverless providers can get blocked when fetching auto-generated YouTube transcripts. If auto-fetch fails, download the subtitles manually using",
+    subtitlesTipTitle: "Subtitles Tip:",
+    subtitlesTipDesc: "If YouTube auto-fetch fails or subtitles are unavailable, you can download subtitles manually using",
     andUploadOption: "and upload them using the Upload Custom Subtitles option.",
 
     // Analysis Range
@@ -85,7 +85,7 @@ export const en = {
     changeApiKeyAction: "Change API Key",
     getNewKeyLink: "Get free key at Google AI Studio ↗",
     noSubtitlesMsg: "No subtitles could be retrieved for this video. Subtitles might be disabled, or the video may be age-restricted or private.",
-    noSubtitlesTip: "Serverless hosting providers can get blocked when fetching auto-generated YouTube transcripts. To resolve this, you can download the subtitles manually using a tool like downsub.com, upload the file via the Upload custom subtitle settings above, and try analyzing the video again.",
+    noSubtitlesTip: "If auto-generated YouTube transcripts cannot be retrieved, you can download the subtitles manually using a tool like downsub.com, upload the file via the Upload Custom Subtitles option above, and try analyzing the video again.",
   },
   loading: {
     decodingEngagement: "Decoding Video Engagement",

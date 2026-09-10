@@ -44,8 +44,8 @@ export const id: Translations = {
     uploadCustomSubtitles: "Unggah Subtitle Manual (.srt, .txt)",
     chooseSrtTxt: "📂 Pilih Berkas SRT/TXT",
     subtitlesLoaded: (name: string) => `Dimuat: ${name}`,
-    vercelSubtitlesTipTitle: "Hosting di Vercel?",
-    vercelSubtitlesTipDesc: "Penyedia serverless terkadang dibatasi saat mengambil transkrip otomatis YouTube. Jika pengambilan otomatis gagal, unduh subtitle secara manual melalui",
+    subtitlesTipTitle: "Tips Subtitle:",
+    subtitlesTipDesc: "Jika pengambilan otomatis YouTube gagal atau subtitle tidak tersedia, unduh subtitle secara manual melalui",
     andUploadOption: "dan unggah menggunakan opsi Unggah Subtitle Manual di atas.",
 
     // Analysis Range
@@ -87,7 +87,7 @@ export const id: Translations = {
     changeApiKeyAction: "Ganti API Key",
     getNewKeyLink: "Dapatkan key gratis di Google AI Studio ↗",
     noSubtitlesMsg: "Tidak dapat mengambil subtitle untuk video ini. Subtitle mungkin dinonaktifkan, atau video dibatasi usia/bersifat privat.",
-    noSubtitlesTip: "Penyedia hosting serverless terkadang diblokir saat mengambil transkrip YouTube otomatis. Untuk mengatasinya, unduh subtitle manual lewat downsub.com, unggah berkas melalui pengaturan Unggah Subtitle Manual di atas, lalu coba analisis kembali.",
+    noSubtitlesTip: "Jika transkrip otomatis YouTube tidak dapat diambil, Anda dapat mengunduh subtitle secara manual melalui downsub.com, unggah berkas melalui opsi Unggah Subtitle Manual di atas, lalu coba analisis kembali.",
   },
   loading: {
     decodingEngagement: "Membedah Retensi Video",
