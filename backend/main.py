@@ -46,7 +46,8 @@ try:
         transcribe_clip_words,
         generate_ass_file,
         render_clip_to_mp4,
-        extract_clip_frame
+        extract_clip_frame,
+        detect_speaker_face_box
     )
 except ImportError:
     from video_engine import (
@@ -58,7 +59,8 @@ except ImportError:
         transcribe_clip_words,
         generate_ass_file,
         render_clip_to_mp4,
-        extract_clip_frame
+        extract_clip_frame,
+        detect_speaker_face_box
     )
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -1746,6 +1748,42 @@ async def get_clip_frame(video_id: str, timestamp: float = 0.0, video_url: Optio
         logger.warning(f"Failed to serve extracted frame for {video_id}: {e}")
 
     raise HTTPException(status_code=404, detail="Real video frame could not be extracted yet")
+
+
+@app.get("/api/detect-face")
+async def detect_face(video_id: str, timestamp: float = 0.0, video_url: Optional[str] = None):
+    """
+    Detects speaker face coordinates (cx, cy, w, h) on the video at timestamp.
+    Returns normalized coordinates and the frame URL.
+    """
+    default_res = {
+        "found": False,
+        "cx": 0.5,
+        "cy": 0.35,
+        "w": 0.25,
+        "h": 0.25,
+        "frame_url": f"/api/clip-frame?video_id={video_id}&timestamp={timestamp}"
+    }
+    try:
+        # First try to extract or get the cached frame
+        frame_path = await asyncio.to_thread(extract_clip_frame, video_url or "", video_id, timestamp)
+        if frame_path and os.path.exists(frame_path):
+            box = await asyncio.to_thread(detect_speaker_face_box, frame_path)
+            box["frame_url"] = f"/api/clip-frame?video_id={video_id}&timestamp={timestamp}"
+            return box
+
+        # If frame extract didn't complete, check local candidates
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', video_id)
+        local_candidates = list(TEMP_DIR.glob(f"*{safe_id}*.mp4")) + list(EXPORTS_DIR.glob(f"*{safe_id}*.mp4"))
+        for candidate in local_candidates:
+            if candidate.exists() and candidate.stat().st_size > 10000 and "slice_" not in candidate.name:
+                box = await asyncio.to_thread(detect_speaker_face_box, str(candidate))
+                box["frame_url"] = f"/api/clip-frame?video_id={video_id}&timestamp={timestamp}"
+                return box
+    except Exception as e:
+        logger.warning(f"Face detection API error: {e}")
+
+    return default_res
 
 
 def _get_dir_size_and_count(dir_path) -> Tuple[int, int]:

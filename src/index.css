@@ -1586,9 +1586,18 @@ label[for="manual-subtitle-file"]:hover {
   width: 100%;
   height: 100%;
   display: flex;
+  flex-direction: column;
   justify-content: center;
   align-items: center;
   position: relative;
+  overflow: hidden;
+}
+
+.wireframe-single-layout.split-active {
+  justify-content: center;
+  align-items: center;
+  gap: 0;
+  padding: 4px 0;
 }
 
 .wireframe-content-box {
@@ -1600,7 +1609,7 @@ label[for="manual-subtitle-file"]:hover {
   justify-content: center;
   width: 100%;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
-  transition: height 0.25s ease;
+  transition: all 0.25s ease;
   overflow: hidden;
   z-index: 5;
 }
@@ -1611,9 +1620,9 @@ label[for="manual-subtitle-file"]:hover {
   background: radial-gradient(circle at 50% 40%, #1e293b 0%, #0f172a 60%, #020617 100%);
   border: none;
 }
-.wireframe-content-box.aspect-11  { height: 320px; }
-.wireframe-content-box.aspect-43  { height: 240px; }
-.wireframe-content-box.aspect-169 { height: 180px; }
+.wireframe-content-box.aspect-11  { height: 320px; width: 100%; }
+.wireframe-content-box.aspect-43  { height: 240px; width: 100%; }
+.wireframe-content-box.aspect-169 { height: 180px; width: 100%; }
 
 .wireframe-content-inner {
   width: 100%;
@@ -1627,61 +1636,267 @@ label[for="manual-subtitle-file"]:hover {
   background: #000;
 }
 
-.content-ratio-tag {
-  background: rgba(0, 0, 0, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #fff;
+.wireframe-split-cam-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #0d1117;
+  border: 1.5px solid rgba(0, 255, 255, 0.45);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  z-index: 6;
+  transition: all 0.25s ease;
+  flex-shrink: 0;
+}
+
+/* Matching aspect ratio styles for split top cam and bottom content */
+.wireframe-split-cam-box.aspect-169,
+.wireframe-content-box.split-mode.aspect-169 {
+  width: 100%;
+  height: 180px;
+  aspect-ratio: 16 / 9;
+}
+
+.wireframe-split-cam-box.aspect-11,
+.wireframe-content-box.split-mode.aspect-11 {
+  width: 255px;
+  height: 255px;
+  aspect-ratio: 1 / 1;
+}
+
+.wireframe-split-cam-box.aspect-43,
+.wireframe-content-box.split-mode.aspect-43 {
+  width: 300px;
+  height: 225px;
+  aspect-ratio: 4 / 3;
+}
+
+.wireframe-split-cam-box.aspect-916,
+.wireframe-content-box.split-mode.aspect-916 {
+  width: 148px;
+  height: 263px;
+  aspect-ratio: 9 / 16;
+}
+
+.wireframe-split-divider {
+  height: 2px;
+  width: 80%;
+  max-width: 260px;
+  background: linear-gradient(90deg, transparent, #00ffff, #8b5cf6, transparent);
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.7);
+  margin: 6px auto;
+  border-radius: 2px;
+  flex-shrink: 0;
+  z-index: 8;
+}
+
+.wireframe-content-box.split-mode {
+  border: 1.5px solid rgba(139, 92, 246, 0.45);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  flex-shrink: 0;
+}
+
+/* Facecam Skeleton Placeholder Styles */
+.wireframe-facecam-skeleton {
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(circle at center, #1e293b 0%, #0f172a 65%, #020617 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+}
+
+.skeleton-grid-mesh {
+  position: absolute;
+  inset: 0;
+  background-image: 
+    linear-gradient(rgba(0, 255, 255, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 16px 16px;
+  pointer-events: none;
+}
+
+.skeleton-reticle {
+  position: relative;
+  width: 54px;
+  height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 6px;
+  z-index: 2;
+}
+
+.reticle-bracket {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border-color: #00ffff;
+  border-style: solid;
+}
+
+.reticle-bracket.top-left {
+  top: 0;
+  left: 0;
+  border-width: 2px 0 0 2px;
+}
+
+.reticle-bracket.top-right {
+  top: 0;
+  right: 0;
+  border-width: 2px 2px 0 0;
+}
+
+.reticle-bracket.bottom-left {
+  bottom: 0;
+  left: 0;
+  border-width: 0 0 2px 2px;
+}
+
+.reticle-bracket.bottom-right {
+  bottom: 0;
+  right: 0;
+  border-width: 0 2px 2px 0;
+}
+
+.skeleton-avatar {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(0, 255, 255, 0.08);
+  border: 1px solid rgba(0, 255, 255, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #00ffff;
+  box-shadow: 0 0 14px rgba(0, 255, 255, 0.25);
+}
+
+.skeleton-label-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  z-index: 2;
+}
+
+.skeleton-main-label {
   font-size: 0.72rem;
-  font-weight: 700;
-  padding: 0.2rem 0.5rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: #f1f5f9;
+  text-shadow: 0 0 8px rgba(0, 255, 255, 0.5);
+}
+
+.skeleton-sub-label {
+  font-size: 0.58rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: #94a3b8;
+}
+
+/* PIP Skeleton */
+.wireframe-pip-skeleton {
+  width: 100%;
+  height: 100%;
+  background: radial-gradient(circle at center, #1e293b 0%, #090d16 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #00ffff;
+  gap: 2px;
+}
+
+.pip-skeleton-text {
+  font-size: 0.55rem;
+  font-weight: 800;
+  color: #94a3b8;
+  letter-spacing: 0.06em;
+}
+
+.wireframe-cam-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: rgba(0, 0, 0, 0.78);
+  border: 1px solid rgba(0, 255, 255, 0.5);
+  backdrop-filter: blur(4px);
+  color: #00ffff;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
   border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.wireframe-gameplay-badge {
+  position: absolute;
+  bottom: 6px;
+  left: 6px;
+  background: rgba(0, 0, 0, 0.78);
+  border: 1px solid rgba(139, 92, 246, 0.5);
+  backdrop-filter: blur(4px);
+  color: #c4b5fd;
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  z-index: 10;
+  pointer-events: none;
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ff0055;
+  box-shadow: 0 0 6px #ff0055;
+  display: inline-block;
 }
 
 .wireframe-pip-box {
   position: absolute;
   top: 8px;
   right: 8px;
-  width: 60px;
-  height: 42px;
-  background: #ff5e3a;
-  border: 1px solid #fff;
-  border-radius: 6px;
+  width: 88px;
+  height: 66px;
+  background: #000;
+  border: 2px solid #00ffff;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.8), 0 0 10px rgba(0, 255, 255, 0.4);
+  border-radius: 8px;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 0.65rem;
-  font-weight: 700;
+  z-index: 15;
+}
+
+.wireframe-pip-badge {
+  position: absolute;
+  bottom: 2px;
+  right: 3px;
+  background: rgba(0, 0, 0, 0.8);
+  border: 0.5px solid rgba(255, 255, 255, 0.4);
   color: #fff;
-}
-
-/* Streamer Split Wireframe */
-.wireframe-split-container {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-}
-
-.wireframe-streamer-cam {
-  height: 35%;
-  background: linear-gradient(135deg, #ff007a 0%, #7928ca 100%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.wireframe-divider-line {
-  height: 3px;
-  background: #00ffff;
-  box-shadow: 0 0 8px #00ffff;
-}
-
-.wireframe-gameplay-feed {
-  height: 65%;
-  background: #0d1322;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  font-size: 0.55rem;
+  font-weight: 800;
+  padding: 1px 4px;
+  border-radius: 3px;
+  pointer-events: none;
 }
 
 .wireframe-label {

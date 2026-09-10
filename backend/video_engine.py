@@ -17,6 +17,7 @@ EXPORTS_DIR = BASE_DIR / "exports"
 FONTS_DIR = BASE_DIR / "fonts"
 COOKIES_PATH = BASE_DIR / "cookies.txt"
 
+CASCADE_PATH = BASE_DIR / "haarcascade_frontalface_default.xml"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 FONTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -718,67 +719,125 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return output_ass_path
 
 
-def detect_speaker_center_ratio(video_path: str) -> float:
+def detect_speaker_face_box(source_path: str) -> Dict[str, Any]:
     """
-    Detects speaker faces across sample frames and returns the smoothed horizontal center ratio (0.0 to 1.0).
-    Defaults to 0.5 (center) if no face is detected.
+    Detects speaker face bounding box using OpenCV Haar Cascade Classifier.
+    Can accept a video file or an image frame.
+    Returns normalized coordinates:
+    {
+        "found": bool,
+        "cx": float,  # horizontal center (0.0 to 1.0)
+        "cy": float,  # vertical center (0.0 to 1.0)
+        "w": float,   # face width ratio (0.0 to 1.0)
+        "h": float    # face height ratio (0.0 to 1.0)
+    }
+    Defaults to cx=0.5, cy=0.35, w=0.25, h=0.25 if no face is detected.
     """
+    default_res = {"found": False, "cx": 0.5, "cy": 0.35, "w": 0.25, "h": 0.25}
+    if not source_path or not os.path.exists(source_path):
+        return default_res
+
     try:
         import cv2
-        import mediapipe as mp
 
-        mp_face = mp.solutions.face_detection
-        detector = mp_face.FaceDetection(min_detection_confidence=0.5)
+        if not CASCADE_PATH.exists():
+            logger.warning(f"Haar cascade XML not found at {CASCADE_PATH}")
+            return default_res
 
-        cap = cv2.VideoCapture(video_path)
+        cascade = cv2.CascadeClassifier(str(CASCADE_PATH))
+
+        # Check if source is an image
+        ext = os.path.splitext(source_path)[1].lower()
+        if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
+            frame = cv2.imread(source_path)
+            if frame is None:
+                return default_res
+            h, w = frame.shape[:2]
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+            if len(faces) > 0:
+                largest = max(faces, key=lambda f: f[2] * f[3])
+                fx, fy, fw, fh = largest
+                cx = float(fx + fw / 2.0) / w
+                cy = float(fy + fh / 2.0) / h
+                return {
+                    "found": True,
+                    "cx": round(float(cx), 3),
+                    "cy": round(float(cy), 3),
+                    "w": round(float(fw / w), 3),
+                    "h": round(float(fh / h), 3)
+                }
+            return default_res
+
+        # Source is a video file
+        cap = cv2.VideoCapture(source_path)
+        if not cap.isOpened():
+            return default_res
+
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        step = max(1, int(fps * 0.75))  # Sample every ~0.75s
 
-        step = max(1, int(fps * 0.5))  # Sample every 0.5s
-        x_centers = []
-
+        detections = []
         frame_idx = 0
-        while cap.isOpened() and frame_idx < total_frames:
+        checked = 0
+        while cap.isOpened() and frame_idx < total_frames and checked < 25:
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             if not ret:
                 break
-
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            results = detector.process(rgb)
-            if results and results.detections:
-                for detection in results.detections:
-                    box = detection.location_data.relative_bounding_box
-                    face_center_x = box.xmin + (box.width / 2.0)
-                    x_centers.append(face_center_x)
-                    break  # Take primary face
+            checked += 1
+            h, w = frame.shape[:2]
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+            if len(faces) > 0:
+                largest = max(faces, key=lambda f: f[2] * f[3])
+                fx, fy, fw, fh = largest
+                cx = float(fx + fw / 2.0) / w
+                cy = float(fy + fh / 2.0) / h
+                detections.append((cx, cy, float(fw) / w, float(fh) / h))
 
             frame_idx += step
 
         cap.release()
 
-        if x_centers:
-            ema = x_centers[0]
-            for x in x_centers[1:]:
-                ema = (ema * 0.8) + (x * 0.2)
-            window_half = 0.3164 / 2.0
-            smoothed_center = max(window_half, min(1.0 - window_half, ema))
-            logger.info(f"Face tracking detected speaker at horizontal ratio {smoothed_center:.3f}")
-            return smoothed_center
+        if detections:
+            avg_cx = sum(d[0] for d in detections) / len(detections)
+            avg_cy = sum(d[1] for d in detections) / len(detections)
+            avg_w = sum(d[2] for d in detections) / len(detections)
+            avg_h = sum(d[3] for d in detections) / len(detections)
+            logger.info(f"Face tracking detected speaker: center=({avg_cx:.3f}, {avg_cy:.3f}), size=({avg_w:.3f}x{avg_h:.3f}) across {len(detections)} frames")
+            return {
+                "found": True,
+                "cx": round(float(avg_cx), 3),
+                "cy": round(float(avg_cy), 3),
+                "w": round(float(avg_w), 3),
+                "h": round(float(avg_h), 3)
+            }
     except Exception as e:
-        logger.warning(f"Face detection encountered error: {e}, using center crop.")
+        logger.warning(f"Face detection encountered error: {e}, falling back to defaults.")
 
-    return 0.5
+    return default_res
+
+
+def detect_speaker_center_ratio(video_path: str) -> float:
+    """
+    Detects speaker faces across sample frames and returns the smoothed horizontal center ratio (0.0 to 1.0).
+    Defaults to 0.5 (center) if no face is detected.
+    """
+    box = detect_speaker_face_box(video_path)
+    return float(box.get("cx", 0.5))
 
 
 def build_ffmpeg_filtergraph(
     aspect_ratio: str,
     background_style: str,
-    face_center_ratio: float,
-    streamer_preset: str,
-    title_text: Optional[str],
-    title_position: str,
-    ass_subtitles_path: Optional[str]
+    face_center_ratio: float = 0.5,
+    streamer_preset: str = "none",
+    title_text: Optional[str] = None,
+    title_position: str = "auto",
+    ass_subtitles_path: Optional[str] = None,
+    face_box: Optional[Dict[str, Any]] = None
 ) -> Tuple[str, str]:
     """
     Constructs the FFmpeg -filter_complex chain with proper aspect ratio center-cropping.
@@ -786,28 +845,157 @@ def build_ffmpeg_filtergraph(
     """
     filters = []
 
-    # 1. Base Layout & Scaling with Proper Center-Cropping
+    face_cx = float(face_box.get("cx", face_center_ratio)) if face_box else face_center_ratio
+    face_cy = float(face_box.get("cy", 0.35)) if face_box else 0.35
+
+    # 1. Base Layout & Scaling
     if streamer_preset == "split_top_cam":
-        filters.append(
-            "[0:v]split=2[cam_raw][game_raw];"
-            "[cam_raw]scale=1080:672:force_original_aspect_ratio=increase,crop=1080:672[cam_crop];"
-            "[game_raw]scale=1080:1248:force_original_aspect_ratio=decrease,pad=1080:1248:(ow-iw)/2:(oh-ih)/2:black[game_crop];"
-            "[cam_crop][game_crop]vstack=inputs=2[layout_base]"
-        )
+        # Ensure both top facecam and bottom content box share the EXACT SAME aspect ratio
+        if aspect_ratio == "16:9":
+            # 16:9 split: top cam 1080x608 (16:9) cropped around face, bottom feed 1080x608 (16:9)
+            filters.append(
+                f"[0:v]split=2[cam_raw][game_raw];"
+                f"[cam_raw]crop='min(iw,ih*16/9*0.65)':'min(ih,iw*9/16*0.65)':'max(0,min(iw-ow,iw*{face_cx:.3f}-ow/2))':'max(0,min(ih-oh,ih*{face_cy:.3f}-oh/2))',scale=1080:608[cam_box];"
+                f"[game_raw]crop='min(iw,ih*16/9)':'min(ih,iw*9/16)':'(iw-min(iw,ih*16/9))/2':'(ih-min(ih,iw*9/16))/2',scale=1080:608[game_box];"
+                f"[cam_box][game_box]vstack=inputs=2[both_split]"
+            )
+            if background_style == "blurred":
+                filters.append(
+                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[bg_blurred][both_split]overlay=0:352[layout_base]"
+                )
+            else:
+                filters.append(f"[both_split]pad=1080:1920:0:352:black[layout_base]")
+
+        elif aspect_ratio == "1:1":
+            # 1:1 split: top cam 960x960 (1:1) cropped around face, bottom feed 960x960 (1:1)
+            filters.append(
+                f"[0:v]split=2[cam_raw][game_raw];"
+                f"[cam_raw]crop='min(iw,ih*0.65)':'min(iw,ih*0.65)':'max(0,min(iw-ow,iw*{face_cx:.3f}-ow/2))':'max(0,min(ih-oh,ih*{face_cy:.3f}-oh/2))',scale=960:960[cam_box];"
+                f"[game_raw]crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=960:960[game_box];"
+                f"[cam_box][game_box]vstack=inputs=2[both_split]"
+            )
+            if background_style == "blurred":
+                filters.append(
+                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[bg_blurred][both_split]overlay=60:0[layout_base]"
+                )
+            else:
+                filters.append(f"[both_split]pad=1080:1920:60:0:black[layout_base]")
+
+        elif aspect_ratio == "4:3":
+            # 4:3 split: top cam 1080x810 (4:3) cropped around face, bottom feed 1080x810 (4:3)
+            filters.append(
+                f"[0:v]split=2[cam_raw][game_raw];"
+                f"[cam_raw]crop='min(iw,ih*4/3*0.65)':'min(ih,iw*3/4*0.65)':'max(0,min(iw-ow,iw*{face_cx:.3f}-ow/2))':'max(0,min(ih-oh,ih*{face_cy:.3f}-oh/2))',scale=1080:810[cam_box];"
+                f"[game_raw]crop='min(iw,ih*4/3)':'min(ih,iw*3/4)':'(iw-min(iw,ih*4/3))/2':'(ih-min(ih,iw*3/4))/2',scale=1080:810[game_box];"
+                f"[cam_box][game_box]vstack=inputs=2[both_split]"
+            )
+            if background_style == "blurred":
+                filters.append(
+                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[bg_blurred][both_split]overlay=0:150[layout_base]"
+                )
+            else:
+                filters.append(f"[both_split]pad=1080:1920:0:150:black[layout_base]")
+
+        else:  # 9:16
+            # 9:16 split: top cam 540x960 (9:16) cropped around face, bottom feed 540x960 (9:16)
+            filters.append(
+                f"[0:v]split=2[cam_raw][game_raw];"
+                f"[cam_raw]crop='min(iw,ih*9/16)':'ih':'max(0,min(iw-ow,iw*{face_cx:.3f}-ow/2))':'max(0,min(ih-oh,ih*{face_cy:.3f}-oh/2))',scale=540:960[cam_box];"
+                f"[game_raw]crop='min(iw,ih*9/16)':'ih':'(iw-min(iw,ih*9/16))/2':'(ih-min(ih,iw*9/16))/2',scale=540:960[game_box];"
+                f"[cam_box][game_box]vstack=inputs=2[both_split]"
+            )
+            if background_style == "blurred":
+                filters.append(
+                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[bg_blurred][both_split]overlay=270:0[layout_base]"
+                )
+            else:
+                filters.append(f"[both_split]pad=1080:1920:270:0:black[layout_base]")
+
         current_v = "[layout_base]"
 
     elif streamer_preset == "pip_corner":
-        filters.append(
-            "[0:v]split=2[main_raw][pip_raw];"
-            "[main_raw]scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2:black[main_base];"
-            "[pip_raw]scale=340:240:force_original_aspect_ratio=increase,crop=340:240[pip_box];"
-            "[main_base][pip_box]overlay=x=W-w-30:y=80[layout_base]"
-        )
+        # PIP Box cropped on face, placed in the top-right corner of the video content for EACH aspect ratio
+        pip_crop = f"[pip_raw]crop='min(iw,ih*4/3*0.5)':'ih*0.5':'max(0,min(iw-ow,iw*{face_cx:.3f}-ow/2))':'max(0,min(ih-oh,ih*{face_cy:.3f}-oh/2))',scale=320:240[pip_box];"
+
+        if aspect_ratio == "1:1":
+            crop_main = "crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=1080:1080"
+            pip_x, pip_y = 736, 444
+            if background_style == "blurred":
+                filters.append(
+                    f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
+                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[main_raw]{crop_main}[fg_square];"
+                    f"[bg_blurred][fg_square]overlay=0:420[main_base];"
+                    f"{pip_crop}"
+                    f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
+                )
+            else:
+                filters.append(
+                    f"[0:v]split=2[main_raw][pip_raw];"
+                    f"[main_raw]{crop_main},pad=1080:1920:0:420:black[main_base];"
+                    f"{pip_crop}"
+                    f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
+                )
+
+        elif aspect_ratio == "4:3":
+            crop_main = "crop='min(iw,ih*4/3)':'min(ih,iw*3/4)':'(iw-min(iw,ih*4/3))/2':'(ih-min(ih,iw*3/4))/2',scale=1080:810"
+            pip_x, pip_y = 736, 579
+            if background_style == "blurred":
+                filters.append(
+                    f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
+                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[main_raw]{crop_main}[fg_43];"
+                    f"[bg_blurred][fg_43]overlay=0:555[main_base];"
+                    f"{pip_crop}"
+                    f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
+                )
+            else:
+                filters.append(
+                    f"[0:v]split=2[main_raw][pip_raw];"
+                    f"[main_raw]{crop_main},pad=1080:1920:0:555:black[main_base];"
+                    f"{pip_crop}"
+                    f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
+                )
+
+        elif aspect_ratio == "16:9":
+            crop_main = "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)':'(iw-min(iw,ih*16/9))/2':'(ih-min(ih,iw*9/16))/2',scale=1080:608"
+            pip_x, pip_y = 736, 676
+            if background_style == "blurred":
+                filters.append(
+                    f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
+                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[main_raw]{crop_main}[fg_169];"
+                    f"[bg_blurred][fg_169]overlay=0:656[main_base];"
+                    f"{pip_crop}"
+                    f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
+                )
+            else:
+                filters.append(
+                    f"[0:v]split=2[main_raw][pip_raw];"
+                    f"[main_raw]{crop_main},pad=1080:1920:0:656:black[main_base];"
+                    f"{pip_crop}"
+                    f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
+                )
+
+        else:  # 9:16
+            crop_ratio_safe = max(0.0, min(1.0, (face_cx - 0.158) / 0.684))
+            pip_x, pip_y = 736, 120
+            filters.append(
+                f"[0:v]split=2[main_raw][pip_raw];"
+                f"[main_raw]crop=ih*9/16:ih:(iw-ih*9/16)*{crop_ratio_safe:.3f}:0,scale=1080:1920[main_base];"
+                f"{pip_crop}"
+                f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
+            )
+
         current_v = "[layout_base]"
 
     elif aspect_ratio == "9:16":
         # Full Bleed 9:16 with Face Tracking horizontal crop offset
-        crop_ratio_safe = max(0.0, min(1.0, (face_center_ratio - 0.158) / 0.684))
+        crop_ratio_safe = max(0.0, min(1.0, (face_cx - 0.158) / 0.684))
         filters.append(
             f"[0:v]crop=ih*9/16:ih:(iw-ih*9/16)*{crop_ratio_safe:.3f}:0,scale=1080:1920[layout_base]"
         )
@@ -902,18 +1090,19 @@ def render_clip_to_mp4(
     """
     Renders the final 1080x1920 short-form video with layout, aspect ratio, titles, and subtitles.
     """
-    face_center = 0.5
-    if enable_face_tracking and aspect_ratio == "9:16" and streamer_preset == "none":
-        face_center = detect_speaker_center_ratio(video_path)
+    face_box = {"found": False, "cx": 0.5, "cy": 0.35, "w": 0.25, "h": 0.25}
+    if enable_face_tracking or streamer_preset in ["pip_corner", "split_top_cam"]:
+        face_box = detect_speaker_face_box(video_path)
 
     filter_complex, out_map = build_ffmpeg_filtergraph(
         aspect_ratio=aspect_ratio,
         background_style=background_style,
-        face_center_ratio=face_center,
+        face_center_ratio=float(face_box.get("cx", 0.5)),
         streamer_preset=streamer_preset,
         title_text=title_text,
         title_position=title_position,
-        ass_subtitles_path=ass_subtitles_path
+        ass_subtitles_path=ass_subtitles_path,
+        face_box=face_box
     )
 
     # Choose video encoder (NVENC or libx264)

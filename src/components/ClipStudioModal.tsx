@@ -505,30 +505,60 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
             >
               {/* Background (Black or Blurred) */}
               <div className={`wireframe-bg ${backgroundStyle === 'blurred' && aspectRatio !== '9:16' ? 'blurred-ambient' : 'black-bg'}`}>
-                {/* Content Box */}
-                {streamerPreset === 'split_top_cam' ? (
-                  <div className="wireframe-split-container">
-                    <div className="wireframe-streamer-cam">
-                      <span className="wireframe-label">Streamer Cam (35%)</span>
-                    </div>
-                    <div className="wireframe-divider-line"></div>
-                    <div className="wireframe-gameplay-feed">
-                      <span className="wireframe-label">Gameplay Feed (65%)</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="wireframe-single-layout">
-                    {/* Content scaled by selected aspect ratio */}
-                    <div className={`wireframe-content-box aspect-${aspectRatio.replace(':', '')}`}>
-                      <div className="wireframe-content-inner">
-                        <span className="content-ratio-tag">{aspectRatio}</span>
-                        {streamerPreset === 'pip_corner' && (
-                          <div className="wireframe-pip-box">Cam</div>
-                        )}
+                <div className={`wireframe-single-layout ${streamerPreset === 'split_top_cam' ? 'split-active' : ''}`}>
+                  {streamerPreset === 'split_top_cam' && (
+                    <>
+                      <div className={`wireframe-split-cam-box aspect-${aspectRatio.replace(':', '')}`}>
+                        <div className="wireframe-facecam-skeleton">
+                          <div className="skeleton-grid-mesh"></div>
+                          <div className="skeleton-reticle">
+                            <span className="reticle-bracket top-left"></span>
+                            <span className="reticle-bracket top-right"></span>
+                            <span className="reticle-bracket bottom-left"></span>
+                            <span className="reticle-bracket bottom-right"></span>
+                            <div className="skeleton-avatar">
+                              <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                                <circle cx="12" cy="7" r="4"></circle>
+                              </svg>
+                            </div>
+                          </div>
+                          <div className="skeleton-label-wrap">
+                            <span className="skeleton-main-label">STREAMER CAM</span>
+                            <span className="skeleton-sub-label">AUTO FACE-CROP ({aspectRatio})</span>
+                          </div>
+                        </div>
+                        <div className="wireframe-cam-badge">
+                          <span className="live-dot"></span> FACECAM ({aspectRatio})
+                        </div>
                       </div>
+                      <div className="wireframe-split-divider"></div>
+                    </>
+                  )}
+
+                  <div className={`wireframe-content-box aspect-${aspectRatio.replace(':', '')} ${streamerPreset === 'split_top_cam' ? 'split-mode' : ''}`}>
+                    <div className="wireframe-content-inner">
+                      <span className="content-ratio-tag">{aspectRatio}</span>
+                      {streamerPreset === 'pip_corner' && (
+                        <div className="wireframe-pip-box">
+                          <div className="wireframe-pip-skeleton">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                              <circle cx="12" cy="7" r="4"></circle>
+                            </svg>
+                            <span className="pip-skeleton-text">CAM</span>
+                          </div>
+                          <div className="wireframe-pip-badge">🔴 CAM</div>
+                        </div>
+                      )}
+                      {streamerPreset === 'split_top_cam' && (
+                        <div className="wireframe-gameplay-badge">
+                          🎮 GAMEPLAY ({aspectRatio})
+                        </div>
+                      )}
                     </div>
                   </div>
-                )}
+                </div>
 
                 {/* Title Overlay Positioned Directly on Top of Content Box */}
                 {titlePosition !== 'none' && (

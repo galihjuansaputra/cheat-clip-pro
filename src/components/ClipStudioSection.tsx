@@ -73,6 +73,15 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [isLooping, setIsLooping] = useState<boolean>(true);
   const [playerReady, setPlayerReady] = useState<boolean>(false);
 
+  // Face detection tracking state
+  const [faceBox, setFaceBox] = useState<{ cx: number; cy: number; w: number; h: number; found: boolean }>({
+    cx: 0.5,
+    cy: 0.35,
+    w: 0.25,
+    h: 0.25,
+    found: false,
+  });
+
   const previewPlayerRef = useRef<any>(null);
   const directVideoRef = useRef<HTMLVideoElement | null>(null);
   const trackingTimerRef = useRef<number | null>(null);
@@ -98,6 +107,32 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const clipStart = currentPreviewClip ? currentPreviewClip.start_time : 0;
   const clipEnd = currentPreviewClip ? currentPreviewClip.end_time : 60;
   const clipDuration = Math.max(1, clipEnd - clipStart);
+
+  // Frame URL for real video preview
+  const previewFrameUrl = videoId
+    ? `/api/clip-frame?video_id=${encodeURIComponent(videoId)}&timestamp=${clipStart}&video_url=${encodeURIComponent(videoUrl || '')}`
+    : '';
+
+  // Fetch face detection coordinates
+  useEffect(() => {
+    if (!videoId) return;
+    let isMounted = true;
+    const fetchFace = async () => {
+      try {
+        const res = await fetch(`/api/detect-face?video_id=${encodeURIComponent(videoId)}&timestamp=${clipStart}&video_url=${encodeURIComponent(videoUrl || '')}`);
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          if (data && typeof data.cx === 'number') {
+            setFaceBox(data);
+          }
+        }
+      } catch (err) {
+        console.warn('Face detection fetch failed:', err);
+      }
+    };
+    fetchFace();
+    return () => { isMounted = false; };
+  }, [videoId, previewClipIndex, clipStart, videoUrl]);
 
   // Helper duration formatter
   const formatDuration = (seconds: number) => {
@@ -192,30 +227,37 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const startTracking = () => {
     stopTracking();
     trackingTimerRef.current = window.setInterval(() => {
-      if (previewPlayerRef.current && typeof previewPlayerRef.current.getCurrentTime === 'function') {
-        try {
-          const t = previewPlayerRef.current.getCurrentTime();
-          setCurrentTime(t);
-          if (currentPreviewClip && t >= currentPreviewClip.end_time) {
-            if (isLooping) {
-              previewPlayerRef.current.seekTo(currentPreviewClip.start_time, true);
-            } else {
-              previewPlayerRef.current.pauseVideo();
+      try {
+        if (previewPlayerRef.current && typeof previewPlayerRef.current.getCurrentTime === 'function') {
+          const iframe = document.getElementById('studio-yt-iframe-slot');
+          if (iframe && iframe.parentElement) {
+            const t = previewPlayerRef.current.getCurrentTime();
+            if (typeof t === 'number' && !isNaN(t)) {
+              setCurrentTime(t);
+              if (currentPreviewClip && t >= currentPreviewClip.end_time) {
+                if (isLooping) {
+                  previewPlayerRef.current.seekTo(currentPreviewClip.start_time, true);
+                } else {
+                  previewPlayerRef.current.pauseVideo();
+                }
+              }
             }
           }
-        } catch (e) {}
-      } else if (directVideoRef.current) {
-        const t = directVideoRef.current.currentTime;
-        setCurrentTime(t);
-        if (currentPreviewClip && t >= currentPreviewClip.end_time) {
-          if (isLooping) {
-            directVideoRef.current.currentTime = currentPreviewClip.start_time;
-          } else {
-            directVideoRef.current.pause();
-            setIsPlaying(false);
+        } else if (directVideoRef.current) {
+          const t = directVideoRef.current.currentTime;
+          if (typeof t === 'number' && !isNaN(t)) {
+            setCurrentTime(t);
+            if (currentPreviewClip && t >= currentPreviewClip.end_time) {
+              if (isLooping) {
+                directVideoRef.current.currentTime = currentPreviewClip.start_time;
+              } else {
+                directVideoRef.current.pause();
+                setIsPlaying(false);
+              }
+            }
           }
         }
-      }
+      } catch (e) {}
     }, 150);
   };
 
@@ -1243,76 +1285,102 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 )}
 
                 {/* Content Box with Live Video Player */}
-                {streamerPreset === 'split_top_cam' ? (
-                  <div className="wireframe-split-container">
-                    <div className="wireframe-streamer-cam">
-                      <div id="studio-cam-yt-container" className="studio-yt-embed-slot">
-                        <div className="preview-no-frame-placeholder">
-                          <span>🎥 Streamer Cam</span>
-                        </div>
-                      </div>
-                      <span className="wireframe-label">Cam (35%)</span>
-                    </div>
-                    <div className="wireframe-divider-line"></div>
-                    <div className="wireframe-gameplay-feed">
-                      <div id="studio-preview-yt-container" className="studio-yt-embed-slot">
-                        <div id="studio-yt-iframe-slot"></div>
-                      </div>
-                      <span className="wireframe-label">Gameplay Feed (65%)</span>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="wireframe-single-layout">
-                    {/* Content scaled by aspect ratio with real playable video */}
-                    <div className={`wireframe-content-box aspect-${aspectRatio.replace(':', '')}`}>
-                      <div className="wireframe-content-inner">
-                        {/* HTML5 or YouTube Player slot */}
-                        {videoUrl && (videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.includes('/api/video')) ? (
-                          <video
-                            ref={directVideoRef}
-                            src={videoUrl}
-                            playsInline
-                            muted={isMuted}
-                            style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                            onPlay={() => { setIsPlaying(true); startTracking(); }}
-                            onPause={() => { setIsPlaying(false); stopTracking(); }}
-                            onEnded={() => {
-                              if (isLooping && currentPreviewClip) {
-                                if (directVideoRef.current) {
-                                  directVideoRef.current.currentTime = currentPreviewClip.start_time;
-                                  directVideoRef.current.play();
-                                }
-                              }
-                            }}
-                          />
-                        ) : (
-                          <div id="studio-preview-yt-container" className="studio-yt-embed-slot">
-                            <div id="studio-yt-iframe-slot"></div>
-                          </div>
-                        )}
-
-                        {/* Click overlay to toggle play/pause */}
-                        <div
-                          className="studio-preview-click-overlay"
-                          onClick={togglePlayPause}
-                          title={isPlaying ? "Click to Pause" : "Click to Play"}
-                        >
-                          {!isPlaying && (
-                            <div className="preview-play-icon-bubble">
-                              ▶
+                <div className={`wireframe-single-layout ${streamerPreset === 'split_top_cam' ? 'split-active' : ''}`}>
+                  {/* Top Facecam Box if split_top_cam */}
+                  {streamerPreset === 'split_top_cam' && (
+                    <>
+                      <div className={`wireframe-split-cam-box aspect-${aspectRatio.replace(':', '')}`}>
+                        <div className="wireframe-facecam-skeleton">
+                          <div className="skeleton-grid-mesh"></div>
+                          <div className="skeleton-reticle">
+                            <span className="reticle-bracket top-left"></span>
+                            <span className="reticle-bracket top-right"></span>
+                            <span className="reticle-bracket bottom-left"></span>
+                            <span className="reticle-bracket bottom-right"></span>
+                            <div className="skeleton-avatar">
+                              <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                                <circle cx="12" cy="7" r="4"></circle>
+                              </svg>
                             </div>
-                          )}
+                          </div>
+                          <div className="skeleton-label-wrap">
+                            <span className="skeleton-main-label">STREAMER CAM</span>
+                            <span className="skeleton-sub-label">AUTO FACE-CROP ({aspectRatio})</span>
+                          </div>
                         </div>
+                        <div className="wireframe-cam-badge">
+                          <span className="live-dot"></span> FACECAM ({aspectRatio})
+                        </div>
+                      </div>
+                      <div className="wireframe-split-divider"></div>
+                    </>
+                  )}
 
-                        {streamerPreset === 'pip_corner' && (
-                          <div className="wireframe-pip-box" style={{ zIndex: 12 }}>
-                            <span>Cam</span>
+                  {/* Content scaled by aspect ratio with real playable video */}
+                  <div className={`wireframe-content-box aspect-${aspectRatio.replace(':', '')} ${streamerPreset === 'split_top_cam' ? 'split-mode' : ''}`}>
+                    <div className="wireframe-content-inner">
+                      {/* HTML5 or YouTube Player slot - ALWAYS STABLY MOUNTED */}
+                      {videoUrl && (videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.includes('/api/video')) ? (
+                        <video
+                          ref={directVideoRef}
+                          src={videoUrl}
+                          playsInline
+                          muted={isMuted}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          onPlay={() => { setIsPlaying(true); startTracking(); }}
+                          onPause={() => { setIsPlaying(false); stopTracking(); }}
+                          onEnded={() => {
+                            if (isLooping && currentPreviewClip) {
+                              if (directVideoRef.current) {
+                                directVideoRef.current.currentTime = currentPreviewClip.start_time;
+                                directVideoRef.current.play();
+                              }
+                            }
+                          }}
+                        />
+                      ) : (
+                        <div id="studio-preview-yt-container" className="studio-yt-embed-slot">
+                          <div id="studio-yt-iframe-slot"></div>
+                        </div>
+                      )}
+
+                      {/* Click overlay to toggle play/pause */}
+                      <div
+                        className="studio-preview-click-overlay"
+                        onClick={togglePlayPause}
+                        title={isPlaying ? "Click to Pause" : "Click to Play"}
+                      >
+                        {!isPlaying && (
+                          <div className="preview-play-icon-bubble">
+                            ▶
                           </div>
                         )}
                       </div>
+
+                      {/* PIP Corner Box */}
+                      {streamerPreset === 'pip_corner' && (
+                        <div className="wireframe-pip-box" style={{ zIndex: 12 }}>
+                          <div className="wireframe-pip-skeleton">
+                            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                              <circle cx="12" cy="7" r="4"></circle>
+                            </svg>
+                            <span className="pip-skeleton-text">CAM</span>
+                          </div>
+                          <div className="wireframe-pip-badge">🔴 CAM</div>
+                        </div>
+                      )}
+
+                      {/* Badge for Split Mode Bottom Feed */}
+                      {streamerPreset === 'split_top_cam' && (
+                        <div className="wireframe-gameplay-badge">
+                          🎮 GAMEPLAY ({aspectRatio})
+                        </div>
+                      )}
                     </div>
                   </div>
-                )}
+                </div>
 
                 {/* Title Overlay with Real-time Up/Down Position & Scaled Font */}
                 {titlePosition !== 'none' && (
