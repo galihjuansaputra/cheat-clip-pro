@@ -1469,8 +1469,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     >
                       {captionStyle === 'viral_pop' && (
                         <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('SENEGARA.', textCase)}</span>{' '}
-                          <span style={{ color: '#FFE600' }}>{applyLetterCase('TAPI,', textCase)}</span>
+                          <span style={{ color: '#ffffff' }}>{applyLetterCase('VIRAL', textCase)}</span>{' '}
+                          <span style={{ color: '#FFE600' }}>{applyLetterCase('POP', textCase)}</span>
                         </>
                       )}
                       {captionStyle === 'beast_punch' && (
