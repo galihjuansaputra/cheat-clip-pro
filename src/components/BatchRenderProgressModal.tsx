@@ -1,4 +1,5 @@
 import React from 'react';
+import { useLanguage } from '../locales';
 import type { BatchRenderProgress } from '../types';
 
 interface BatchRenderProgressModalProps {
@@ -12,6 +13,7 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
   onClose,
   progress,
 }) => {
+  const { t } = useLanguage();
   if (!isOpen || !progress) return null;
 
   const isAllDone = progress.overall_status === 'completed';
@@ -23,11 +25,11 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
       <div className="batch-progress-card" onClick={e => e.stopPropagation()}>
         <div className="batch-progress-header">
           <div>
-            <h3>🎬 Batch Video Rendering Queue</h3>
+            <h3>{t.batchProgress.modalTitle}</h3>
             <p className="batch-subtitle">
               {isAllDone
-                ? `🎉 All ${progress.total_clips} clips rendered successfully!`
-                : `Processing clip ${(progress.current_clip_index || 0) + 1} of ${progress.total_clips}...`}
+                ? t.batchProgress.allDoneSubtitle(progress.total_clips)
+                : t.batchProgress.processingSubtitle((progress.current_clip_index || 0) + 1, progress.total_clips)}
             </p>
           </div>
           {isAllDone && (
@@ -46,7 +48,7 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
             ></div>
           </div>
           <div className="batch-overall-meta">
-            <span>{completedCount} of {progress.total_clips} completed</span>
+            <span>{t.batchProgress.completedMeta(completedCount, progress.total_clips)}</span>
             <span>{overallPercent}%</span>
           </div>
         </div>
@@ -61,25 +63,25 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
               </div>
 
               <div className="batch-item-status-wrap">
-                {clip.status === 'pending' && <span className="status-badge pending">⏳ Waiting</span>}
+                {clip.status === 'pending' && <span className="status-badge pending">{t.batchProgress.statusWaiting}</span>}
                 {clip.status === 'downloading' && (
-                  <span className="status-badge active">⚡ Slicing Video (15%)</span>
+                  <span className="status-badge active">{t.batchProgress.statusSlicing}</span>
                 )}
                 {clip.status === 'transcribing' && (
-                  <span className="status-badge active">🧠 Word Captions (40%)</span>
+                  <span className="status-badge active">{t.batchProgress.statusCaptions}</span>
                 )}
                 {clip.status === 'rendering' && (
-                  <span className="status-badge active">🎬 1080x1920 Render (70%)</span>
+                  <span className="status-badge active">{t.batchProgress.statusRendering}</span>
                 )}
                 {clip.status === 'completed' && (
                   <div className="completed-action-row">
-                    <span className="status-badge success">✅ Done</span>
+                    <span className="status-badge success">{t.batchProgress.statusDone}</span>
                     {clip.download_url && (
                       <a
                         href={clip.download_url}
                         download
                         className="btn-download-clip"
-                        title="Download Rendered MP4"
+                        title={t.batchProgress.downloadMp4Tooltip}
                       >
                         ⬇️ MP4
                       </a>
@@ -88,7 +90,7 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
                 )}
                 {clip.status === 'error' && (
                   <span className="status-badge error" title={clip.error_message}>
-                    ⚠️ Failed
+                    {t.batchProgress.statusFailed}
                   </span>
                 )}
               </div>
@@ -106,17 +108,17 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
                   download
                   className="glowing-btn batch-zip-download-btn"
                 >
-                  📦 Download All Clips (.ZIP)
+                  {t.batchProgress.downloadZip}
                 </a>
               )}
               <button className="studio-btn-cancel" onClick={onClose}>
-                Close Studio
+                {t.batchProgress.closeStudio}
               </button>
             </div>
           ) : (
             <div className="rendering-in-progress-hint">
               <span className="spinner-dots"></span>
-              <span>FastAPI & FFmpeg hardware encoding in progress. You can keep this open or minimize.</span>
+              <span>{t.batchProgress.hardwareEncodingHint}</span>
             </div>
           )}
         </div>

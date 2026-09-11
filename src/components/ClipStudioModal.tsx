@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useLanguage } from '../locales';
 import type {
   ViralClip,
   RenderSettings,
@@ -29,6 +30,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
   onStartRender,
   isRendering,
 }) => {
+  const { t } = useLanguage();
   // Default to marked clips if any, otherwise all clips
   const initialClips = markedClips.length > 0 ? markedClips : allClips.slice(0, 3);
   
@@ -112,11 +114,11 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
             <div className="studio-icon-badge">🎬</div>
             <div>
               <div className="studio-title-row">
-                <h2>Cheat Clip Auto Clipper</h2>
+                <h2>{t.studio.heading}</h2>
                 <span className="pro-badge">PRO</span>
               </div>
               <p className="studio-header-desc">
-                Frame vertical 9:16 formats, customize captions & titles, and batch render ready-to-post clips
+                {t.studio.subtext}
               </p>
             </div>
           </div>
@@ -132,8 +134,8 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
             {/* 1. Aspect Ratio */}
             <div className="studio-section">
               <label className="studio-label">
-                <span>📐 Canvas & Inner Aspect Ratio</span>
-                <span className="studio-tag">9:16 Vertical Container</span>
+                <span>{t.studio.canvasTitle}</span>
+                <span className="studio-tag">{t.studio.canvasBadgeVertical}</span>
               </label>
               <div className="aspect-options-grid">
                 <button
@@ -142,8 +144,8 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   onClick={() => setAspectRatio('9:16')}
                 >
                   <div className="aspect-icon-box ratio-916"></div>
-                  <span className="aspect-name">9:16 Full</span>
-                  <span className="aspect-sub">Full bleed crop</span>
+                  <span className="aspect-name">{t.studio.ratio916}</span>
+                  <span className="aspect-sub">{t.studio.ratio916Sub}</span>
                 </button>
 
                 <button
@@ -152,8 +154,8 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   onClick={() => setAspectRatio('1:1')}
                 >
                   <div className="aspect-icon-box ratio-11"></div>
-                  <span className="aspect-name">1:1 Square</span>
-                  <span className="aspect-sub">Top & bottom bars</span>
+                  <span className="aspect-name">{t.studio.ratio11}</span>
+                  <span className="aspect-sub">{t.studio.ratio11Sub}</span>
                 </button>
 
                 <button
@@ -162,8 +164,8 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   onClick={() => setAspectRatio('4:3')}
                 >
                   <div className="aspect-icon-box ratio-43"></div>
-                  <span className="aspect-name">4:3 Standard</span>
-                  <span className="aspect-sub">Classic video ratio</span>
+                  <span className="aspect-name">{t.studio.ratio43}</span>
+                  <span className="aspect-sub">{t.studio.ratio43Sub}</span>
                 </button>
 
                 <button
@@ -172,29 +174,29 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   onClick={() => setAspectRatio('16:9')}
                 >
                   <div className="aspect-icon-box ratio-169"></div>
-                  <span className="aspect-name">16:9 Letterbox</span>
-                  <span className="aspect-sub">Original wide ratio</span>
+                  <span className="aspect-name">{t.studio.ratio169}</span>
+                  <span className="aspect-sub">{t.studio.ratio169Sub}</span>
                 </button>
               </div>
 
               {/* Background Style when bars are active */}
               {aspectRatio !== '9:16' && (
                 <div className="studio-sub-toggle">
-                  <span className="sub-toggle-label">Margin Backdrop:</span>
+                  <span className="sub-toggle-label">{t.studio.marginBackdrop}</span>
                   <div className="toggle-pill-group">
                     <button
                       type="button"
                       className={`pill-btn ${backgroundStyle === 'black' ? 'active' : ''}`}
                       onClick={() => setBackgroundStyle('black')}
                     >
-                      ⬛ Pure Black Bars
+                      {t.studio.blackBars}
                     </button>
                     <button
                       type="button"
                       className={`pill-btn ${backgroundStyle === 'blurred' ? 'active' : ''}`}
                       onClick={() => setBackgroundStyle('blurred')}
                     >
-                      ✨ Ambient Blurred Video
+                      {t.studio.blurredVideo}
                     </button>
                   </div>
                 </div>
@@ -210,7 +212,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                     onChange={e => setEnableFaceTracking(e.target.checked)}
                   />
                   <label htmlFor="faceTracking">
-                    <strong>AI Active Speaker Centering:</strong> Automatically pan camera to center faces in 9:16 crop.
+                    <strong>{t.studio.faceTracking}</strong> {t.studio.faceTrackingDesc}
                   </label>
                 </div>
               )}
@@ -219,7 +221,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
             {/* 2. Streamer Facecam Presets */}
             <div className="studio-section">
               <label className="studio-label">
-                <span>🎮 Streamer & Gaming Facecam Layout</span>
+                <span>{t.studio.streamerTitle}</span>
               </label>
               <div className="streamer-presets-row">
                 <button
@@ -227,21 +229,21 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   className={`streamer-btn ${streamerPreset === 'none' ? 'active' : ''}`}
                   onClick={() => setStreamerPreset('none')}
                 >
-                  Standard (Single Video)
+                  {t.studio.streamerNone}
                 </button>
                 <button
                   type="button"
                   className={`streamer-btn ${streamerPreset === 'split_top_cam' ? 'active' : ''}`}
                   onClick={() => setStreamerPreset('split_top_cam')}
                 >
-                  📷 Top Facecam / Bottom Gameplay
+                  {t.studio.streamerSplit}
                 </button>
                 <button
                   type="button"
                   className={`streamer-btn ${streamerPreset === 'pip_corner' ? 'active' : ''}`}
                   onClick={() => setStreamerPreset('pip_corner')}
                 >
-                  📌 Corner Picture-in-Picture
+                  {t.studio.streamerPip}
                 </button>
               </div>
             </div>
@@ -249,7 +251,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
             {/* 3. Title / Hook Banner */}
             <div className="studio-section">
               <label className="studio-label">
-                <span>🏷️ Headline Hook / Title Banner</span>
+                <span>{t.studio.titleBannerTitle}</span>
                 <span className="studio-tag" style={{ background: 'rgba(59, 130, 246, 0.2)', color: '#60a5fa' }}>
                   {aspectRatio === '9:16' ? 'Position: 4:3 Upper Edge' : 'On Top of Content'}
                 </span>
@@ -258,7 +260,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                 <input
                   type="text"
                   className="studio-text-input"
-                  placeholder="Leave empty to use AI suggested hook title..."
+                  placeholder={t.studio.titlePlaceholder}
                   value={titleText}
                   onChange={e => setTitleText(e.target.value)}
                 />
@@ -276,9 +278,9 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
             {/* 4. Subtitle Style & Font */}
             <div className="studio-section">
               <label className="studio-label">
-                <span>💬 Animated Word-Level Subtitles</span>
+                <span>{t.studio.subtitlesTitle}</span>
                 <span className="studio-tag" style={{ background: 'rgba(34, 197, 94, 0.2)', color: '#4ade80' }}>
-                  Strictly 1 Line
+                  {t.studio.strictlyOneLine}
                 </span>
               </label>
               <div className="caption-styles-grid">
@@ -290,7 +292,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   <div className="caption-preview-text">
                     VIRAL <span className="pop-yellow">POP</span>
                   </div>
-                  <span className="caption-style-sub">Hormozi Yellow Glow</span>
+                  <span className="caption-style-sub">{t.studio.styleViralPopSub}</span>
                 </button>
 
                 <button
@@ -301,7 +303,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   <div className="caption-preview-text">
                     BEAST <span className="pop-green">PUNCH</span>
                   </div>
-                  <span className="caption-style-sub">High Impact Green</span>
+                  <span className="caption-style-sub">{t.studio.styleBeastPunchSub}</span>
                 </button>
 
                 <button
@@ -312,7 +314,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   <div className="caption-preview-text">
                     CYBER <span className="pop-violet">VIOLET</span>
                   </div>
-                  <span className="caption-style-sub">Neon Purple Glow</span>
+                  <span className="caption-style-sub">{t.studio.styleCyberVioletSub}</span>
                 </button>
 
                 <button
@@ -323,7 +325,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   <div className="caption-preview-text">
                     FIRE <span className="pop-red">CRIMSON</span>
                   </div>
-                  <span className="caption-style-sub">High Energy Red</span>
+                  <span className="caption-style-sub">{t.studio.styleFireRedSub}</span>
                 </button>
 
                 <button
@@ -334,7 +336,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   <div className="caption-preview-text">
                     ELECTRIC <span className="pop-cyan">CYAN</span>
                   </div>
-                  <span className="caption-style-sub">Ice Blue Glow</span>
+                  <span className="caption-style-sub">{t.studio.styleElectricCyanSub}</span>
                 </button>
 
                 <button
@@ -345,7 +347,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   <div className="caption-preview-text">
                     GOLDEN <span className="pop-gold">AURA</span>
                   </div>
-                  <span className="caption-style-sub">Luxury Warm Gold</span>
+                  <span className="caption-style-sub">{t.studio.styleGoldenAuraSub}</span>
                 </button>
 
                 <button
@@ -354,9 +356,9 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   onClick={() => setCaptionStyle('clean_minimal')}
                 >
                   <div className="caption-preview-text">
-                    <span className="pill-badge">Clean Minimal</span>
+                    <span className="pill-badge">{t.studio.styleCleanMinimal}</span>
                   </div>
-                  <span className="caption-style-sub">Soft Dark Box</span>
+                  <span className="caption-style-sub">{t.studio.styleCleanMinimalSub}</span>
                 </button>
 
                 <button
@@ -364,15 +366,15 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   className={`caption-style-card none ${captionStyle === 'none' ? 'active' : ''}`}
                   onClick={() => setCaptionStyle('none')}
                 >
-                  <div className="caption-preview-text">✕ NONE</div>
-                  <span className="caption-style-sub">Burn No Captions</span>
+                  <div className="caption-preview-text">{t.studio.styleNone}</div>
+                  <span className="caption-style-sub">{t.studio.styleNoneSub}</span>
                 </button>
               </div>
 
               {captionStyle !== 'none' && (
                 <>
                   <div className="studio-sub-toggle" style={{ marginTop: '0.75rem' }}>
-                    <span className="sub-toggle-label">Font Family:</span>
+                    <span className="sub-toggle-label">{t.studio.fontFamily}</span>
                     <div className="toggle-pill-group" style={{ flexWrap: 'wrap' }}>
                       {(
                         [
@@ -401,56 +403,56 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
 
                   {/* Font Size Presets */}
                   <div className="studio-sub-toggle" style={{ marginTop: '0.75rem' }}>
-                    <span className="sub-toggle-label">Font Size:</span>
+                    <span className="sub-toggle-label">{t.studio.fontSize}</span>
                     <div className="toggle-pill-group">
                       <button
                         type="button"
                         className={`pill-btn ${fontSize === 'small' ? 'active' : ''}`}
                         onClick={() => setFontSize('small')}
                       >
-                        Small (36px)
+                        {t.studio.sizeSmall}
                       </button>
                       <button
                         type="button"
                         className={`pill-btn ${fontSize === 'medium' ? 'active' : ''}`}
                         onClick={() => setFontSize('medium')}
                       >
-                        Medium (44px)
+                        {t.studio.sizeMedium}
                       </button>
                       <button
                         type="button"
                         className={`pill-btn ${fontSize === 'big' ? 'active' : ''}`}
                         onClick={() => setFontSize('big')}
                       >
-                        Big (54px)
+                        {t.studio.sizeBig}
                       </button>
                     </div>
                   </div>
 
                   {/* Text Letter Style Presets */}
                   <div className="studio-sub-toggle" style={{ marginTop: '0.75rem' }}>
-                    <span className="sub-toggle-label">Letter Style:</span>
+                    <span className="sub-toggle-label">{t.studio.letterStyle}</span>
                     <div className="toggle-pill-group">
                       <button
                         type="button"
                         className={`pill-btn ${textCase === 'uppercase' ? 'active' : ''}`}
                         onClick={() => setTextCase('uppercase')}
                       >
-                        ABC (Caps)
+                        {t.studio.letterCaps}
                       </button>
                       <button
                         type="button"
                         className={`pill-btn ${textCase === 'capitalize' ? 'active' : ''}`}
                         onClick={() => setTextCase('capitalize')}
                       >
-                        Abc (Title)
+                        {t.studio.letterTitle}
                       </button>
                       <button
                         type="button"
                         className={`pill-btn ${textCase === 'lowercase' ? 'active' : ''}`}
                         onClick={() => setTextCase('lowercase')}
                       >
-                        abc (Lower)
+                        {t.studio.letterLower}
                       </button>
                     </div>
                   </div>
@@ -461,7 +463,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
             {/* 5. Selected Clips Picker */}
             <div className="studio-section">
               <label className="studio-label">
-                <span>🎞️ Select Clips for Batch Rendering ({selectedClips.length} selected)</span>
+                <span>{t.studio.batchChecklist(selectedClips.length, (markedClips.length > 0 ? markedClips : allClips).length)}</span>
               </label>
               <div className="batch-clips-list">
                 {(markedClips.length > 0 ? markedClips : allClips).map((clip, i) => {
@@ -498,7 +500,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
 
           {/* Live 9:16 Wireframe Preview Column */}
           <div className="studio-preview-col">
-            <h4 className="preview-heading">📱 Live 9:16 Video Wireframe</h4>
+            <h4 className="preview-heading">{t.studio.previewWireframe}</h4>
             <div
               className="phone-wireframe-container"
               style={{ width: `${phoneWidth}px`, height: `${phoneHeight}px` }}
@@ -673,7 +675,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
         {/* Footer Actions */}
         <div className="studio-modal-footer">
           <button className="studio-btn-cancel" onClick={onClose} disabled={isRendering}>
-            Cancel
+            {t.studio.cancelBtn}
           </button>
           <button
             className="studio-btn-render glowing-btn"
@@ -681,11 +683,9 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
             disabled={isRendering || selectedClips.length === 0}
           >
             {isRendering ? (
-              <>⏳ Launching Render...</>
+              <>{t.studio.launchingRenderShort}</>
             ) : (
-              <>
-                🚀 Batch Render {selectedClips.length} Clip{selectedClips.length > 1 ? 's' : ''} (1080x1920)
-              </>
+              <>{t.studio.batchRenderCta(selectedClips.length)}</>
             )}
           </button>
         </div>

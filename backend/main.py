@@ -26,7 +26,7 @@ import json
 import time
 import uuid
 import zipfile
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse, RedirectResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -1786,7 +1786,7 @@ async def detect_face(video_id: str, timestamp: float = 0.0, video_url: Optional
     return default_res
 
 
-def _get_dir_size_and_count(dir_path) -> Tuple[int, int]:
+def _get_dir_size_and_count(dir_path) -> tuple[int, int]:
     from pathlib import Path
     p = Path(dir_path)
     total_bytes = 0

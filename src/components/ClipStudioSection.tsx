@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { useLanguage } from '../locales';
 import type {
   ViralClip,
   RenderSettings,
@@ -40,6 +41,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   batchProgress,
   onDismissProgress,
 }) => {
+  const { t } = useLanguage();
   // Directly reflect marked clips (supports selecting 0 clips)
   const [selectedClips, setSelectedClips] = useState<ViralClip[]>(markedClips);
   const [previewClipIndex, setPreviewClipIndex] = useState<number>(0);
@@ -74,7 +76,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [playerReady, setPlayerReady] = useState<boolean>(false);
 
   // Face detection tracking state
-  const [faceBox, setFaceBox] = useState<{ cx: number; cy: number; w: number; h: number; found: boolean }>({
+  const [, setFaceBox] = useState<{ cx: number; cy: number; w: number; h: number; found: boolean }>({
     cx: 0.5,
     cy: 0.35,
     w: 0.25,
@@ -107,11 +109,6 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const clipStart = currentPreviewClip ? currentPreviewClip.start_time : 0;
   const clipEnd = currentPreviewClip ? currentPreviewClip.end_time : 60;
   const clipDuration = Math.max(1, clipEnd - clipStart);
-
-  // Frame URL for real video preview
-  const previewFrameUrl = videoId
-    ? `/api/clip-frame?video_id=${encodeURIComponent(videoId)}&timestamp=${clipStart}&video_url=${encodeURIComponent(videoUrl || '')}`
-    : '';
 
   // Fetch face detection coordinates
   useEffect(() => {
@@ -635,11 +632,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           <div className="studio-icon-glow">🎬</div>
           <div>
             <div className="studio-title-badge-row">
-              <h2 className="studio-main-heading">Cheat Clip Auto Clipper</h2>
+              <h2 className="studio-main-heading">{t.studio.heading}</h2>
               <span className="pro-badge glowing-badge">PRO</span>
             </div>
             <p className="studio-subtext">
-              Real-time video layout framing, dynamic subtitle typography, and batch GPU-accelerated 1080x1920 export
+              {t.studio.subtext}
             </p>
           </div>
         </div>
@@ -647,7 +644,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
         {/* Clip preview switcher */}
         {allClips.length > 1 && (
           <div className="preview-clip-picker-bar">
-            <span className="preview-picker-label">👁️ Previewing Clip:</span>
+            <span className="preview-picker-label">{t.studio.previewClip}</span>
             <select
               className="preview-clip-select"
               value={previewClipIndex}
@@ -670,8 +667,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           {/* 1. Canvas & Inner Aspect Ratio */}
           <div className="studio-card-group">
             <div className="group-header">
-              <span className="group-title">📐 Canvas & Inner Aspect Ratio</span>
-              <span className="group-badge">1080×1920 Canvas</span>
+              <span className="group-title">{t.studio.canvasTitle}</span>
+              <span className="group-badge">{t.studio.canvasBadge}</span>
             </div>
 
             <div className="aspect-options-grid">
@@ -681,8 +678,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 onClick={() => handleSelectAspectRatio('9:16')}
               >
                 <div className="aspect-icon-box ratio-916"></div>
-                <span className="aspect-name">9:16 Full</span>
-                <span className="aspect-sub">Full bleed crop</span>
+                <span className="aspect-name">{t.studio.ratio916}</span>
+                <span className="aspect-sub">{t.studio.ratio916Sub}</span>
               </button>
 
               <button
@@ -691,8 +688,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 onClick={() => handleSelectAspectRatio('1:1')}
               >
                 <div className="aspect-icon-box ratio-11"></div>
-                <span className="aspect-name">1:1 Square</span>
-                <span className="aspect-sub">Top & bottom bars</span>
+                <span className="aspect-name">{t.studio.ratio11}</span>
+                <span className="aspect-sub">{t.studio.ratio11Sub}</span>
               </button>
 
               <button
@@ -701,8 +698,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 onClick={() => handleSelectAspectRatio('4:3')}
               >
                 <div className="aspect-icon-box ratio-43"></div>
-                <span className="aspect-name">4:3 Standard</span>
-                <span className="aspect-sub">Classic video ratio</span>
+                <span className="aspect-name">{t.studio.ratio43}</span>
+                <span className="aspect-sub">{t.studio.ratio43Sub}</span>
               </button>
 
               <button
@@ -711,29 +708,29 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 onClick={() => handleSelectAspectRatio('16:9')}
               >
                 <div className="aspect-icon-box ratio-169"></div>
-                <span className="aspect-name">16:9 Letterbox</span>
-                <span className="aspect-sub">Original wide ratio</span>
+                <span className="aspect-name">{t.studio.ratio169}</span>
+                <span className="aspect-sub">{t.studio.ratio169Sub}</span>
               </button>
             </div>
 
             {/* Background Style when bars are active */}
             {aspectRatio !== '9:16' && (
               <div className="studio-sub-toggle" style={{ marginTop: '0.75rem' }}>
-                <span className="sub-toggle-label">Margin Backdrop:</span>
+                <span className="sub-toggle-label">{t.studio.marginBackdrop}</span>
                 <div className="toggle-pill-group">
                   <button
                     type="button"
                     className={`pill-btn ${backgroundStyle === 'black' ? 'active' : ''}`}
                     onClick={() => setBackgroundStyle('black')}
                   >
-                    ⬛ Pure Black Bars
+                    {t.studio.blackBars}
                   </button>
                   <button
                     type="button"
                     className={`pill-btn ${backgroundStyle === 'blurred' ? 'active' : ''}`}
                     onClick={() => setBackgroundStyle('blurred')}
                   >
-                    ✨ Ambient Blurred Video
+                    {t.studio.blurredVideo}
                   </button>
                 </div>
               </div>
@@ -749,7 +746,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   onChange={e => setEnableFaceTracking(e.target.checked)}
                 />
                 <label htmlFor="faceTrackingSec">
-                  <strong>AI Active Speaker Centering:</strong> Pan camera automatically to center speaker faces.
+                  <strong>{t.studio.faceTracking}</strong> {t.studio.faceTrackingDesc}
                 </label>
               </div>
             )}
@@ -759,13 +756,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           <div className="studio-card-group position-sliders-card">
             <div className="group-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span className="group-title">🎯 Manual Text Positioning</span>
-                <span className="group-badge accent-badge">Vertical</span>
+                <span className="group-title">{t.studio.manualPositionTitle}</span>
+                <span className="group-badge accent-badge">{t.studio.verticalBadge}</span>
               </div>
               <button
                 type="button"
                 className="reset-pos-btn"
-                title="Reset title and subtitle vertical positions to defaults"
+                title={t.studio.resetPositionTooltip}
                 onClick={handleResetPositions}
                 style={{
                   background: 'rgba(255, 255, 255, 0.08)',
@@ -782,18 +779,18 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   transition: 'all 0.15s ease',
                 }}
               >
-                ↺ Reset Position
+                {t.studio.resetPosition}
               </button>
             </div>
             <p className="slider-hint-text">
-              Freely nudge title and subtitle positions up or down. Bounds are automatically clamped so text never touches video content.
+              {t.studio.positionHint}
             </p>
 
             <div className="slider-control-row">
               <div className="slider-meta-header">
-                <span className="slider-label">🏷️ Title Vertical Position:</span>
+                <span className="slider-label">{t.studio.titleYLabel}</span>
                 <span className="slider-value-badge">
-                  {safeTitleY}% from Top {titleLineCount >= 3 ? '(3+ Lines Compact)' : ''}
+                  {t.studio.titleYVal(safeTitleY, titleLineCount >= 3)}
                 </span>
               </div>
               <div className="slider-input-wrapper">
@@ -812,31 +809,31 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 <div className="slider-quick-buttons">
                   {aspectRatio === '9:16' ? (
                     <>
-                      <button type="button" onClick={() => { setTitleYPercent(6); setIsCustomTitleY(true); }}>High (6%)</button>
+                      <button type="button" onClick={() => { setTitleYPercent(6); setIsCustomTitleY(true); }}>{t.studio.quickHigh(6)}</button>
                       <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 9.5 : 13.5); setIsCustomTitleY(true); }}>
-                        Default ({titleLineCount >= 3 ? '9.5%' : '13.5%'})
+                        {t.studio.quickDefault(titleLineCount >= 3 ? '9.5%' : '13.5%')}
                       </button>
-                      <button type="button" onClick={() => { setTitleYPercent(18); setIsCustomTitleY(true); }}>Lower (18%)</button>
+                      <button type="button" onClick={() => { setTitleYPercent(18); setIsCustomTitleY(true); }}>{t.studio.quickLower(18)}</button>
                     </>
                   ) : aspectRatio === '1:1' ? (
                     <>
-                      <button type="button" onClick={() => { setTitleYPercent(7); setIsCustomTitleY(true); }}>High (7%)</button>
+                      <button type="button" onClick={() => { setTitleYPercent(7); setIsCustomTitleY(true); }}>{t.studio.quickHigh(7)}</button>
                       <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 10.3 : 16.5); setIsCustomTitleY(true); }}>
-                        Snug Default ({titleLineCount >= 3 ? '10.3%' : '16.5%'})
+                        {t.studio.quickSnugDefault(titleLineCount >= 3 ? '10.3%' : '16.5%')}
                       </button>
                     </>
                   ) : aspectRatio === '4:3' ? (
                     <>
-                      <button type="button" onClick={() => { setTitleYPercent(12); setIsCustomTitleY(true); }}>High (12%)</button>
+                      <button type="button" onClick={() => { setTitleYPercent(12); setIsCustomTitleY(true); }}>{t.studio.quickHigh(12)}</button>
                       <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 17.3 : 23.6); setIsCustomTitleY(true); }}>
-                        Snug Default ({titleLineCount >= 3 ? '17.3%' : '23.6%'})
+                        {t.studio.quickSnugDefault(titleLineCount >= 3 ? '17.3%' : '23.6%')}
                       </button>
                     </>
                   ) : (
                     <>
-                      <button type="button" onClick={() => { setTitleYPercent(16); setIsCustomTitleY(true); }}>High (16%)</button>
+                      <button type="button" onClick={() => { setTitleYPercent(16); setIsCustomTitleY(true); }}>{t.studio.quickHigh(16)}</button>
                       <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 22.6 : 28.8); setIsCustomTitleY(true); }}>
-                        Snug Default ({titleLineCount >= 3 ? '22.6%' : '28.8%'})
+                        {t.studio.quickSnugDefault(titleLineCount >= 3 ? '22.6%' : '28.8%')}
                       </button>
                     </>
                   )}
@@ -846,21 +843,21 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
             {/* Subtitle Placement Mode Toggle */}
             <div className="studio-sub-toggle" style={{ marginTop: '0.95rem', marginBottom: '0.45rem' }}>
-              <span className="sub-toggle-label" style={{ fontWeight: 700 }}>💬 Subtitle Placement:</span>
+              <span className="sub-toggle-label" style={{ fontWeight: 700 }}>{t.studio.subPlacement}</span>
               <div className="toggle-pill-group">
                 <button
                   type="button"
                   className={`pill-btn ${subtitlePositionMode === 'bottom' ? 'active' : ''}`}
                   onClick={() => setSubtitlePositionMode('bottom')}
                 >
-                  📌 Bottom (In Bar / Lower)
+                  {t.studio.subBottom}
                 </button>
                 <button
                   type="button"
                   className={`pill-btn ${subtitlePositionMode === 'center' ? 'active' : ''}`}
                   onClick={() => setSubtitlePositionMode('center')}
                 >
-                  🎯 Center (Over Content)
+                  {t.studio.subCenter}
                 </button>
               </div>
             </div>
@@ -869,8 +866,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             {subtitlePositionMode === 'bottom' ? (
               <div className="slider-control-row" style={{ marginTop: '0.65rem' }}>
                 <div className="slider-meta-header">
-                  <span className="slider-label">💬 Subtitle Bottom Position:</span>
-                  <span className="slider-value-badge">{safeSubtitleY}% from Bottom (Snug)</span>
+                  <span className="slider-label">{t.studio.subYBottomLabel}</span>
+                  <span className="slider-value-badge">{t.studio.subYBottomVal(safeSubtitleY)}</span>
                 </div>
                 <div className="slider-input-wrapper">
                   <input
@@ -885,24 +882,24 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   <div className="slider-quick-buttons">
                     {aspectRatio === '9:16' ? (
                       <>
-                        <button type="button" onClick={() => setSubtitleYPercent(10)}>Low (10%)</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(18)}>Default (18%)</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(26)}>Mid (26%)</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(10)}>{t.studio.quickLow(10)}</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(18)}>{t.studio.quickDefault('18%')}</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(26)}>{t.studio.quickMid(26)}</button>
                       </>
                     ) : aspectRatio === '1:1' ? (
                       <>
-                        <button type="button" onClick={() => setSubtitleYPercent(12)}>Low (12%)</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(18)}>Snug Default (18%)</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(12)}>{t.studio.quickLow(12)}</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(18)}>{t.studio.quickSnugDefault('18%')}</button>
                       </>
                     ) : aspectRatio === '4:3' ? (
                       <>
-                        <button type="button" onClick={() => setSubtitleYPercent(18)}>Low (18%)</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(25)}>Snug Default (25%)</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(18)}>{t.studio.quickLow(18)}</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(25)}>{t.studio.quickSnugDefault('25%')}</button>
                       </>
                     ) : (
                       <>
-                        <button type="button" onClick={() => setSubtitleYPercent(22)}>Low (22%)</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(30)}>Snug Default (30%)</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(22)}>{t.studio.quickLow(22)}</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(30)}>{t.studio.quickSnugDefault('30%')}</button>
                       </>
                     )}
                   </div>
@@ -911,9 +908,16 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             ) : (
               <div className="slider-control-row" style={{ marginTop: '0.65rem' }}>
                 <div className="slider-meta-header">
-                  <span className="slider-label">🎯 Subtitle Center Vertical Position:</span>
+                  <span className="slider-label">{t.studio.subYCenterLabel}</span>
                   <span className="slider-value-badge">
-                    {safeSubCenterY}% from Top {safeSubCenterY === 50 ? '(Dead Center)' : safeSubCenterY < 50 ? '(Upper)' : '(Lower)'}
+                    {t.studio.subYCenterVal(
+                      safeSubCenterY,
+                      safeSubCenterY === 50
+                        ? t.studio.posDeadCenter
+                        : safeSubCenterY < 50
+                        ? t.studio.posUpper
+                        : t.studio.posLower
+                    )}
                   </span>
                 </div>
                 <div className="slider-input-wrapper">
@@ -927,9 +931,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     className="custom-range-slider"
                   />
                   <div className="slider-quick-buttons">
-                    <button type="button" onClick={() => setSubtitleCenterYPercent(42)}>Upper (42%)</button>
-                    <button type="button" onClick={() => setSubtitleCenterYPercent(50)}>Dead Center (50%)</button>
-                    <button type="button" onClick={() => setSubtitleCenterYPercent(58)}>Lower (58%)</button>
+                    <button type="button" onClick={() => setSubtitleCenterYPercent(42)}>{t.studio.quickUpper(42)}</button>
+                    <button type="button" onClick={() => setSubtitleCenterYPercent(50)}>{t.studio.quickDeadCenter(50)}</button>
+                    <button type="button" onClick={() => setSubtitleCenterYPercent(58)}>{t.studio.quickLower(58)}</button>
                   </div>
                 </div>
               </div>
@@ -939,7 +943,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           {/* 3. Streamer Facecam Presets */}
           <div className="studio-card-group">
             <div className="group-header">
-              <span className="group-title">🎮 Streamer & Gaming Facecam Layout</span>
+              <span className="group-title">{t.studio.streamerTitle}</span>
             </div>
             <div className="streamer-presets-row">
               <button
@@ -947,21 +951,21 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 className={`streamer-btn ${streamerPreset === 'none' ? 'active' : ''}`}
                 onClick={() => setStreamerPreset('none')}
               >
-                Standard (Single Video)
+                {t.studio.streamerNone}
               </button>
               <button
                 type="button"
                 className={`streamer-btn ${streamerPreset === 'split_top_cam' ? 'active' : ''}`}
                 onClick={() => setStreamerPreset('split_top_cam')}
               >
-                📷 Top Facecam / Bottom Gameplay
+                {t.studio.streamerSplit}
               </button>
               <button
                 type="button"
                 className={`streamer-btn ${streamerPreset === 'pip_corner' ? 'active' : ''}`}
                 onClick={() => setStreamerPreset('pip_corner')}
               >
-                📌 Corner Picture-in-Picture
+                {t.studio.streamerPip}
               </button>
             </div>
           </div>
@@ -969,16 +973,16 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           {/* 4. Title / Hook Banner */}
           <div className="studio-card-group">
             <div className="group-header">
-              <span className="group-title">🏷️ Headline Hook / Title Banner</span>
+              <span className="group-title">{t.studio.titleBannerTitle}</span>
               <span className="group-badge">
-                {`Custom Y (${safeTitleY}%)`}
+                {t.studio.customYBadge(safeTitleY)}
               </span>
             </div>
             <div className="title-inputs-row">
               <input
                 type="text"
                 className="studio-text-input"
-                placeholder="Leave empty to use AI suggested hook title..."
+                placeholder={t.studio.titlePlaceholder}
                 value={titleText}
                 onChange={e => setTitleText(e.target.value)}
               />
@@ -987,36 +991,36 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 value={titlePosition}
                 onChange={e => setTitlePosition(e.target.value as TitlePosition)}
               >
-                <option value="auto">Visible</option>
-                <option value="none">Disabled</option>
+                <option value="auto">{t.studio.titleVisible}</option>
+                <option value="none">{t.studio.titleDisabled}</option>
               </select>
             </div>
 
             {/* Title Duration Option */}
             {titlePosition !== 'none' && (
               <div className="studio-sub-toggle" style={{ marginTop: '0.75rem' }}>
-                <span className="sub-toggle-label">Visible Duration:</span>
+                <span className="sub-toggle-label">{t.studio.titleDurationLabel}</span>
                 <div className="toggle-pill-group">
                   <button
                     type="button"
                     className={`pill-btn ${titleDuration === 'entire' ? 'active' : ''}`}
                     onClick={() => setTitleDuration('entire')}
                   >
-                    🎬 Entire Clip
+                    {t.studio.durationEntire}
                   </button>
                   <button
                     type="button"
                     className={`pill-btn ${titleDuration === '5s' ? 'active' : ''}`}
                     onClick={() => setTitleDuration('5s')}
                   >
-                    ⏱️ First 5s Only
+                    {t.studio.duration5s}
                   </button>
                   <button
                     type="button"
                     className={`pill-btn ${titleDuration === '10s' ? 'active' : ''}`}
                     onClick={() => setTitleDuration('10s')}
                   >
-                    ⏱️ First 10s Only
+                    {t.studio.duration10s}
                   </button>
                 </div>
               </div>
@@ -1026,8 +1030,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           {/* 5. Subtitle Style & Font */}
           <div className="studio-card-group">
             <div className="group-header">
-              <span className="group-title">💬 Animated Word-Level Subtitles</span>
-              <span className="group-badge success-badge">Strictly 1 Line</span>
+              <span className="group-title">{t.studio.subtitlesTitle}</span>
+              <span className="group-badge success-badge">{t.studio.strictlyOneLine}</span>
             </div>
 
             <div className="caption-styles-grid">
@@ -1039,7 +1043,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 <div className="caption-preview-text">
                   VIRAL <span className="pop-yellow">POP</span>
                 </div>
-                <span className="caption-style-sub">Hormozi Yellow Glow</span>
+                <span className="caption-style-sub">{t.studio.styleViralPopSub}</span>
               </button>
 
               <button
@@ -1050,7 +1054,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 <div className="caption-preview-text">
                   BEAST <span className="pop-green">PUNCH</span>
                 </div>
-                <span className="caption-style-sub">High Impact Green</span>
+                <span className="caption-style-sub">{t.studio.styleBeastPunchSub}</span>
               </button>
 
               <button
@@ -1061,7 +1065,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 <div className="caption-preview-text">
                   CYBER <span className="pop-violet">VIOLET</span>
                 </div>
-                <span className="caption-style-sub">Neon Purple Glow</span>
+                <span className="caption-style-sub">{t.studio.styleCyberVioletSub}</span>
               </button>
 
               <button
@@ -1072,7 +1076,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 <div className="caption-preview-text">
                   FIRE <span className="pop-red">CRIMSON</span>
                 </div>
-                <span className="caption-style-sub">High Energy Red</span>
+                <span className="caption-style-sub">{t.studio.styleFireRedSub}</span>
               </button>
 
               <button
@@ -1083,7 +1087,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 <div className="caption-preview-text">
                   ELECTRIC <span className="pop-cyan">CYAN</span>
                 </div>
-                <span className="caption-style-sub">Ice Blue Glow</span>
+                <span className="caption-style-sub">{t.studio.styleElectricCyanSub}</span>
               </button>
 
               <button
@@ -1094,7 +1098,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 <div className="caption-preview-text">
                   GOLDEN <span className="pop-gold">AURA</span>
                 </div>
-                <span className="caption-style-sub">Luxury Warm Gold</span>
+                <span className="caption-style-sub">{t.studio.styleGoldenAuraSub}</span>
               </button>
 
               <button
@@ -1103,9 +1107,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 onClick={() => setCaptionStyle('clean_minimal')}
               >
                 <div className="caption-preview-text">
-                  <span className="minimal-pill">Clean Minimal</span>
+                  <span className="minimal-pill">{t.studio.styleCleanMinimal}</span>
                 </div>
-                <span className="caption-style-sub">Soft Dark Box</span>
+                <span className="caption-style-sub">{t.studio.styleCleanMinimalSub}</span>
               </button>
 
               <button
@@ -1113,8 +1117,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 className={`caption-style-card none ${captionStyle === 'none' ? 'active' : ''}`}
                 onClick={() => setCaptionStyle('none')}
               >
-                <div className="caption-preview-text">✕ NONE</div>
-                <span className="caption-style-sub">Burn No Captions</span>
+                <div className="caption-preview-text">{t.studio.styleNone}</div>
+                <span className="caption-style-sub">{t.studio.styleNoneSub}</span>
               </button>
             </div>
 
@@ -1122,7 +1126,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               <>
                 {/* Font Family */}
                 <div className="studio-sub-toggle" style={{ marginTop: '0.85rem' }}>
-                  <span className="sub-toggle-label">Font Family:</span>
+                  <span className="sub-toggle-label">{t.studio.fontFamily}</span>
                   <div className="toggle-pill-group" style={{ flexWrap: 'wrap' }}>
                     {(
                       [
@@ -1151,56 +1155,56 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
                 {/* Font Size Presets */}
                 <div className="studio-sub-toggle" style={{ marginTop: '0.75rem' }}>
-                  <span className="sub-toggle-label">Font Size:</span>
+                  <span className="sub-toggle-label">{t.studio.fontSize}</span>
                   <div className="toggle-pill-group">
                     <button
                       type="button"
                       className={`pill-btn ${fontSize === 'small' ? 'active' : ''}`}
                       onClick={() => setFontSize('small')}
                     >
-                      Small (36px)
+                      {t.studio.sizeSmall}
                     </button>
                     <button
                       type="button"
                       className={`pill-btn ${fontSize === 'medium' ? 'active' : ''}`}
                       onClick={() => setFontSize('medium')}
                     >
-                      Medium (44px)
+                      {t.studio.sizeMedium}
                     </button>
                     <button
                       type="button"
                       className={`pill-btn ${fontSize === 'big' ? 'active' : ''}`}
                       onClick={() => setFontSize('big')}
                     >
-                      Big (54px)
+                      {t.studio.sizeBig}
                     </button>
                   </div>
                 </div>
 
                 {/* Text Letter Style Presets */}
                 <div className="studio-sub-toggle" style={{ marginTop: '0.75rem' }}>
-                  <span className="sub-toggle-label">Letter Style:</span>
+                  <span className="sub-toggle-label">{t.studio.letterStyle}</span>
                   <div className="toggle-pill-group">
                     <button
                       type="button"
                       className={`pill-btn ${textCase === 'uppercase' ? 'active' : ''}`}
                       onClick={() => setTextCase('uppercase')}
                     >
-                      ABC (Caps)
+                      {t.studio.letterCaps}
                     </button>
                     <button
                       type="button"
                       className={`pill-btn ${textCase === 'capitalize' ? 'active' : ''}`}
                       onClick={() => setTextCase('capitalize')}
                     >
-                      Abc (Title)
+                      {t.studio.letterTitle}
                     </button>
                     <button
                       type="button"
                       className={`pill-btn ${textCase === 'lowercase' ? 'active' : ''}`}
                       onClick={() => setTextCase('lowercase')}
                     >
-                      abc (Lower)
+                      {t.studio.letterLower}
                     </button>
                   </div>
                 </div>
@@ -1212,7 +1216,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           <div className="studio-card-group">
             <div className="group-header">
               <span className="group-title">
-                🎞️ Batch Render Checklist ({selectedClips.length} of {allClips.length} selected)
+                {t.studio.batchChecklist(selectedClips.length, allClips.length)}
               </span>
             </div>
             <div className="batch-clips-list" style={{ maxHeight: '200px', overflowY: 'auto' }}>
@@ -1252,7 +1256,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
         <div className="studio-preview-pane">
           <div className="preview-sticky-wrap">
             <div className="preview-header-bar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.45rem 0.6rem' }}>
-              <span className="preview-title" style={{ fontWeight: 700, fontSize: '0.88rem' }}>📱 Live Framing Preview</span>
+              <span className="preview-title" style={{ fontWeight: 700, fontSize: '0.88rem' }}>{t.studio.livePreview}</span>
               <span
                 className="preview-indicator"
                 style={{
@@ -1265,7 +1269,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   borderRadius: '6px',
                 }}
               >
-                {!playerReady ? '⏳ Loading...' : isPlaying ? '▶ Playing' : '⏸ Video Ready'}
+                {!playerReady ? t.studio.previewLoading : isPlaying ? t.studio.previewPlaying : t.studio.previewReady}
               </span>
             </div>
 
@@ -1349,7 +1353,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       <div
                         className="studio-preview-click-overlay"
                         onClick={togglePlayPause}
-                        title={isPlaying ? "Click to Pause" : "Click to Play"}
+                        title={isPlaying ? t.studio.clickToPause : t.studio.clickToPlay}
                       >
                         {!isPlaying && (
                           <div className="preview-play-icon-bubble">
@@ -1522,7 +1526,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   step="0.1"
                   value={Math.min(Math.max(currentTime, clipStart), clipEnd)}
                   onChange={e => handleSeek(Number(e.target.value))}
-                  title="Seek video timeline"
+                  title={t.studio.seekTimeline}
                 />
               </div>
 
@@ -1533,7 +1537,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     type="button"
                     className="player-ctrl-btn"
                     onClick={togglePlayPause}
-                    title={isPlaying ? 'Pause' : 'Play'}
+                    title={isPlaying ? t.studio.pause : t.studio.play}
                   >
                     {isPlaying ? '⏸' : '▶'}
                   </button>
@@ -1542,7 +1546,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     type="button"
                     className="player-ctrl-btn"
                     onClick={handleRestart}
-                    title="Restart clip"
+                    title={t.studio.restart}
                   >
                     ↺
                   </button>
@@ -1551,7 +1555,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     type="button"
                     className="player-ctrl-btn"
                     onClick={toggleMute}
-                    title={isMuted ? 'Unmute' : 'Mute'}
+                    title={isMuted ? t.studio.unmute : t.studio.mute}
                   >
                     {isMuted ? '🔇' : '🔊'}
                   </button>
@@ -1566,9 +1570,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     type="button"
                     className={`player-loop-toggle ${isLooping ? 'active' : ''}`}
                     onClick={() => setIsLooping(!isLooping)}
-                    title={isLooping ? 'Looping enabled' : 'Looping disabled'}
+                    title={isLooping ? t.studio.loopEnabled : t.studio.loopDisabled}
                   >
-                    🔁 Loop
+                    {t.studio.loop}
                   </button>
                 </div>
               </div>
@@ -1576,39 +1580,39 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             {/* Studio Render History & Specs Card (under player controls so it won't be empty) */}
             <div className="studio-render-history-card">
               <div className="history-card-header">
-                <span className="history-card-title">📋 Render Specs & History</span>
+                <span className="history-card-title">{t.studio.renderSpecsTitle}</span>
                 <span className="history-badge-pill">1080×1920</span>
               </div>
 
               <div className="history-info-grid">
                 <div className="history-info-item">
-                  <span className="info-key">Resolution</span>
-                  <span className="info-val">1080×1920 (9:16 FHD)</span>
+                  <span className="info-key">{t.studio.specResolution}</span>
+                  <span className="info-val">{t.studio.specResolutionVal}</span>
                 </div>
                 <div className="history-info-item">
-                  <span className="info-key">Hardware Accel</span>
-                  <span className="info-val highlight-green">NVENC GPU (H.264)</span>
+                  <span className="info-key">{t.studio.specHardware}</span>
+                  <span className="info-val highlight-green">{t.studio.specHardwareVal}</span>
                 </div>
                 <div className="history-info-item">
-                  <span className="info-key">Aspect Ratio</span>
+                  <span className="info-key">{t.studio.specAspect}</span>
                   <span className="info-val">{aspectRatio} ({backgroundStyle})</span>
                 </div>
                 <div className="history-info-item">
-                  <span className="info-key">Caption Style</span>
+                  <span className="info-key">{t.studio.specCaption}</span>
                   <span className="info-val">{captionStyle} · {captionFont}</span>
                 </div>
                 <div className="history-info-item">
-                  <span className="info-key">Selected Queue</span>
-                  <span className="info-val">{selectedClips.length} of {allClips.length} clips</span>
+                  <span className="info-key">{t.studio.specQueue}</span>
+                  <span className="info-val">{t.studio.specQueueVal(selectedClips.length, allClips.length)}</span>
                 </div>
                 <div className="history-info-item">
-                  <span className="info-key">Session Status</span>
+                  <span className="info-key">{t.studio.specStatus}</span>
                   <span className="info-val">
                     {batchProgress?.overall_status === 'completed'
-                      ? `🎉 ${batchProgress.clips.filter(c => c.status === 'completed').length} completed`
+                      ? t.studio.statusCompleted(batchProgress.clips.filter(c => c.status === 'completed').length)
                       : isRendering
-                      ? '⚡ Rendering in progress...'
-                      : 'Ready to batch render'}
+                      ? t.studio.statusRendering
+                      : t.studio.statusReady}
                   </span>
                 </div>
               </div>
@@ -1616,7 +1620,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               {/* Mini session output files list */}
               {batchProgress && batchProgress.clips.some(c => c.status === 'completed') && (
                 <div className="history-recent-list">
-                  <span className="recent-list-title">⚡ Session Output Files:</span>
+                  <span className="recent-list-title">{t.studio.recentFilesTitle}</span>
                   <div className="recent-items-scroll">
                     {batchProgress.clips.filter(c => c.status === 'completed').map((c, i) => (
                       <div key={i} className="recent-file-row">
@@ -1639,11 +1643,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               <div className="studio-batch-queue-card">
                 <div className="batch-progress-header">
                   <div>
-                    <h4 className="batch-queue-title">🎬 Batch Render Queue</h4>
+                    <h4 className="batch-queue-title">{t.studio.batchQueueTitle}</h4>
                     <p className="batch-subtitle">
                       {batchProgress.overall_status === 'completed'
-                        ? `🎉 All ${batchProgress.total_clips} clips rendered!`
-                        : `Processing clip ${(batchProgress.current_clip_index || 0) + 1} of ${batchProgress.total_clips}...`}
+                        ? t.studio.allClipsRendered(batchProgress.total_clips)
+                        : t.studio.processingClip((batchProgress.current_clip_index || 0) + 1, batchProgress.total_clips)}
                     </p>
                   </div>
 
@@ -1679,7 +1683,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         className="studio-close-btn"
                         onClick={onDismissProgress}
                         style={{ background: 'transparent', border: 'none', color: '#fff', cursor: 'pointer', fontSize: '1rem', padding: '0.1rem 0.3rem' }}
-                        title="Dismiss Queue"
+                        title={t.studio.dismissQueue}
                       >
                         ✕
                       </button>
@@ -1701,7 +1705,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     ></div>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.68rem', color: 'var(--text-muted)', marginTop: '0.25rem' }}>
-                    <span>{batchProgress.clips.filter(c => c.status === 'completed').length} of {batchProgress.total_clips} completed</span>
+                    <span>{t.batchProgress.completedMeta(batchProgress.clips.filter(c => c.status === 'completed').length, batchProgress.total_clips)}</span>
                     <span>{Math.round((batchProgress.clips.filter(c => c.status === 'completed').length / (batchProgress.total_clips || 1)) * 100)}%</span>
                   </div>
                 </div>
@@ -1715,13 +1719,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         <span style={{ fontSize: '0.74rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{clip.title}</span>
                       </div>
                       <div>
-                        {clip.status === 'pending' && <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>⏳ Waiting</span>}
-                        {clip.status === 'downloading' && <span style={{ fontSize: '0.68rem', color: '#f59e0b' }}>⚡ Slicing (15%)</span>}
-                        {clip.status === 'transcribing' && <span style={{ fontSize: '0.68rem', color: '#8b5cf6' }}>🧠 Captions (40%)</span>}
-                        {clip.status === 'rendering' && <span style={{ fontSize: '0.68rem', color: '#3b82f6' }}>🎬 Rendering (70%)</span>}
+                        {clip.status === 'pending' && <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{t.studio.statusWaitingShort}</span>}
+                        {clip.status === 'downloading' && <span style={{ fontSize: '0.68rem', color: '#f59e0b' }}>{t.studio.statusSlicingShort}</span>}
+                        {clip.status === 'transcribing' && <span style={{ fontSize: '0.68rem', color: '#8b5cf6' }}>{t.studio.statusCaptionsShort}</span>}
+                        {clip.status === 'rendering' && <span style={{ fontSize: '0.68rem', color: '#3b82f6' }}>{t.studio.statusRenderingShort}</span>}
                         {clip.status === 'completed' && (
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <span style={{ fontSize: '0.68rem', color: '#10b981', fontWeight: 600 }}>✅ Done</span>
+                            <span style={{ fontSize: '0.68rem', color: '#10b981', fontWeight: 600 }}>{t.studio.statusDoneShort}</span>
                             {clip.download_url && (
                               <a href={clip.download_url} download className="btn-download-clip" style={{ padding: '0.15rem 0.45rem', fontSize: '0.68rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.2)', color: '#10b981', textDecoration: 'none', border: '1px solid rgba(16, 185, 129, 0.4)' }}>
                                 ⬇️ MP4
@@ -1729,7 +1733,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                             )}
                           </div>
                         )}
-                        {clip.status === 'error' && <span style={{ fontSize: '0.68rem', color: '#ef4444' }}>⚠️ Failed</span>}
+                        {clip.status === 'error' && <span style={{ fontSize: '0.68rem', color: '#ef4444' }}>{t.studio.statusFailedShort}</span>}
                       </div>
                     </div>
                   ))}
@@ -1745,12 +1749,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
         <div className="action-bar-meta">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
             <span className="meta-badge">
-              Ready to render <strong>{selectedClips.length}</strong> clip{selectedClips.length !== 1 ? 's' : ''}
+              {t.studio.readyToRenderMeta(selectedClips.length)}
             </span>
             <button
               type="button"
               className="studio-clear-temp-btn"
-              title="Clear temporary clip download cache from disk"
+              title={t.studio.clearTempTooltip}
               onClick={handleClearTempClick}
               disabled={isClearingTemp}
               style={{
@@ -1765,7 +1769,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 transition: 'all 0.15s ease',
               }}
             >
-              {isClearingTemp ? '⏳ Clearing...' : '🧹 Clear Temp'}
+              {isClearingTemp ? t.studio.clearingTempBtn : t.studio.clearTempBtn}
             </button>
             {tempClearMsg && (
               <span style={{ fontSize: '0.72rem', color: '#4ade80', fontWeight: 600 }}>
@@ -1774,7 +1778,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             )}
           </div>
           <span className="meta-sub">
-            Output: 1080×1920 MP4 · Word-level Animated ASS Captions · Hardware Accelerated
+            {t.studio.outputMetaSub}
           </span>
         </div>
 
@@ -1784,12 +1788,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           disabled={isRendering || selectedClips.length === 0}
         >
           {isRendering ? (
-            <>⏳ Launching Render Queue...</>
+            <>{t.studio.launchingRenderBtn}</>
           ) : selectedClips.length === 0 ? (
-            <>⚠️ Select at least 1 clip to render</>
+            <>{t.studio.selectClipWarning}</>
           ) : (
             <>
-              🚀 Batch Render {selectedClips.length} Clip{selectedClips.length > 1 ? 's' : ''} (1080x1920 Full HD)
+              {t.studio.batchRenderCta(selectedClips.length)}
             </>
           )}
         </button>
@@ -1802,11 +1806,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             <div className="confirm-modal-icon-wrap">
               🧹
             </div>
-            <h3 className="confirm-modal-title">Clear Temporary Cache?</h3>
+            <h3 className="confirm-modal-title">{t.studio.confirmModalTitle}</h3>
             <p className="confirm-modal-desc">
-              This will safely purge all cached video slices, temporary downloads, and render buffers to free up disk space.
+              {t.studio.confirmModalDesc}
               <br /><br />
-              <strong style={{ color: '#4ade80' }}>Your finished exported MP4 videos will NOT be deleted.</strong>
+              <strong style={{ color: '#4ade80' }}>{t.studio.confirmModalNotice}</strong>
             </p>
             <div className="confirm-modal-actions">
               <button
@@ -1815,7 +1819,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 onClick={() => setShowClearConfirmModal(false)}
                 disabled={isClearingTemp}
               >
-                Cancel
+                {t.studio.cancelBtn}
               </button>
               <button
                 type="button"
@@ -1823,7 +1827,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 onClick={executeClearTemp}
                 disabled={isClearingTemp}
               >
-                {isClearingTemp ? '⏳ Clearing...' : '🧹 Yes, Purge Cache'}
+                {isClearingTemp ? t.studio.purgingBtn : t.studio.purgeBtn}
               </button>
             </div>
           </div>

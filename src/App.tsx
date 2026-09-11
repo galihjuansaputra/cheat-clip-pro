@@ -284,7 +284,7 @@ export default function App() {
 
   const handleGlobalClearTemp = async () => {
     if (isClearingGlobalTemp) return;
-    if (!window.confirm('Are you sure you want to clear all temporary downloaded files and render cache?')) {
+    if (!window.confirm(t.header.confirmClearTemp)) {
       return;
     }
     setIsClearingGlobalTemp(true);
@@ -292,15 +292,15 @@ export default function App() {
       const resp = await fetch('/api/clear-temp', { method: 'POST' });
       if (resp.ok) {
         const data = await resp.json();
-        setToastMessage(data.message || 'Cleared temporary download folder!');
+        setToastMessage(data.message || t.header.clearedTempSuccess);
         setTimeout(() => setToastMessage(null), 3500);
       } else {
-        setToastMessage('Failed to clear temp download folder');
+        setToastMessage(t.header.clearedTempFailed);
         setTimeout(() => setToastMessage(null), 3000);
       }
     } catch (e) {
       console.error('Failed to clear temp folder:', e);
-      setToastMessage('Error clearing temp folder');
+      setToastMessage(t.header.clearedTempError);
       setTimeout(() => setToastMessage(null), 3000);
     } finally {
       setIsClearingGlobalTemp(false);
@@ -1050,7 +1050,7 @@ export default function App() {
 
   const handleCopyText = (text: string, label: string) => {
     navigator.clipboard.writeText(text).then(() => {
-      setToastMessage(`Copied ${label} to clipboard!`);
+      setToastMessage(t.results.copiedGeneralToast(label));
       setTimeout(() => {
         setToastMessage(null);
       }, 3000);
@@ -1076,7 +1076,7 @@ export default function App() {
       speed: '',
       eta: ''
     });
-    setToastMessage("Initiating 1080p source download from YouTube...");
+    setToastMessage(t.rawDownload.initiatingToast);
 
     try {
       const res = await fetch("/api/download-raw-video", {
@@ -1089,7 +1089,7 @@ export default function App() {
       });
       const startData = await res.json();
       if (!res.ok || !startData.job_id) {
-        throw new Error(startData.detail || "Failed to start raw video download job.");
+        throw new Error(startData.detail || t.rawDownload.failedToast);
       }
 
       const jobId = startData.job_id;
@@ -1110,7 +1110,7 @@ export default function App() {
             const statusRes = await fetch(`/api/download-raw-status/${jobId}`);
             if (!statusRes.ok) {
               clearInterval(intervalId);
-              reject(new Error("Failed to check download status."));
+              reject(new Error(t.rawDownload.failedToast));
               return;
             }
             const statusData = await statusRes.json();
@@ -1129,7 +1129,7 @@ export default function App() {
 
             if (statusData.status === 'ready') {
               clearInterval(intervalId);
-              setToastMessage("Raw video downloaded successfully! File download starting...");
+              setToastMessage(t.rawDownload.completedToast);
               const a = document.createElement("a");
               a.href = statusData.download_url || `/api/download-rendered/${statusData.filename}`;
               a.download = statusData.filename || `raw_${result.video_id}.mp4`;
@@ -1144,7 +1144,7 @@ export default function App() {
             } else if (statusData.status === 'failed') {
               clearInterval(intervalId);
               setIsDownloadingRaw(false);
-              reject(new Error(statusData.error || "Failed to download raw video. If restricted by YouTube, please configure cookies."));
+              reject(new Error(statusData.error || t.rawDownload.failedToast));
             }
           } catch (pollErr) {
             clearInterval(intervalId);
@@ -1154,7 +1154,7 @@ export default function App() {
         }, 750);
       });
     } catch (err: any) {
-      setError(err.message || "Failed to download raw video.");
+      setError(err.message || t.rawDownload.failedToast);
       setIsDownloadingRaw(false);
       setRawDownloadProgress(null);
     }
@@ -1495,11 +1495,11 @@ Transcript:
               cursor: 'pointer',
               transition: 'all 0.2s ease'
             }}
-            title={hasCookies ? 'YouTube cookies active (1080p source enabled)' : 'Configure YouTube cookies for 1080p source downloads'}
+            title={hasCookies ? t.header.cookiesTooltipActive : t.header.cookiesTooltipSetup}
           >
-            <span>🍪 Cookies</span>
+            <span>🍪 {t.header.cookiesBtn}</span>
             <span style={{ fontSize: '0.7rem', opacity: 0.85 }}>
-              {hasCookies ? '● 1080p' : '○ Setup'}
+              {hasCookies ? t.header.cookiesStatusActive : t.header.cookiesStatusSetup}
             </span>
           </button>
           <button
@@ -1521,9 +1521,9 @@ Transcript:
               cursor: isClearingGlobalTemp ? 'not-allowed' : 'pointer',
               transition: 'all 0.2s ease'
             }}
-            title="Clear temporary downloaded clip segments, audio slices, and ASS files from disk"
+            title={t.header.clearTempTooltip}
           >
-            <span>🧹 {isClearingGlobalTemp ? 'Clearing...' : 'Clear Temp'}</span>
+            <span>🧹 {isClearingGlobalTemp ? t.header.clearingTempBtn : t.header.clearTempBtn}</span>
           </button>
           <LanguageSwitcher />
           <a
@@ -2292,7 +2292,7 @@ Transcript:
                 <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginTop: '0.25rem', lineHeight: '1.5' }}>
                   {t.errors.noSubtitlesMsg}
                   <br /><br />
-                  💡 <strong>Tip:</strong> {t.errors.noSubtitlesTip}
+                  💡 <strong>{t.form.subtitlesTipTitle}</strong> {t.errors.noSubtitlesTip}
                 </p>
               ) : (
                 <>
@@ -2617,18 +2617,18 @@ Transcript:
                   <div className="progress-card-header">
                     <span className="progress-card-title">
                       {rawDownloadProgress.status === 'ready' ? (
-                        <span style={{ color: '#4ade80' }}>✅ 1080p Download Ready</span>
+                        <span style={{ color: '#4ade80' }}>✅ {t.rawDownload.readyBadge}</span>
                       ) : (
                         <>
                           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon">
                             <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
                           </svg>
-                          <span>Downloading 1080p Source ({rawDownloadProgress.percent.toFixed(1)}%)</span>
+                          <span>{t.rawDownload.downloadingTitle(rawDownloadProgress.percent.toFixed(1))}</span>
                         </>
                       )}
                     </span>
                     {rawDownloadProgress.eta && rawDownloadProgress.status !== 'ready' && (
-                      <span className="progress-card-eta">ETA: {rawDownloadProgress.eta}</span>
+                      <span className="progress-card-eta">{t.rawDownload.eta(rawDownloadProgress.eta)}</span>
                     )}
                   </div>
                   <div className="progress-track">
@@ -2642,7 +2642,7 @@ Transcript:
                   </div>
                   <div className="progress-card-meta">
                     <span>
-                      {rawDownloadProgress.downloaded || 'Connecting...'} {rawDownloadProgress.total ? `/ ${rawDownloadProgress.total}` : ''}
+                      {rawDownloadProgress.downloaded || t.rawDownload.connecting} {rawDownloadProgress.total ? `/ ${rawDownloadProgress.total}` : ''}
                     </span>
                     <span>{rawDownloadProgress.speed || ''}</span>
                   </div>

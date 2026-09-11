@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useLanguage } from '../locales';
 
 interface CookiesModalProps {
   isOpen: boolean;
@@ -11,6 +12,7 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
   onClose,
   onCookieStatusChange,
 }) => {
+  const { t } = useLanguage();
   const [cookieText, setCookieText] = useState<string>('');
   const [hasCookies, setHasCookies] = useState<boolean>(false);
   const [cookieSize, setCookieSize] = useState<number>(0);
@@ -49,14 +51,17 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
     reader.onload = (event) => {
       const content = event.target?.result as string;
       setCookieText(content || '');
-      setMessage({ text: `File "${file.name}" loaded (${(content.length / 1024).toFixed(1)} KB). Click "Save Cookies" to apply.`, type: 'info' });
+      setMessage({
+        text: t.cookies.fileLoadedInfo(file.name, (content.length / 1024).toFixed(1)),
+        type: 'info'
+      });
     };
     reader.readAsText(file);
   };
 
   const handleSave = async () => {
     if (!cookieText.trim()) {
-      setMessage({ text: 'Please paste or upload your cookies.txt content first.', type: 'error' });
+      setMessage({ text: t.cookies.emptyError, type: 'error' });
       return;
     }
     setIsLoading(true);
@@ -69,21 +74,21 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setMessage({ text: '✅ Cookies saved successfully! High-resolution 1080p downloads enabled.', type: 'success' });
+        setMessage({ text: t.cookies.saveSuccess, type: 'success' });
         setCookieText('');
         fetchStatus();
       } else {
-        setMessage({ text: data.detail || 'Failed to save cookies.', type: 'error' });
+        setMessage({ text: data.detail || t.cookies.saveFailed, type: 'error' });
       }
     } catch (err: any) {
-      setMessage({ text: err.message || 'Error communicating with backend.', type: 'error' });
+      setMessage({ text: err.message || t.cookies.networkError, type: 'error' });
     } finally {
       setIsLoading(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!confirm('Are you sure you want to delete stored YouTube cookies?')) return;
+    if (!window.confirm(t.cookies.deleteConfirm)) return;
     setIsLoading(true);
     setMessage(null);
     try {
@@ -92,13 +97,13 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setMessage({ text: '🗑️ Cookies removed.', type: 'info' });
+        setMessage({ text: t.cookies.deletedSuccess, type: 'info' });
         fetchStatus();
       } else {
-        setMessage({ text: data.detail || 'Failed to remove cookies.', type: 'error' });
+        setMessage({ text: data.detail || t.cookies.removeFailed, type: 'error' });
       }
     } catch (err: any) {
-      setMessage({ text: err.message || 'Error communicating with backend.', type: 'error' });
+      setMessage({ text: err.message || t.cookies.networkError, type: 'error' });
     } finally {
       setIsLoading(false);
     }
@@ -113,13 +118,13 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
             <div className="studio-icon-badge">🍪</div>
             <div>
               <div className="studio-title-row">
-                <h2>YouTube Cookies Manager</h2>
+                <h2>{t.cookies.modalTitle}</h2>
                 <span className={`status-pill ${hasCookies ? 'active' : 'inactive'}`}>
-                  {hasCookies ? '🟢 Active' : '⚪ Not Set'}
+                  {hasCookies ? t.cookies.statusActive : t.cookies.statusInactive}
                 </span>
               </div>
               <p className="studio-header-desc">
-                Enable 1080p Full HD downloads & prevent YouTube bot verification throttling
+                {t.cookies.headerDesc}
               </p>
             </div>
           </div>
@@ -134,13 +139,13 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
             <div className="cookie-status-box active">
               <span className="status-icon">🛡️</span>
               <div className="status-info">
-                <strong>Active Cookies Installed</strong>
+                <strong>{t.cookies.installedTitle}</strong>
                 <p>
-                  <code>cookies.txt</code> is active ({cookieSize} bytes). yt-dlp will authenticate downloads to fetch highest available video formats.
+                  {t.cookies.installedDesc(cookieSize)}
                 </p>
                 {sampleLines.length > 0 && (
                   <details className="cookie-preview-details">
-                    <summary>View loaded domains ({sampleLines.length} entries)</summary>
+                    <summary>{t.cookies.viewDomains(sampleLines.length)}</summary>
                     <div className="cookie-preview-code">
                       {sampleLines.map((line, idx) => (
                         <div key={idx}>{line}</div>
@@ -155,16 +160,16 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
                 onClick={handleDelete}
                 disabled={isLoading}
               >
-                Delete
+                {t.cookies.deleteBtn}
               </button>
             </div>
           ) : (
             <div className="cookie-status-box warning">
               <span className="status-icon">⚠️</span>
               <div className="status-info">
-                <strong>No Cookies Configured</strong>
+                <strong>{t.cookies.noCookiesTitle}</strong>
                 <p>
-                  YouTube may restrict unauthenticated downloads to 360p or fail with bot verification. Adding cookies unlocks 1080p HD streams.
+                  {t.cookies.noCookiesDesc}
                 </p>
               </div>
             </div>
@@ -181,7 +186,7 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
         <div className="cookies-body-section">
           <div className="cookies-upload-row">
             <label className="cookies-file-label">
-              📁 Choose cookies.txt file
+              {t.cookies.chooseFile}
               <input
                 type="file"
                 accept=".txt"
@@ -189,7 +194,7 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
                 style={{ display: 'none' }}
               />
             </label>
-            <span className="cookies-or-divider">or paste Netscape cookie content below:</span>
+            <span className="cookies-or-divider">{t.cookies.orPaste}</span>
           </div>
 
           <textarea
@@ -201,16 +206,22 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
           />
 
           <div className="cookies-guide-card">
-            <h4>💡 How to get your YouTube cookies in 1 minute:</h4>
+            <h4>{t.cookies.guideTitle}</h4>
             <ol>
               <li>
-                Install a browser extension such as <strong>"Get cookies.txt locally"</strong> (available on Chrome Web Store & Firefox Add-ons).
+                {t.cookies.guideStep1Prefix}
+                <strong>{t.cookies.guideStep1Name}</strong>
+                {t.cookies.guideStep1Suffix}
               </li>
               <li>
-                Navigate to <a href="https://www.youtube.com" target="_blank" rel="noopener noreferrer">YouTube.com</a> while logged in.
+                {t.cookies.guideStep2Prefix}
+                <a href="https://www.youtube.com" target="_blank" rel="noopener noreferrer">YouTube.com</a>
+                {t.cookies.guideStep2Suffix}
               </li>
               <li>
-                Click the extension icon, click <strong>"Export"</strong>, and upload or paste the downloaded file here.
+                {t.cookies.guideStep3Prefix}
+                <strong>{t.cookies.guideStep3Export}</strong>
+                {t.cookies.guideStep3Suffix}
               </li>
             </ol>
           </div>
@@ -219,14 +230,14 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
         {/* Footer */}
         <div className="studio-modal-footer">
           <button className="studio-btn-cancel" onClick={onClose}>
-            Close
+            {t.cookies.closeBtn}
           </button>
           <button
             className="studio-btn-render glowing-btn"
             onClick={handleSave}
             disabled={isLoading || !cookieText.trim()}
           >
-            {isLoading ? 'Saving...' : '💾 Save Cookies'}
+            {isLoading ? t.cookies.savingBtn : t.cookies.saveBtn}
           </button>
         </div>
       </div>
