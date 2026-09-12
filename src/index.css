@@ -3407,6 +3407,138 @@ label[for="manual-subtitle-file"]:hover {
   color: #10b981;
 }
 
+/* Hardware Acceleration Settings in Controls Pane */
+.hardware-options-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.hardware-option-card {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  padding: 0.65rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  text-align: left;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.hardware-option-card:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(56, 189, 248, 0.35);
+  transform: translateY(-1px);
+}
+
+.hardware-option-card.active {
+  background: rgba(56, 189, 248, 0.09);
+  border-color: #38bdf8;
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.2);
+}
+
+.hw-card-top {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+}
+
+.hw-radio-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+}
+
+.hardware-option-card.active .hw-radio-dot {
+  border-color: #38bdf8;
+  background: #38bdf8;
+  box-shadow: 0 0 8px #38bdf8;
+}
+
+.hw-card-name {
+  font-size: 0.84rem;
+  font-weight: 600;
+  color: #ffffff;
+  flex: 1;
+}
+
+.hw-status-pill {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 9999px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.hw-status-pill.active {
+  background: rgba(34, 197, 94, 0.15);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.35);
+}
+
+.hw-status-pill.inactive {
+  background: rgba(148, 163, 184, 0.1);
+  color: #94a3b8;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+}
+
+.hw-card-sub {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  padding-left: 1.45rem;
+  line-height: 1.35;
+}
+
+/* History Hardware Acceleration Interactive Select */
+.history-hardware-item {
+  position: relative;
+}
+
+.history-hw-select-wrapper {
+  display: flex;
+  align-items: center;
+}
+
+.history-hw-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background: rgba(34, 197, 94, 0.12);
+  border: 1px solid rgba(34, 197, 94, 0.35);
+  color: #4ade80;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.2s ease;
+  max-width: 155px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-hw-select:hover,
+.history-hw-select:focus {
+  border-color: #4ade80;
+  background: rgba(34, 197, 94, 0.22);
+  box-shadow: 0 0 10px rgba(74, 222, 128, 0.25);
+}
+
+.history-hw-select option {
+  background: #0f172a;
+  color: #f1f5f9;
+}
+
 .history-recent-list {
   margin-top: 0.65rem;
   padding-top: 0.5rem;

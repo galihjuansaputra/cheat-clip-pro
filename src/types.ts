@@ -61,6 +61,26 @@ export type SubtitlePositionMode = 'bottom' | 'center';
 export type StreamerPreset = 'none' | 'split_top_cam' | 'pip_corner';
 export type FontSizeOption = 'small' | 'medium' | 'big';
 export type TextCaseOption = 'uppercase' | 'capitalize' | 'lowercase';
+export type HardwareAccelOption = 'auto' | 'nvenc' | 'amf' | 'qsv' | 'cpu';
+
+export interface HardwareAccelInfo {
+  status: string;
+  active_default: string;
+  recommended: string;
+  support: {
+    nvenc: boolean;
+    amf: boolean;
+    qsv: boolean;
+    cpu: boolean;
+    recommended: string;
+  };
+  options: Array<{
+    id: HardwareAccelOption;
+    label: string;
+    sub: string;
+    available: boolean;
+  }>;
+}
 
 export interface RenderSettings {
   aspectRatio: AspectRatioOption;
@@ -102,6 +122,8 @@ export interface RenderSettings {
   watermarkOpacity?: number; // 10 to 100%
   watermarkX?: number; // 0 to 100%
   watermarkY?: number; // 0 to 100%
+  // Hardware Acceleration / Video Encoder
+  hardwareAccel?: HardwareAccelOption;
 }
 
 export interface RenderClipStatus {

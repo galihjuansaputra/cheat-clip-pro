@@ -14,6 +14,8 @@ import type {
   TitleDurationOption,
   SubtitlePositionMode,
   BatchRenderProgress,
+  HardwareAccelOption,
+  HardwareAccelInfo,
 } from '../types';
 
 interface ClipStudioSectionProps {
@@ -109,6 +111,25 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [isUploadingWatermark, setIsUploadingWatermark] = useState<boolean>(false);
   const [isWatermarkDragging, setIsWatermarkDragging] = useState<boolean>(false);
   const phoneContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Hardware acceleration / Video Encoder state
+  const [hardwareAccel, setHardwareAccel] = useState<HardwareAccelOption>('auto');
+  const [hardwareInfo, setHardwareInfo] = useState<HardwareAccelInfo | null>(null);
+
+  useEffect(() => {
+    const fetchHardwareSupport = async () => {
+      try {
+        const res = await fetch('/api/hardware-accel');
+        if (res.ok) {
+          const data: HardwareAccelInfo = await res.json();
+          setHardwareInfo(data);
+        }
+      } catch {
+        // Backend offline or loading
+      }
+    };
+    fetchHardwareSupport();
+  }, []);
 
   // Playable video player state
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -965,6 +986,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       watermarkY,
       // Original Voice Audio Boost
       originalAudioVolume,
+      // Hardware Acceleration / Video Encoder
+      hardwareAccel,
     });
   };
 
@@ -2222,7 +2245,100 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             )}
           </div>
 
-          {/* 8. Selected Clips Checklist */}
+          {/* 8. Hardware Acceleration & Video Encoder */}
+          <div className="studio-card-group">
+            <div className="group-header">
+              <span className="group-title">⚡ {t.studio.hwTitle}</span>
+              <span className="group-badge">{t.studio.hwBadge}</span>
+            </div>
+            <p style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', margin: '0 0 0.85rem 0', lineHeight: 1.4 }}>
+              {t.studio.hwSubtitle}
+            </p>
+
+            <div className="hardware-options-grid">
+              {/* Auto Option */}
+              <button
+                type="button"
+                className={`hardware-option-card ${hardwareAccel === 'auto' ? 'active' : ''}`}
+                onClick={() => setHardwareAccel('auto')}
+              >
+                <div className="hw-card-top">
+                  <div className="hw-radio-dot"></div>
+                  <span className="hw-card-name">{t.studio.hwAuto}</span>
+                  <span className="hw-status-pill active">{t.studio.hwDetectedPill}</span>
+                </div>
+                <span className="hw-card-sub">
+                  {hardwareInfo?.recommended
+                    ? `${t.studio.hwAutoDesc} · (${hardwareInfo.recommended.toUpperCase()})`
+                    : t.studio.hwAutoDesc}
+                </span>
+              </button>
+
+              {/* NVIDIA NVENC */}
+              <button
+                type="button"
+                className={`hardware-option-card ${hardwareAccel === 'nvenc' ? 'active' : ''}`}
+                onClick={() => setHardwareAccel('nvenc')}
+              >
+                <div className="hw-card-top">
+                  <div className="hw-radio-dot"></div>
+                  <span className="hw-card-name">{t.studio.hwNvenc}</span>
+                  <span className={`hw-status-pill ${hardwareInfo?.support?.nvenc ? 'active' : 'inactive'}`}>
+                    {hardwareInfo?.support?.nvenc ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill}
+                  </span>
+                </div>
+                <span className="hw-card-sub">{t.studio.hwNvencDesc}</span>
+              </button>
+
+              {/* AMD AMF */}
+              <button
+                type="button"
+                className={`hardware-option-card ${hardwareAccel === 'amf' ? 'active' : ''}`}
+                onClick={() => setHardwareAccel('amf')}
+              >
+                <div className="hw-card-top">
+                  <div className="hw-radio-dot"></div>
+                  <span className="hw-card-name">{t.studio.hwAmf}</span>
+                  <span className={`hw-status-pill ${hardwareInfo?.support?.amf ? 'active' : 'inactive'}`}>
+                    {hardwareInfo?.support?.amf ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill}
+                  </span>
+                </div>
+                <span className="hw-card-sub">{t.studio.hwAmfDesc}</span>
+              </button>
+
+              {/* Intel QuickSync */}
+              <button
+                type="button"
+                className={`hardware-option-card ${hardwareAccel === 'qsv' ? 'active' : ''}`}
+                onClick={() => setHardwareAccel('qsv')}
+              >
+                <div className="hw-card-top">
+                  <div className="hw-radio-dot"></div>
+                  <span className="hw-card-name">{t.studio.hwQsv}</span>
+                  <span className={`hw-status-pill ${hardwareInfo?.support?.qsv ? 'active' : 'inactive'}`}>
+                    {hardwareInfo?.support?.qsv ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill}
+                  </span>
+                </div>
+                <span className="hw-card-sub">{t.studio.hwQsvDesc}</span>
+              </button>
+
+              {/* CPU Software libx264 */}
+              <button
+                type="button"
+                className={`hardware-option-card ${hardwareAccel === 'cpu' ? 'active' : ''}`}
+                onClick={() => setHardwareAccel('cpu')}
+              >
+                <div className="hw-card-top">
+                  <div className="hw-radio-dot"></div>
+                  <span className="hw-card-name">{t.studio.hwCpu}</span>
+                  <span className="hw-status-pill active">{t.studio.hwSupportedPill}</span>
+                </div>
+                <span className="hw-card-sub">{t.studio.hwCpuDesc}</span>
+              </button>
+            </div>
+          </div>
+
+          {/* 9. Selected Clips Checklist */}
           <div className="studio-card-group">
             <div className="group-header">
               <span className="group-title">
@@ -2699,9 +2815,32 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   <span className="info-key">{t.studio.specResolution}</span>
                   <span className="info-val">{t.studio.specResolutionVal}</span>
                 </div>
-                <div className="history-info-item">
+                <div className="history-info-item history-hardware-item">
                   <span className="info-key">{t.studio.specHardware}</span>
-                  <span className="info-val highlight-green">{t.studio.specHardwareVal}</span>
+                  <div className="history-hw-select-wrapper">
+                    <select
+                      className="history-hw-select"
+                      value={hardwareAccel}
+                      onChange={(e) => setHardwareAccel(e.target.value as HardwareAccelOption)}
+                      title={t.studio.hwChangeHint}
+                    >
+                      <option value="auto">
+                        ⚡ Auto ({hardwareInfo?.recommended ? hardwareInfo.recommended.toUpperCase() : 'NVENC'})
+                      </option>
+                      <option value="nvenc">
+                        🟢 NVENC {hardwareInfo?.support?.nvenc ? '✓' : ''}
+                      </option>
+                      <option value="amf">
+                        🔴 AMD AMF {hardwareInfo?.support?.amf ? '✓' : ''}
+                      </option>
+                      <option value="qsv">
+                        🔵 Intel QSV {hardwareInfo?.support?.qsv ? '✓' : ''}
+                      </option>
+                      <option value="cpu">
+                        ⚙️ CPU (libx264)
+                      </option>
+                    </select>
+                  </div>
                 </div>
                 <div className="history-info-item">
                   <span className="info-key">{t.studio.specAspect}</span>

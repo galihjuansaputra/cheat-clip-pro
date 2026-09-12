@@ -47,7 +47,9 @@ try:
         generate_ass_file,
         render_clip_to_mp4,
         extract_clip_frame,
-        detect_speaker_face_box
+        detect_speaker_face_box,
+        detect_hardware_support,
+        ACTIVE_ENCODER_NAME
     )
 except ImportError:
     from video_engine import (
@@ -60,7 +62,9 @@ except ImportError:
         generate_ass_file,
         render_clip_to_mp4,
         extract_clip_frame,
-        detect_speaker_face_box
+        detect_speaker_face_box,
+        detect_hardware_support,
+        ACTIVE_ENCODER_NAME
     )
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -1401,6 +1405,7 @@ class RenderSettingsModel(BaseModel):
     watermark_opacity: Optional[float] = 80.0
     watermark_x: Optional[float] = 90.0
     watermark_y: Optional[float] = 8.0
+    hardware_accel: Optional[str] = "auto"
 
 
 class RenderBatchRequest(BaseModel):
@@ -1521,7 +1526,8 @@ async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
                 hook_sfx_enabled=bool(settings.hook_sfx_enabled),
                 hook_sfx_path=settings.hook_sfx_file_path,
                 hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
-                original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0)
+                original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0),
+                hardware_accel=settings.hardware_accel or "auto"
             )
 
             clip_status["status"] = "completed"
@@ -1662,6 +1668,51 @@ def download_batch_zip(batch_id: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Batch zip file not found")
     return FileResponse(file_path, media_type="application/zip", filename=safe_name)
+
+
+@app.get("/api/hardware-accel")
+def get_hardware_acceleration_status():
+    """Returns detected GPU/CPU hardware acceleration options and recommendations."""
+    support = detect_hardware_support()
+    rec = support.get("recommended", "cpu")
+    return {
+        "status": "success",
+        "active_default": ACTIVE_ENCODER_NAME,
+        "recommended": rec,
+        "support": support,
+        "options": [
+            {
+                "id": "auto",
+                "label": "Auto Detect",
+                "sub": f"Recommended ({rec.upper()})",
+                "available": True,
+            },
+            {
+                "id": "nvenc",
+                "label": "NVIDIA NVENC",
+                "sub": "GeForce & RTX Hardware Acceleration",
+                "available": support.get("nvenc", False),
+            },
+            {
+                "id": "amf",
+                "label": "AMD AMF",
+                "sub": "Radeon RX & APU Hardware Acceleration",
+                "available": support.get("amf", False),
+            },
+            {
+                "id": "qsv",
+                "label": "Intel QuickSync",
+                "sub": "Intel Arc & UHD Hardware Acceleration",
+                "available": support.get("qsv", False),
+            },
+            {
+                "id": "cpu",
+                "label": "CPU Software (libx264)",
+                "sub": "Multi-threaded CPU (100% Universal)",
+                "available": True,
+            },
+        ],
+    }
 
 
 @app.post("/api/upload-bgm")

@@ -222,6 +222,8 @@ export default function App() {
             watermark_opacity: settings.watermarkOpacity !== undefined ? settings.watermarkOpacity : 80.0,
             watermark_x: settings.watermarkX !== undefined ? settings.watermarkX : 90.0,
             watermark_y: settings.watermarkY !== undefined ? settings.watermarkY : 8.0,
+            // Hardware Acceleration / Encoder
+            hardware_accel: settings.hardwareAccel || 'auto',
           },
           transcript: result.transcript,
         }),
