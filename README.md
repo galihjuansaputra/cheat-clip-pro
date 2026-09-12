@@ -9,24 +9,27 @@
 ### Step 1: Requirements
 Make sure you have these installed on your computer:
 1. **[Node.js](https://nodejs.org/)** (v18 or newer)
-2. **[Python](https://www.python.org/downloads/)** (v3.10 or newer)
-3. **FFmpeg** (Required to cut and export videos)
+2. **Python** (v3.10 or newer) — Install from [python.org](https://www.python.org/downloads/) or directly from the [Microsoft Store (Windows)](https://apps.microsoft.com/detail/9ncvdn91xzqp)
+3. **FFmpeg & yt-dlp** (Required to download and render videos)
    * **Windows (PowerShell):**
      ```powershell
      winget install Gyan.FFmpeg
+     winget install yt-dlp.yt-dlp
      ```
-     *(Close and reopen your terminal after installing so it recognizes FFmpeg)*
-   * **Mac:**
+     *(Close and reopen your terminal after installing so Windows recognizes them)*
+   * **Mac (Terminal):**
      ```bash
-     brew install ffmpeg
+     brew install ffmpeg yt-dlp
      ```
+     *(If you don't have Homebrew installed on Mac, install it first from [brew.sh](https://brew.sh))*
 
 ### Step 2: Install
 Open your terminal inside this folder and run:
 ```bash
 npm install
-pip install -r backend/requirements.txt
+python -m pip install -r backend/requirements.txt
 ```
+*(On Mac, use `python3 -m pip install -r backend/requirements.txt`)*
 
 ### Step 3: Run the App
 ```bash
@@ -66,21 +69,30 @@ Cheat Clip PRO uses Google's AI to find the best viral moments for free:
 ## ❓ Common Problems & Easy Fixes
 
 ### 1. "Failed to render video" or `The system cannot find the file specified`
-* **Cause:** `ffmpeg` or `yt-dlp` is not installed on your system.
+* **Cause:** `ffmpeg` or `yt-dlp` is missing on your computer.
 * **Fix:**
-  1. Open PowerShell and run `winget install Gyan.FFmpeg`, then close and reopen your terminal.
-  2. Run `pip install yt-dlp` (or `pip install -r backend/requirements.txt`).
+  * **Windows (PowerShell):**
+    ```powershell
+    winget install Gyan.FFmpeg
+    winget install yt-dlp.yt-dlp
+    ```
+    *(Then close and reopen your terminal)*
+  * **Mac (Terminal):**
+    ```bash
+    brew install ffmpeg yt-dlp
+    ```
+  * Or install directly via Python: `pip install yt-dlp`
 
 ### 2. "Sign in to confirm you're not a bot"
 * **Cause:** YouTube blocks video downloads if too many requests are sent without logging in.
 * **Fix:** Click the 🍪 **Cookies** button in the top navigation bar, export your YouTube cookies using a free browser extension (like *Get cookies.txt locally*), and paste them into the app.
 
-### 3. Does this work on AMD graphics cards?
+### 3. Does this work on AMD graphics cards and Mac?
 * **Yes!** Cheat Clip PRO automatically supports:
   * **NVIDIA** (`h264_nvenc`)
   * **AMD** (`h264_amf` on Radeon GPUs & Ryzen CPUs)
   * **Intel** (`h264_qsv` on Arc & UHD Graphics)
-  * **CPU Software** (`libx264` universal fallback)
+  * **Apple Mac & CPU Software** (`libx264` universal high-speed fallback)
 * You can switch your preferred hardware acceleration encoder anytime in the Render Settings or History card.
 
 ---
