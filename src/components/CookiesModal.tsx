@@ -19,6 +19,7 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
   const [sampleLines, setSampleLines] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
 
   const fetchStatus = async () => {
     try {
@@ -90,8 +91,6 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
       setIsLoading(false);
     }
   };
-
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
 
   const executeDeleteCookies = async () => {
     setIsLoading(true);
