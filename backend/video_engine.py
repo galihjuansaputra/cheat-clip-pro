@@ -39,13 +39,13 @@ def get_whisper_model():
     return _WHISPER_MODEL if _WHISPER_MODEL is not False else None
 
 
-def check_nvenc_support() -> bool:
-    """Check if NVIDIA NVENC hardware acceleration is operational."""
+def check_encoder_support(encoder_name: str) -> bool:
+    """Check if a specific FFmpeg video encoder is operational on this system."""
     try:
         cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-f", "lavfi", "-i", "color=c=black:s=1080x1920:d=0.2",
-            "-c:v", "h264_nvenc", "-f", "null", "-"
+            "-c:v", encoder_name, "-f", "null", "-"
         ]
         res = subprocess.run(cmd, capture_output=True, timeout=5)
         return res.returncode == 0
@@ -53,8 +53,30 @@ def check_nvenc_support() -> bool:
         return False
 
 
-USE_NVENC = check_nvenc_support()
-logger.info(f"Hardware acceleration (h264_nvenc): {'AVAILABLE' if USE_NVENC else 'UNAVAILABLE (using libx264)'}")
+def get_preferred_video_encoder() -> Tuple[str, List[str]]:
+    """
+    Auto-detects the fastest available hardware encoder:
+    1. NVIDIA NVENC (h264_nvenc)
+    2. AMD AMF (h264_amf)
+    3. Intel QuickSync (h264_qsv)
+    4. Universal CPU software encoding (libx264)
+    """
+    if check_encoder_support("h264_nvenc"):
+        logger.info("Hardware acceleration: NVIDIA NVENC (h264_nvenc) detected and enabled.")
+        return "h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
+    if check_encoder_support("h264_amf"):
+        logger.info("Hardware acceleration: AMD AMF (h264_amf) detected and enabled.")
+        return "h264_amf", ["-c:v", "h264_amf", "-quality", "speed", "-rc", "cbr", "-b:v", "6M"]
+    if check_encoder_support("h264_qsv"):
+        logger.info("Hardware acceleration: Intel QSV (h264_qsv) detected and enabled.")
+        return "h264_qsv", ["-c:v", "h264_qsv", "-preset", "veryfast"]
+
+    logger.info("Hardware acceleration: Multi-threaded CPU libx264 enabled.")
+    return "libx264", ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22"]
+
+
+ACTIVE_ENCODER_NAME, ACTIVE_ENCODER_ARGS = get_preferred_video_encoder()
+USE_NVENC = (ACTIVE_ENCODER_NAME == "h264_nvenc")
 
 
 def format_section_time(seconds: float) -> str:
@@ -1248,8 +1270,8 @@ def render_clip_to_mp4(
 
     final_filter_complex = ";".join(filter_chains)
 
-    # Choose video encoder (NVENC or libx264)
-    v_codec_args = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"] if USE_NVENC else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22"]
+    # Video encoder (auto-selected: NVENC, AMD AMF, Intel QSV, or libx264)
+    v_codec_args = ACTIVE_ENCODER_ARGS
 
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
