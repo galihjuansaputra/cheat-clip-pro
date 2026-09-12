@@ -193,7 +193,11 @@ def download_clip_segment(
     except Exception as e:
         logger.error(f"Fallback stream trimming failed: {e}")
 
-    raise RuntimeError(f"Failed to download video clip segment from YouTube: {res.stderr or 'Format unavailable'}")
+    err_msg = res.stderr or "Format unavailable"
+    err_lower = err_msg.lower()
+    if "confirm you're not a bot" in err_lower or "sign in" in err_lower or "login" in err_lower:
+        raise RuntimeError("YouTube blocked video download (Bot verification). Please import/save your YouTube cookies using the 🍪 Cookies Manager button in the top navbar.")
+    raise RuntimeError(f"Failed to download video clip segment from YouTube: {err_msg}")
 
 
 def download_full_raw_video(video_url: str, output_path: str, progress_callback=None) -> str:
@@ -1288,11 +1292,41 @@ def render_clip_to_mp4(
         str(output_mp4_path)
     ]
 
-    logger.info(f"Rendering final vertical clip to {output_mp4_path} (BGM: {bgm_enabled}, Watermark: {watermark_enabled})...")
+    # Check if FFmpeg is installed and accessible
+    if not shutil.which("ffmpeg"):
+        raise RuntimeError("FFmpeg is not installed or not found in system PATH. Please install FFmpeg (e.g. 'winget install Gyan.FFmpeg') and restart your terminal.")
+
+    logger.info(f"Rendering final vertical clip to {output_mp4_path} with {ACTIVE_ENCODER_NAME} (BGM: {bgm_enabled}, Watermark: {watermark_enabled})...")
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     if res.returncode != 0:
-        logger.error(f"FFmpeg render error: {res.stderr}")
-        raise RuntimeError(f"FFmpeg rendering failed: {res.stderr}")
+        logger.warning(f"Hardware encoder ({ACTIVE_ENCODER_NAME}) failed (code {res.returncode}): {res.stderr[:250] if res.stderr else ''}")
+        # Automatic fallback to universal CPU encoding (libx264) if hardware encoder fails
+        if ACTIVE_ENCODER_NAME != "libx264":
+            logger.info("Retrying render with universal multi-threaded CPU encoder (libx264)...")
+            cpu_cmd = [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-i", str(video_path),
+                *extra_input_args,
+                "-filter_complex", final_filter_complex,
+                "-map", out_video_map,
+                "-map", out_audio_map,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                "-c:a", "aac", "-b:a", "192k",
+                "-pix_fmt", "yuv420p",
+                "-movflags", "+faststart",
+                "-shortest",
+                str(output_mp4_path)
+            ]
+            res_cpu = subprocess.run(cpu_cmd, capture_output=True, text=True, timeout=240)
+            if res_cpu.returncode == 0 and os.path.exists(output_mp4_path) and os.path.getsize(output_mp4_path) > 1000:
+                logger.info(f"Successfully rendered with CPU fallback: {output_mp4_path}")
+                return str(output_mp4_path)
+            else:
+                logger.error(f"FFmpeg CPU fallback also failed: {res_cpu.stderr}")
+                raise RuntimeError(f"FFmpeg rendering failed: {res_cpu.stderr or res.stderr}")
+        else:
+            logger.error(f"FFmpeg render error: {res.stderr}")
+            raise RuntimeError(f"FFmpeg rendering failed: {res.stderr}")
 
     return str(output_mp4_path)
 

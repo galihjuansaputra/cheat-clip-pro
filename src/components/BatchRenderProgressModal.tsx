@@ -89,9 +89,30 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
                   </div>
                 )}
                 {clip.status === 'error' && (
-                  <span className="status-badge error" title={clip.error_message}>
-                    {t.batchProgress.statusFailed}
-                  </span>
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '3px' }}>
+                    <span className="status-badge error" title={clip.error_message}>
+                      {t.batchProgress.statusFailed}
+                    </span>
+                    {clip.error_message && (
+                      <span
+                        style={{
+                          fontSize: '0.68rem',
+                          color: '#f87171',
+                          maxWidth: '260px',
+                          lineHeight: '1.25',
+                          textAlign: 'right',
+                          wordBreak: 'break-word',
+                          background: 'rgba(239, 68, 68, 0.1)',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                          border: '1px solid rgba(239, 68, 68, 0.25)'
+                        }}
+                        title={clip.error_message}
+                      >
+                        {clip.error_message.length > 100 ? clip.error_message.slice(0, 100) + '...' : clip.error_message}
+                      </span>
+                    )}
+                  </div>
                 )}
               </div>
             </div>

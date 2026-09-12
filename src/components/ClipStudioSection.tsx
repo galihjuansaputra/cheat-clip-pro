@@ -2891,7 +2891,14 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                               </span>
                             )
                           )}
-                          {clip.status === 'error' && <span style={{ fontSize: '0.68rem', color: '#ef4444' }}>{t.studio.statusFailedShort}</span>}
+                          {clip.status === 'error' && (
+                            <span
+                              style={{ fontSize: '0.68rem', color: '#ef4444', cursor: 'help' }}
+                              title={clip.error_message || 'Rendering failed'}
+                            >
+                              {t.studio.statusFailedShort} {clip.error_message ? '⚠️' : ''}
+                            </span>
+                          )}
                         </div>
                       </div>
                     );
