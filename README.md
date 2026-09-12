@@ -7,10 +7,10 @@
 ## ⚡ Quick Start (Setup in 3 Steps)
 
 ### Step 1: Requirements
-Make sure you have these installed on your computer:
-1. **[Node.js](https://nodejs.org/)** (v18 or newer)
-2. **Python** (v3.10 or newer) — Install from [python.org](https://www.python.org/downloads/) or directly from the [Microsoft Store (Windows)](https://apps.microsoft.com/detail/9ncvdn91xzqp)
-3. **FFmpeg & yt-dlp** (Required to download and render videos)
+1. **[Git](https://git-scm.com/)** — If you don't have Git... how did you even get this project? Download ZIP gang? 📦 No judgment, but grab it so you can get updates (`winget install Git.Git` on Windows, `brew install git` on Mac, or from [git-scm.com](https://git-scm.com/)).
+2. **[Node.js](https://nodejs.org/)** (v18 or newer)
+3. **Python** (v3.10 or newer) — Install from [python.org](https://www.python.org/downloads/) or directly from the [Microsoft Store (Windows)](https://apps.microsoft.com/detail/9ncvdn91xzqp)
+4. **FFmpeg & yt-dlp** (Required to download and render videos)
    * **Windows (PowerShell):**
      ```powershell
      winget install Gyan.FFmpeg
