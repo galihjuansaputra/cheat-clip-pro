@@ -180,9 +180,21 @@ def get_yt_dlp_cookies_args() -> List[str]:
 def get_yt_dlp_base_cmd() -> List[str]:
     """
     Returns base command for yt-dlp with JavaScript runtime and cookies.
-    Node/Deno is required by YouTube to solve the web client 'n' challenges.
+    Tries standalone 'yt-dlp' executable first, then falls back to python module:
+    [sys.executable, "-m", "yt_dlp"] which works 100% of the time if installed via pip.
     """
-    cmd = ["yt-dlp"]
+    if shutil.which("yt-dlp"):
+        cmd = ["yt-dlp"]
+    else:
+        try:
+            import yt_dlp
+            cmd = [sys.executable, "-m", "yt_dlp"]
+        except ImportError:
+            raise RuntimeError(
+                "yt-dlp is not installed in this Python environment. "
+                "Please run 'pip install yt-dlp' or 'pip install -r backend/requirements.txt'."
+            )
+
     if shutil.which("node"):
         cmd.extend(["--js-runtimes", "node"])
     elif shutil.which("deno"):
