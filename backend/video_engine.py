@@ -22,6 +22,31 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 FONTS_DIR.mkdir(parents=True, exist_ok=True)
 
+def ensure_ffmpeg_in_path():
+    """Auto-detect FFmpeg if it was installed via winget, scoop, or local paths but not in PATH."""
+    if shutil.which("ffmpeg"):
+        return
+    local_app_data = os.environ.get("LOCALAPPDATA", "")
+    candidate_roots = [
+        Path(local_app_data) / "Microsoft" / "WinGet" / "Packages" if local_app_data else None,
+        Path("C:/Program Files/ffmpeg/bin"),
+        Path("C:/ffmpeg/bin"),
+    ]
+    for root in candidate_roots:
+        if root and root.exists():
+            if (root / "ffmpeg.exe").exists():
+                os.environ["PATH"] = str(root) + os.pathsep + os.environ.get("PATH", "")
+                logger.info(f"Auto-added FFmpeg to PATH: {root}")
+                return
+            for exe in root.glob("**/ffmpeg.exe"):
+                bin_dir = str(exe.parent)
+                os.environ["PATH"] = bin_dir + os.pathsep + os.environ.get("PATH", "")
+                logger.info(f"Auto-added FFmpeg to PATH: {bin_dir}")
+                return
+
+
+ensure_ffmpeg_in_path()
+
 # Global lazy-loaded whisper model
 _WHISPER_MODEL = None
 
@@ -53,6 +78,45 @@ def check_encoder_support(encoder_name: str) -> bool:
         return False
 
 
+ENCODER_CONFIGS: Dict[str, Tuple[str, List[str]]] = {
+    "nvenc": ("h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]),
+    "amf": ("h264_amf", ["-c:v", "h264_amf", "-quality", "speed", "-rc", "cbr", "-b:v", "6M"]),
+    "qsv": ("h264_qsv", ["-c:v", "h264_qsv", "-preset", "veryfast"]),
+    "cpu": ("libx264", ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22"]),
+}
+
+_DETECTED_SUPPORT: Optional[Dict[str, Any]] = None
+
+
+def detect_hardware_support() -> Dict[str, Any]:
+    """Detects host GPU/CPU hardware acceleration support and caches the result."""
+    global _DETECTED_SUPPORT
+    if _DETECTED_SUPPORT is not None:
+        return _DETECTED_SUPPORT
+
+    has_nvenc = check_encoder_support("h264_nvenc")
+    has_amf = check_encoder_support("h264_amf")
+    has_qsv = check_encoder_support("h264_qsv")
+
+    if has_nvenc:
+        recommended = "nvenc"
+    elif has_amf:
+        recommended = "amf"
+    elif has_qsv:
+        recommended = "qsv"
+    else:
+        recommended = "cpu"
+
+    _DETECTED_SUPPORT = {
+        "nvenc": has_nvenc,
+        "amf": has_amf,
+        "qsv": has_qsv,
+        "cpu": True,
+        "recommended": recommended,
+    }
+    return _DETECTED_SUPPORT
+
+
 def get_preferred_video_encoder() -> Tuple[str, List[str]]:
     """
     Auto-detects the fastest available hardware encoder:
@@ -61,18 +125,33 @@ def get_preferred_video_encoder() -> Tuple[str, List[str]]:
     3. Intel QuickSync (h264_qsv)
     4. Universal CPU software encoding (libx264)
     """
-    if check_encoder_support("h264_nvenc"):
-        logger.info("Hardware acceleration: NVIDIA NVENC (h264_nvenc) detected and enabled.")
-        return "h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]
-    if check_encoder_support("h264_amf"):
-        logger.info("Hardware acceleration: AMD AMF (h264_amf) detected and enabled.")
-        return "h264_amf", ["-c:v", "h264_amf", "-quality", "speed", "-rc", "cbr", "-b:v", "6M"]
-    if check_encoder_support("h264_qsv"):
-        logger.info("Hardware acceleration: Intel QSV (h264_qsv) detected and enabled.")
-        return "h264_qsv", ["-c:v", "h264_qsv", "-preset", "veryfast"]
+    support = detect_hardware_support()
+    rec = support.get("recommended", "cpu")
+    if rec in ENCODER_CONFIGS:
+        codec, args = ENCODER_CONFIGS[rec]
+        logger.info(f"Hardware acceleration auto-select: {codec} (rec: {rec}) enabled.")
+        return codec, args
 
-    logger.info("Hardware acceleration: Multi-threaded CPU libx264 enabled.")
-    return "libx264", ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22"]
+    return ENCODER_CONFIGS["cpu"]
+
+
+def resolve_encoder(user_selection: Optional[str] = "auto") -> Tuple[str, List[str]]:
+    """
+    Resolves user selection ('auto', 'nvenc', 'amf', 'qsv', 'cpu') to (codec_name, ffmpeg_args).
+    """
+    sel = (user_selection or "auto").lower().strip()
+    if sel == "auto":
+        return get_preferred_video_encoder()
+
+    if sel in ENCODER_CONFIGS:
+        return ENCODER_CONFIGS[sel]
+
+    # Check direct codec names
+    for key, (codec, args) in ENCODER_CONFIGS.items():
+        if sel == codec or sel == key:
+            return codec, args
+
+    return ENCODER_CONFIGS["cpu"]
 
 
 ACTIVE_ENCODER_NAME, ACTIVE_ENCODER_ARGS = get_preferred_video_encoder()
@@ -1148,7 +1227,9 @@ def render_clip_to_mp4(
     hook_sfx_path: Optional[str] = None,
     hook_sfx_volume: float = 1.0,
     # Raw voice / original audio boost (0.0 to 2.0)
-    original_audio_volume: float = 1.0
+    original_audio_volume: float = 1.0,
+    # Hardware acceleration selection ('auto', 'nvenc', 'amf', 'qsv', 'cpu')
+    hardware_accel: Optional[str] = "auto"
 ) -> str:
     """
     Renders the final 1080x1920 short-form video with layout, aspect ratio, titles, subtitles,
@@ -1274,8 +1355,9 @@ def render_clip_to_mp4(
 
     final_filter_complex = ";".join(filter_chains)
 
-    # Video encoder (auto-selected: NVENC, AMD AMF, Intel QSV, or libx264)
-    v_codec_args = ACTIVE_ENCODER_ARGS
+    # Video encoder (resolved from user choice: auto, nvenc, amf, qsv, cpu)
+    chosen_encoder_name, chosen_encoder_args = resolve_encoder(hardware_accel)
+    v_codec_args = chosen_encoder_args
 
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
@@ -1296,12 +1378,12 @@ def render_clip_to_mp4(
     if not shutil.which("ffmpeg"):
         raise RuntimeError("FFmpeg is not installed or not found in system PATH. Please install FFmpeg (e.g. 'winget install Gyan.FFmpeg') and restart your terminal.")
 
-    logger.info(f"Rendering final vertical clip to {output_mp4_path} with {ACTIVE_ENCODER_NAME} (BGM: {bgm_enabled}, Watermark: {watermark_enabled})...")
+    logger.info(f"Rendering final vertical clip to {output_mp4_path} with {chosen_encoder_name} (Selection: {hardware_accel}, BGM: {bgm_enabled}, Watermark: {watermark_enabled})...")
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     if res.returncode != 0:
-        logger.warning(f"Hardware encoder ({ACTIVE_ENCODER_NAME}) failed (code {res.returncode}): {res.stderr[:250] if res.stderr else ''}")
-        # Automatic fallback to universal CPU encoding (libx264) if hardware encoder fails
-        if ACTIVE_ENCODER_NAME != "libx264":
+        logger.warning(f"Hardware encoder ({chosen_encoder_name}) failed (code {res.returncode}): {res.stderr[:250] if res.stderr else ''}")
+        # Automatic fallback to universal CPU encoding (libx264) if chosen hardware encoder fails
+        if chosen_encoder_name != "libx264":
             logger.info("Retrying render with universal multi-threaded CPU encoder (libx264)...")
             cpu_cmd = [
                 "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
