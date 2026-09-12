@@ -27,7 +27,7 @@ import time
 import uuid
 import zipfile
 from typing import List, Optional, Dict, Any, Tuple
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.responses import StreamingResponse, RedirectResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -65,6 +65,9 @@ except ImportError:
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("cheat-clip-pro")
+
+UPLOADS_DIR = TEMP_DIR / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="CHEAT CLIP PRO API", description="AI Powered YouTube Auto Clipper")
 
@@ -1378,6 +1381,26 @@ class RenderSettingsModel(BaseModel):
     subtitle_y_percent: Optional[float] = 18.0
     subtitle_position_mode: Optional[str] = "bottom"
     subtitle_center_y_percent: Optional[float] = 50.0
+    # Background Music
+    bgm_enabled: Optional[bool] = False
+    bgm_file_path: Optional[str] = None
+    bgm_volume: Optional[float] = 25.0
+    bgm_start_offset: Optional[float] = 0.0
+    # Hook SFX
+    hook_sfx_enabled: Optional[bool] = False
+    hook_sfx_file_path: Optional[str] = None
+    hook_sfx_volume: Optional[float] = 100.0
+    # Raw Audio / Voice Boost
+    original_audio_volume: Optional[float] = 100.0
+    # Watermark
+    watermark_enabled: Optional[bool] = False
+    watermark_type: Optional[str] = "image"
+    watermark_file_path: Optional[str] = None
+    watermark_text: Optional[str] = None
+    watermark_size: Optional[float] = 20.0
+    watermark_opacity: Optional[float] = 80.0
+    watermark_x: Optional[float] = 90.0
+    watermark_y: Optional[float] = 8.0
 
 
 class RenderBatchRequest(BaseModel):
@@ -1481,7 +1504,24 @@ async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
                 streamer_preset=settings.streamer_preset,
                 title_text=display_title,
                 title_position=settings.title_position,
-                ass_subtitles_path=ass_path
+                ass_subtitles_path=ass_path,
+                clip_duration=duration_sec,
+                watermark_enabled=bool(settings.watermark_enabled),
+                watermark_type=settings.watermark_type or "image",
+                watermark_image_path=settings.watermark_file_path,
+                watermark_text=settings.watermark_text,
+                watermark_size=float(settings.watermark_size if settings.watermark_size is not None else 20.0),
+                watermark_opacity=float((settings.watermark_opacity if settings.watermark_opacity is not None else 80.0) / 100.0),
+                watermark_x_percent=float(settings.watermark_x if settings.watermark_x is not None else 90.0),
+                watermark_y_percent=float(settings.watermark_y if settings.watermark_y is not None else 8.0),
+                bgm_enabled=bool(settings.bgm_enabled),
+                bgm_path=settings.bgm_file_path,
+                bgm_volume=float((settings.bgm_volume if settings.bgm_volume is not None else 25.0) / 100.0),
+                bgm_start_offset=float(settings.bgm_start_offset or 0.0),
+                hook_sfx_enabled=bool(settings.hook_sfx_enabled),
+                hook_sfx_path=settings.hook_sfx_file_path,
+                hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
+                original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0)
             )
 
             clip_status["status"] = "completed"
@@ -1496,17 +1536,23 @@ async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
 
         batch["current_clip_index"] = idx + 1
 
-    # Generate ZIP bundle for the batch
+    # Generate ZIP bundle for the batch with title-based filenames and duplicate handling
     try:
         zip_filename = f"cheat_clip_pro_{batch_id}.zip"
         zip_path = EXPORTS_DIR / zip_filename
+        title_counts: Dict[str, int] = {}
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             for c in batch["clips"]:
                 if c.get("status") == "completed" and c.get("download_url"):
                     fname = c["download_url"].split("/")[-1]
                     fpath = EXPORTS_DIR / fname
                     if fpath.exists():
-                        zipf.write(fpath, arcname=fname)
+                        raw_title = (c.get("title") or "").strip()
+                        clean_title = re.sub(r'[\\/*?:"<>|]', "", raw_title) or f"clip_{c.get('clip_index', 1)}"
+                        count = title_counts.get(clean_title, 0)
+                        title_counts[clean_title] = count + 1
+                        arc_name = f"{clean_title}.mp4" if count == 0 else f"{clean_title} ({count}).mp4"
+                        zipf.write(fpath, arcname=arc_name)
         batch["zip_url"] = f"/api/download-batch-zip/{batch_id}"
     except Exception as e:
         logger.warning(f"Failed to create batch zip: {e}")
@@ -1571,12 +1617,20 @@ async def get_render_progress(batch_id: str):
 
 
 @app.get("/api/download-rendered/{file_name}")
-def download_rendered_file(file_name: str):
+def download_rendered_file(file_name: str, title: Optional[str] = None):
     safe_name = os.path.basename(file_name)
     file_path = EXPORTS_DIR / safe_name
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Rendered clip not found")
-    return FileResponse(file_path, media_type="video/mp4", filename=safe_name)
+
+    # If title provided, sanitize and use as download filename
+    dl_filename = safe_name
+    if title and title.strip():
+        clean_title = re.sub(r'[\\/*?:"<>|]', "", title.strip())
+        if clean_title:
+            dl_filename = f"{clean_title}.mp4" if not clean_title.lower().endswith(".mp4") else clean_title
+
+    return FileResponse(file_path, media_type="video/mp4", filename=dl_filename)
 
 
 @app.get("/api/download-batch-zip/{batch_id}")
@@ -1589,6 +1643,7 @@ def download_batch_zip(batch_id: str):
         job = RENDER_BATCHES.get(batch_id)
         if job and job.get("clips"):
             try:
+                title_counts: Dict[str, int] = {}
                 with zipfile.ZipFile(file_path, "w", zipfile.ZIP_DEFLATED) as zipf:
                     for c in job["clips"]:
                         c_out = c.get("output_path")
@@ -1596,12 +1651,127 @@ def download_batch_zip(batch_id: str):
                             fname = c["download_url"].split("/")[-1]
                             c_out = str(EXPORTS_DIR / fname)
                         if c_out and os.path.exists(c_out):
-                            zipf.write(c_out, arcname=os.path.basename(c_out))
+                            raw_title = (c.get("title") or "").strip()
+                            clean_title = re.sub(r'[\\/*?:"<>|]', "", raw_title) or os.path.splitext(os.path.basename(c_out))[0]
+                            count = title_counts.get(clean_title, 0)
+                            title_counts[clean_title] = count + 1
+                            arc_name = f"{clean_title}.mp4" if count == 0 else f"{clean_title} ({count}).mp4"
+                            zipf.write(c_out, arcname=arc_name)
             except Exception as e:
                 logger.error(f"Error packaging batch zip on the fly: {e}")
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Batch zip file not found")
     return FileResponse(file_path, media_type="application/zip", filename=safe_name)
+
+
+@app.post("/api/upload-bgm")
+async def upload_bgm(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    ext = os.path.splitext(file.filename)[1].lower()
+    allowed = [".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"]
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported audio format. Allowed: {', '.join(allowed)}")
+    
+    clean_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', file.filename)
+    unique_name = f"bgm_{uuid.uuid4().hex[:8]}_{clean_name}"
+    save_path = UPLOADS_DIR / unique_name
+    
+    try:
+        content = await file.read()
+        with open(save_path, "wb") as f:
+            f.write(content)
+        return {
+            "success": True,
+            "filename": file.filename,
+            "saved_name": unique_name,
+            "file_path": str(save_path),
+            "url": f"/api/audio/{unique_name}",
+            "size_bytes": len(content)
+        }
+    except Exception as e:
+        logger.error(f"Failed to upload BGM: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/audio/{file_name}")
+def get_audio_file(file_name: str):
+    clean_name = os.path.basename(file_name)
+    file_path = UPLOADS_DIR / clean_name
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    media_type = "audio/mpeg" if clean_name.endswith(".mp3") else "audio/wav" if clean_name.endswith(".wav") else "application/octet-stream"
+    return FileResponse(file_path, media_type=media_type, filename=clean_name)
+
+
+@app.post("/api/upload-sfx")
+async def upload_hook_sfx(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    ext = os.path.splitext(file.filename)[1].lower()
+    allowed = [".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac"]
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported audio format. Allowed: {', '.join(allowed)}")
+
+    clean_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', file.filename)
+    unique_name = f"sfx_{uuid.uuid4().hex[:8]}_{clean_name}"
+    save_path = UPLOADS_DIR / unique_name
+
+    try:
+        content = await file.read()
+        with open(save_path, "wb") as f:
+            f.write(content)
+        return {
+            "success": True,
+            "filename": file.filename,
+            "saved_name": unique_name,
+            "file_path": str(save_path),
+            "url": f"/api/audio/{unique_name}",
+            "size_bytes": len(content)
+        }
+    except Exception as e:
+        logger.error(f"Failed to upload Hook SFX: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/upload-watermark")
+async def upload_watermark(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    ext = os.path.splitext(file.filename)[1].lower()
+    allowed = [".png", ".jpg", ".jpeg", ".webp", ".svg"]
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported image format. Allowed: {', '.join(allowed)}")
+    
+    clean_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', file.filename)
+    unique_name = f"wm_{uuid.uuid4().hex[:8]}_{clean_name}"
+    save_path = UPLOADS_DIR / unique_name
+    
+    try:
+        content = await file.read()
+        with open(save_path, "wb") as f:
+            f.write(content)
+        return {
+            "success": True,
+            "filename": file.filename,
+            "saved_name": unique_name,
+            "file_path": str(save_path),
+            "url": f"/api/watermark/{unique_name}",
+            "size_bytes": len(content)
+        }
+    except Exception as e:
+        logger.error(f"Failed to upload watermark: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/watermark/{file_name}")
+def get_watermark_file(file_name: str):
+    clean_name = os.path.basename(file_name)
+    file_path = UPLOADS_DIR / clean_name
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Watermark file not found")
+    media_type = "image/png" if clean_name.endswith(".png") else "image/jpeg" if (clean_name.endswith(".jpg") or clean_name.endswith(".jpeg")) else "image/webp"
+    return FileResponse(file_path, media_type=media_type, filename=clean_name)
 
 
 # ----------------------------------------------------------------
@@ -1637,9 +1807,11 @@ def save_youtube_cookies(req: CookiesSaveRequest):
 def get_youtube_cookies_status():
     if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 0:
         sample_lines = []
+        cookies_content = ""
         try:
             with open(COOKIES_PATH, "r", encoding="utf-8", errors="ignore") as f:
-                for line in f:
+                cookies_content = f.read()
+                for line in cookies_content.splitlines():
                     line = line.strip()
                     if line and not line.startswith("#"):
                         domain = line.split("\t")[0]
@@ -1653,9 +1825,10 @@ def get_youtube_cookies_status():
             "exists": True,
             "has_cookies": True,
             "size": COOKIES_PATH.stat().st_size,
-            "sample_lines": sample_lines
+            "sample_lines": sample_lines,
+            "cookies_content": cookies_content
         }
-    return {"exists": False, "has_cookies": False, "size": 0, "sample_lines": []}
+    return {"exists": False, "has_cookies": False, "size": 0, "sample_lines": [], "cookies_content": ""}
 
 
 @app.delete("/api/cookies")
@@ -1826,6 +1999,7 @@ async def clear_temp_folder():
     """
     Clears all temporary downloaded video clips, audio slices, ASS files, and frames
     from TEMP_DIR and backend/temp. Re-creates empty directories.
+    PROTECTED: cookies.txt and any cookie files are strictly PRESERVED and NEVER deleted.
     """
     import shutil
     from pathlib import Path
@@ -1833,22 +2007,48 @@ async def clear_temp_folder():
     cleared_files = 0
     cleared_bytes = 0
 
+    PROTECTED_COOKIE_NAMES = {"cookies.txt", ".cookies", "youtube_cookies.txt", "cookie.txt"}
+
+    def is_protected_cookie(p: Path) -> bool:
+        if p.name.lower() in PROTECTED_COOKIE_NAMES:
+            return True
+        try:
+            if COOKIES_PATH.exists() and p.resolve() == COOKIES_PATH.resolve():
+                return True
+        except Exception:
+            pass
+        return False
+
     target_dirs = [TEMP_DIR, base_dir / "temp"]
     for d in target_dirs:
         if d.exists() and d.is_dir():
             for item in list(d.iterdir()):
                 try:
+                    if is_protected_cookie(item):
+                        logger.info(f"Preserving protected cookie file: {item}")
+                        continue
+
                     if item.is_file() or item.is_symlink():
                         sz = item.stat().st_size
                         item.unlink()
                         cleared_files += 1
                         cleared_bytes += sz
                     elif item.is_dir():
-                        for sub in item.rglob("*"):
-                            if sub.is_file():
-                                cleared_files += 1
-                                cleared_bytes += sub.stat().st_size
-                        shutil.rmtree(item, ignore_errors=True)
+                        has_cookie = False
+                        for sub in list(item.rglob("*")):
+                            if is_protected_cookie(sub):
+                                has_cookie = True
+                                logger.info(f"Preserving protected cookie file inside folder: {sub}")
+                                continue
+                            if sub.is_file() or sub.is_symlink():
+                                try:
+                                    cleared_files += 1
+                                    cleared_bytes += sub.stat().st_size
+                                    sub.unlink()
+                                except Exception:
+                                    pass
+                        if not has_cookie:
+                            shutil.rmtree(item, ignore_errors=True)
                 except Exception as e:
                     logger.warning(f"Could not delete temp item {item}: {e}")
         d.mkdir(parents=True, exist_ok=True)
@@ -1858,13 +2058,16 @@ async def clear_temp_folder():
 
     cleared_mb = round(cleared_bytes / (1024 * 1024), 2)
     formatted = f"{cleared_mb} MB" if cleared_mb < 1024 else f"{round(cleared_mb / 1024, 2)} GB"
-    logger.info(f"Cleared temp folder: {cleared_files} files, {formatted}")
+    cookies_present = bool(COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 0)
+    logger.info(f"Cleared temp folder: {cleared_files} files, {formatted} (Cookies preserved: {cookies_present})")
     return {
         "success": True,
         "cleared_files": cleared_files,
         "cleared_bytes": cleared_bytes,
         "cleared_mb": cleared_mb,
-        "message": f"Successfully cleared {cleared_files} temporary files ({formatted})"
+        "cookies_preserved": True,
+        "has_cookies": cookies_present,
+        "message": f"Successfully cleared {cleared_files} temporary files ({formatted}). Stored YouTube cookies preserved."
     }
 
 

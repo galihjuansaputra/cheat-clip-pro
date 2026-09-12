@@ -77,7 +77,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
   const applyLetterCase = (text: string, style: TextCaseOption): string => {
     if (style === 'uppercase') return text.toUpperCase();
     if (style === 'lowercase') return text.toLowerCase();
-    return text.replace(/\b\w/g, c => c.toUpperCase());
+    return text.toLowerCase().replace(/(?:^|\s|\b)\w/g, c => c.toUpperCase());
   };
 
   const formatTitlePreview = (rawText: string, style: TextCaseOption): string => {

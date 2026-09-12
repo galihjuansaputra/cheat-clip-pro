@@ -79,6 +79,29 @@ export interface RenderSettings {
   subtitlePositionMode?: SubtitlePositionMode;
   subtitleCenterYPercent?: number;
   selectedClips: ViralClip[];
+  // Background Music
+  bgmEnabled?: boolean;
+  bgmFilePath?: string;
+  bgmFileName?: string;
+  bgmVolume?: number; // 0 to 100%
+  bgmStartOffset?: number; // seconds from start of audio track
+  // Hook SFX
+  hookSfxEnabled?: boolean;
+  hookSfxFilePath?: string;
+  hookSfxFileName?: string;
+  hookSfxVolume?: number; // 0 to 150%
+  // Raw Audio / Voice Boost
+  originalAudioVolume?: number; // 0 to 200%
+  // Watermark
+  watermarkEnabled?: boolean;
+  watermarkType?: 'image' | 'text';
+  watermarkFilePath?: string;
+  watermarkUrl?: string;
+  watermarkText?: string;
+  watermarkSize?: number; // 5 to 50%
+  watermarkOpacity?: number; // 10 to 100%
+  watermarkX?: number; // 0 to 100%
+  watermarkY?: number; // 0 to 100%
 }
 
 export interface RenderClipStatus {

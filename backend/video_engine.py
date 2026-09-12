@@ -459,7 +459,6 @@ def generate_ass_file(
         formatted_title, title_line_count = "", 1
 
     # 2. Font Sizes based on preset, with automatic scale-down for 3+ line titles
-    # Scaled 1.25x so exported 1080x1920 video text matches the live preview proportions
     if font_size_preset == "small":
         sub_font_size = 65
         title_font_size = 60 if title_line_count >= 3 else 68
@@ -484,21 +483,21 @@ def generate_ass_file(
         content_top = 0
         content_bot = 1920
 
-    est_title_h = int(title_line_count * (title_font_size * 1.25))
-    est_sub_h = int(sub_font_size * 1.25)
+    est_title_h = int(title_line_count * (title_font_size * 1.08))
+    est_sub_h = int(sub_font_size * 1.08)
     sub_align = 5 if subtitle_position_mode == "center" else 2
 
     # Title Positioning: keep it SNUG and CLOSE to the top of the video content
     if target_aspect_ratio != "9:16":
-        # Snug title default: title bottom sits ~20px above content_top
-        default_title_y = max(20, content_top - est_title_h - 20)
+        # Snug title default: title bottom sits closer to content_top
+        default_title_y = max(20, content_top - est_title_h - 15)
         if title_y_percent is not None:
             title_y = int(1920 * (title_y_percent / 100.0))
         else:
             title_y = default_title_y
 
-        # Hard boundary: title bottom must stay at least 15px clear above content_top
-        max_safe_title_y = max(15, content_top - est_title_h - 15)
+        # Hard boundary: title bottom must stay at least 5px clear above content_top
+        max_safe_title_y = max(15, content_top - est_title_h - 5)
         title_y = min(title_y, max_safe_title_y)
 
         # Subtitle Positioning:
@@ -506,28 +505,29 @@ def generate_ass_file(
             sub_y = int(1920 * (subtitle_center_y_percent / 100.0))
             sub_y = max(content_top + 40, min(content_bot - 40, sub_y))
         else:
-            # Snug bottom default: subtitle top sits ~20px below content_bot
-            default_sub_y = content_bot + est_sub_h + 20
+            # Snug bottom default: subtitle sits closer below content_bot
+            default_sub_y = content_bot + est_sub_h + 12
             if subtitle_y_percent is not None:
                 sub_y = int(1920 * (1.0 - (subtitle_y_percent / 100.0)))
             else:
                 sub_y = default_sub_y
-            min_safe_sub_y = content_bot + est_sub_h + 15
+            min_safe_sub_y = content_bot + est_sub_h + 8
             sub_y = max(sub_y, min_safe_sub_y)
     else:
-        # 9:16 Fullscreen
+        # 9:16 Fullscreen - title moved down closer to video center
         if title_line_count >= 3 and (title_y_percent is None or title_y_percent == 14.0):
-            effective_title_y_pct = 9.0
+            effective_title_y_pct = 10.5
         elif title_line_count == 2 and (title_y_percent is None or title_y_percent == 14.0):
-            effective_title_y_pct = 11.0
+            effective_title_y_pct = 13.5
         else:
-            effective_title_y_pct = title_y_percent if title_y_percent is not None else 13.0
+            effective_title_y_pct = title_y_percent if title_y_percent is not None else 13.5
         title_y = max(20, min(1800, int(1920 * (effective_title_y_pct / 100.0))))
 
         if subtitle_position_mode == "center":
             sub_y = max(60, min(1860, int(1920 * (subtitle_center_y_percent / 100.0))))
         else:
-            effective_sub_y_pct = subtitle_y_percent if subtitle_y_percent is not None else 18.0
+            # Bottom subtitle moved middle a bit (closer to center, ~21% from bottom)
+            effective_sub_y_pct = subtitle_y_percent if subtitle_y_percent is not None else 21.0
             sub_y = max(60, min(1880, int(1920 * (1.0 - (effective_sub_y_pct / 100.0)))))
 
     # Preset color schemes (ASS uses &HAABBGGRR in hex)
@@ -861,7 +861,7 @@ def build_ffmpeg_filtergraph(
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=0:352[layout_base]"
                 )
             else:
@@ -877,7 +877,7 @@ def build_ffmpeg_filtergraph(
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=60:0[layout_base]"
                 )
             else:
@@ -893,7 +893,7 @@ def build_ffmpeg_filtergraph(
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=0:150[layout_base]"
                 )
             else:
@@ -909,7 +909,7 @@ def build_ffmpeg_filtergraph(
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=270:0[layout_base]"
                 )
             else:
@@ -927,7 +927,7 @@ def build_ffmpeg_filtergraph(
             if background_style == "blurred":
                 filters.append(
                     f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
-                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[main_raw]{crop_main}[fg_square];"
                     f"[bg_blurred][fg_square]overlay=0:420[main_base];"
                     f"{pip_crop}"
@@ -947,7 +947,7 @@ def build_ffmpeg_filtergraph(
             if background_style == "blurred":
                 filters.append(
                     f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
-                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[main_raw]{crop_main}[fg_43];"
                     f"[bg_blurred][fg_43]overlay=0:555[main_base];"
                     f"{pip_crop}"
@@ -967,7 +967,7 @@ def build_ffmpeg_filtergraph(
             if background_style == "blurred":
                 filters.append(
                     f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
-                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                    f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[main_raw]{crop_main}[fg_169];"
                     f"[bg_blurred][fg_169]overlay=0:656[main_base];"
                     f"{pip_crop}"
@@ -1007,7 +1007,7 @@ def build_ffmpeg_filtergraph(
         if background_style == "blurred":
             filters.append(
                 f"[0:v]split=2[bg_raw][fg_raw];"
-                f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                 f"[fg_raw]{crop_11}[fg_square];"
                 f"[bg_blurred][fg_square]overlay=0:420[layout_base]"
             )
@@ -1023,7 +1023,7 @@ def build_ffmpeg_filtergraph(
         if background_style == "blurred":
             filters.append(
                 f"[0:v]split=2[bg_raw][fg_raw];"
-                f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                 f"[fg_raw]{crop_43}[fg_43];"
                 f"[bg_blurred][fg_43]overlay=0:555[layout_base]"
             )
@@ -1039,7 +1039,7 @@ def build_ffmpeg_filtergraph(
         if background_style == "blurred":
             filters.append(
                 f"[0:v]split=2[bg_raw][fg_raw];"
-                f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=25:5[bg_blurred];"
+                f"[bg_raw]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                 f"[fg_raw]{crop_169}[fg_169];"
                 f"[bg_blurred][fg_169]overlay=0:656[layout_base]"
             )
@@ -1076,6 +1076,22 @@ def build_ffmpeg_filtergraph(
     return full_filter_str, current_v
 
 
+def check_has_audio(video_path: str) -> bool:
+    """Checks if the video file contains a readable audio stream."""
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "a",
+            "-show_entries", "stream=codec_type",
+            "-of", "csv=p=0",
+            str(video_path)
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=8)
+        return bool(res.stdout and res.stdout.strip())
+    except Exception:
+        return True
+
+
 def render_clip_to_mp4(
     video_path: str,
     output_mp4_path: str,
@@ -1085,16 +1101,38 @@ def render_clip_to_mp4(
     streamer_preset: str = "none",
     title_text: Optional[str] = None,
     title_position: str = "auto",
-    ass_subtitles_path: Optional[str] = None
+    ass_subtitles_path: Optional[str] = None,
+    clip_duration: float = 30.0,
+    # Watermark options
+    watermark_enabled: bool = False,
+    watermark_type: str = "image",
+    watermark_image_path: Optional[str] = None,
+    watermark_text: Optional[str] = None,
+    watermark_size: float = 20.0,
+    watermark_opacity: float = 0.8,
+    watermark_x_percent: float = 90.0,
+    watermark_y_percent: float = 8.0,
+    # Background Music options
+    bgm_enabled: bool = False,
+    bgm_path: Optional[str] = None,
+    bgm_volume: float = 0.25,
+    bgm_start_offset: float = 0.0,
+    # Hook SFX options (plays at frame 0)
+    hook_sfx_enabled: bool = False,
+    hook_sfx_path: Optional[str] = None,
+    hook_sfx_volume: float = 1.0,
+    # Raw voice / original audio boost (0.0 to 2.0)
+    original_audio_volume: float = 1.0
 ) -> str:
     """
-    Renders the final 1080x1920 short-form video with layout, aspect ratio, titles, and subtitles.
+    Renders the final 1080x1920 short-form video with layout, aspect ratio, titles, subtitles,
+    watermark branding, background music with start offset, and hook sound effect at frame 0.
     """
     face_box = {"found": False, "cx": 0.5, "cy": 0.35, "w": 0.25, "h": 0.25}
     if enable_face_tracking or streamer_preset in ["pip_corner", "split_top_cam"]:
         face_box = detect_speaker_face_box(video_path)
 
-    filter_complex, out_map = build_ffmpeg_filtergraph(
+    filter_complex, out_video_map = build_ffmpeg_filtergraph(
         aspect_ratio=aspect_ratio,
         background_style=background_style,
         face_center_ratio=float(face_box.get("cx", 0.5)),
@@ -1105,23 +1143,130 @@ def render_clip_to_mp4(
         face_box=face_box
     )
 
+    filter_chains = [filter_complex]
+    extra_input_args = []
+    input_idx_counter = 1
+
+    # 1. Apply Watermark Overlay
+    if watermark_enabled and float(watermark_size) > 0:
+        wm_opacity = max(0.05, min(1.0, float(watermark_opacity)))
+        wm_x_ratio = max(-1.0, min(2.0, float(watermark_x_percent) / 100.0))
+        wm_y_ratio = max(-1.0, min(2.0, float(watermark_y_percent) / 100.0))
+
+        if watermark_type == "image" and watermark_image_path and os.path.exists(watermark_image_path):
+            wm_idx = input_idx_counter
+            input_idx_counter += 1
+            extra_input_args.extend(["-i", str(watermark_image_path)])
+
+            # Canvas width is 1080. Calculate watermark width based on percentage (0-500%)
+            wm_w = max(16, min(5400, int(1080 * (float(watermark_size) / 100.0))))
+            wm_prep = f"[{wm_idx}:v]format=rgba,colorchannelmixer=aa={wm_opacity:.2f},scale={wm_w}:-1[wm_proc]"
+            filter_chains.append(wm_prep)
+
+            # Center-based positioning: (X%, Y%) represents the center anchor point on the canvas.
+            # This ensures full 100% travel range across the canvas regardless of watermark size.
+            overlay_cmd = (
+                f"{out_video_map}[wm_proc]overlay="
+                f"x='main_w*{wm_x_ratio:.4f}-overlay_w/2':"
+                f"y='main_h*{wm_y_ratio:.4f}-overlay_h/2':eval=init[v_watermarked]"
+            )
+            filter_chains.append(overlay_cmd)
+            out_video_map = "[v_watermarked]"
+
+        elif watermark_text and watermark_text.strip():
+            clean_text = watermark_text.replace("'", "").replace(":", "\\:").replace("%", "").strip()
+            # Font size scaled smoothly across 0-500% range: 20% -> 36px, 100% -> 180px, 500% -> 900px
+            wm_font_size = max(10, min(900, int(180 * (float(watermark_size) / 100.0))))
+            # Center-based positioning: text anchor is centered at (X%, Y%) coordinates on the canvas
+            overlay_x_expr = f"w*{wm_x_ratio:.4f}-text_w/2"
+            overlay_y_expr = f"h*{wm_y_ratio:.4f}-text_h/2"
+            drawtext_cmd = (
+                f"{out_video_map}drawtext=text='{clean_text}':fontsize={wm_font_size}:"
+                f"fontcolor=white@{wm_opacity:.2f}:borderw=2:bordercolor=black@{wm_opacity:.2f}:"
+                f"x='{overlay_x_expr}':y='{overlay_y_expr}'[v_watermarked]"
+            )
+            filter_chains.append(drawtext_cmd)
+            out_video_map = "[v_watermarked]"
+
+    # 2. Audio Processing (Original Audio with Boost, BGM with start offset, and Hook SFX at frame 0)
+    audio_inputs_to_mix = []
+    has_orig_audio = check_has_audio(video_path)
+    if has_orig_audio:
+        orig_vol = max(0.0, min(2.0, float(original_audio_volume)))
+        if abs(orig_vol - 1.0) > 0.01:
+            filter_chains.append(f"[0:a:0]volume={orig_vol:.3f}[v_orig_boosted]")
+            audio_inputs_to_mix.append("[v_orig_boosted]")
+        else:
+            audio_inputs_to_mix.append("[0:a:0]")
+
+    dur = max(1.0, float(clip_duration))
+
+    # BGM input with start offset & looping
+    if bgm_enabled and bgm_path and os.path.exists(bgm_path):
+        bgm_idx = input_idx_counter
+        input_idx_counter += 1
+        offset_sec = max(0.0, float(bgm_start_offset))
+        if offset_sec > 0.0:
+            extra_input_args.extend(["-ss", f"{offset_sec:.2f}"])
+        extra_input_args.extend(["-stream_loop", "-1", "-i", str(bgm_path)])
+
+        vol = max(0.0, min(1.0, float(bgm_volume)))
+        fade_st = max(0.0, dur - 1.5)
+        filter_chains.append(
+            f"[{bgm_idx}:a]asetpts=PTS-STARTPTS,volume={vol:.3f},afade=t=out:st={fade_st:.2f}:d=1.5[bgm_proc]"
+        )
+        audio_inputs_to_mix.append("[bgm_proc]")
+
+    # Hook SFX input placed at the very first frame (t=0)
+    if hook_sfx_enabled and hook_sfx_path and os.path.exists(hook_sfx_path):
+        sfx_idx = input_idx_counter
+        input_idx_counter += 1
+        extra_input_args.extend(["-i", str(hook_sfx_path)])
+
+        sfx_vol = max(0.0, min(2.0, float(hook_sfx_volume)))
+        filter_chains.append(
+            f"[{sfx_idx}:a]asetpts=PTS-STARTPTS,atrim=end={dur:.2f},volume={sfx_vol:.3f}[sfx_proc]"
+        )
+        audio_inputs_to_mix.append("[sfx_proc]")
+
+    # Mix audio streams together
+    if len(audio_inputs_to_mix) > 1:
+        mix_inputs_str = "".join(audio_inputs_to_mix)
+        filter_chains.append(
+            f"{mix_inputs_str}amix=inputs={len(audio_inputs_to_mix)}:duration=first:dropout_transition=2:normalize=0[a_final]"
+        )
+        out_audio_map = "[a_final]"
+    elif len(audio_inputs_to_mix) == 1:
+        single_stream = audio_inputs_to_mix[0]
+        if single_stream == "[0:a:0]":
+            out_audio_map = "0:a:0"
+        else:
+            filter_chains.append(f"{single_stream}anull[a_final]")
+            out_audio_map = "[a_final]"
+    else:
+        out_audio_map = "0:a:0?"
+
+    final_filter_complex = ";".join(filter_chains)
+
     # Choose video encoder (NVENC or libx264)
     v_codec_args = ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"] if USE_NVENC else ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22"]
 
     cmd = [
         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
         "-i", str(video_path),
-        "-filter_complex", filter_complex,
-        "-map", out_map,
-        "-map", "0:a:0?",
+        *extra_input_args,
+        "-filter_complex", final_filter_complex,
+        "-map", out_video_map,
+        "-map", out_audio_map,
         *v_codec_args,
         "-c:a", "aac", "-b:a", "192k",
         "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
+        "-shortest",
         str(output_mp4_path)
     ]
 
-    logger.info(f"Rendering final vertical clip to {output_mp4_path}...")
+    logger.info(f"Rendering final vertical clip to {output_mp4_path} (BGM: {bgm_enabled}, Watermark: {watermark_enabled})...")
     res = subprocess.run(cmd, capture_output=True, text=True, timeout=180)
     if res.returncode != 0:
         logger.error(f"FFmpeg render error: {res.stderr}")

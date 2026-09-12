@@ -202,6 +202,26 @@ export default function App() {
             subtitle_position_mode: settings.subtitlePositionMode || 'bottom',
             subtitle_center_y_percent: settings.subtitleCenterYPercent !== undefined ? settings.subtitleCenterYPercent : 50.0,
             title_duration: settings.titleDuration || 'entire',
+            // Background Music
+            bgm_enabled: settings.bgmEnabled || false,
+            bgm_file_path: settings.bgmFilePath || null,
+            bgm_volume: settings.bgmVolume !== undefined ? settings.bgmVolume : 25.0,
+            bgm_start_offset: settings.bgmStartOffset || 0.0,
+            // Hook SFX
+            hook_sfx_enabled: settings.hookSfxEnabled || false,
+            hook_sfx_file_path: settings.hookSfxFilePath || null,
+            hook_sfx_volume: settings.hookSfxVolume !== undefined ? settings.hookSfxVolume : 100.0,
+            // Raw Voice Audio Boost
+            original_audio_volume: settings.originalAudioVolume !== undefined ? settings.originalAudioVolume : 100.0,
+            // Watermark
+            watermark_enabled: settings.watermarkEnabled || false,
+            watermark_type: settings.watermarkType || 'image',
+            watermark_file_path: settings.watermarkFilePath || null,
+            watermark_text: settings.watermarkText || null,
+            watermark_size: settings.watermarkSize !== undefined ? settings.watermarkSize : 20.0,
+            watermark_opacity: settings.watermarkOpacity !== undefined ? settings.watermarkOpacity : 80.0,
+            watermark_x: settings.watermarkX !== undefined ? settings.watermarkX : 90.0,
+            watermark_y: settings.watermarkY !== undefined ? settings.watermarkY : 8.0,
           },
           transcript: result.transcript,
         }),
@@ -281,12 +301,10 @@ export default function App() {
   const loadingSectionRef = useRef<HTMLElement | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isClearingGlobalTemp, setIsClearingGlobalTemp] = useState<boolean>(false);
+  const [showGlobalClearModal, setShowGlobalClearModal] = useState<boolean>(false);
 
-  const handleGlobalClearTemp = async () => {
+  const executeGlobalClearTemp = async () => {
     if (isClearingGlobalTemp) return;
-    if (!window.confirm(t.header.confirmClearTemp)) {
-      return;
-    }
     setIsClearingGlobalTemp(true);
     try {
       const resp = await fetch('/api/clear-temp', { method: 'POST' });
@@ -304,6 +322,7 @@ export default function App() {
       setTimeout(() => setToastMessage(null), 3000);
     } finally {
       setIsClearingGlobalTemp(false);
+      setShowGlobalClearModal(false);
     }
   };
   const [copyTimestampMenuTarget, setCopyTimestampMenuTarget] = useState<'toolbar' | 'overview' | null>(null);
@@ -1505,7 +1524,7 @@ Transcript:
           <button
             type="button"
             className="cookie-header-btn"
-            onClick={handleGlobalClearTemp}
+            onClick={() => setShowGlobalClearModal(true)}
             disabled={isClearingGlobalTemp}
             style={{
               padding: '0.45rem 0.85rem',
@@ -3279,6 +3298,61 @@ Transcript:
         onClose={() => setIsCookiesModalOpen(false)}
         onCookieStatusChange={setHasCookies}
       />
+
+      {/* Global Fancy Clear Temp Confirmation Modal */}
+      {showGlobalClearModal && (
+        <div className="custom-confirm-modal-overlay">
+          <div className="custom-confirm-modal-card">
+            <div className="confirm-modal-icon-wrap">
+              🧹
+            </div>
+            <h3 className="confirm-modal-title">{t.studio.confirmModalTitle}</h3>
+            <p className="confirm-modal-desc" style={{ marginBottom: '1rem' }}>
+              {t.studio.confirmModalDesc}
+            </p>
+            <div style={{
+              width: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.5rem',
+              margin: '0 0 1.5rem 0',
+              padding: '0.85rem 1rem',
+              borderRadius: '10px',
+              background: 'rgba(255, 255, 255, 0.04)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              textAlign: 'left',
+              fontSize: '0.78rem'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#4ade80' }}>
+                <span>✓</span>
+                <strong>{t.studio.confirmModalNotice}</strong>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#38bdf8' }}>
+                <span>🛡️</span>
+                <strong>{t.header.confirmModalCookieNotice}</strong>
+              </div>
+            </div>
+            <div className="confirm-modal-actions">
+              <button
+                type="button"
+                className="btn-confirm-cancel"
+                onClick={() => setShowGlobalClearModal(false)}
+                disabled={isClearingGlobalTemp}
+              >
+                {t.studio.cancelBtn}
+              </button>
+              <button
+                type="button"
+                className="btn-confirm-purge"
+                onClick={executeGlobalClearTemp}
+                disabled={isClearingGlobalTemp}
+              >
+                {isClearingGlobalTemp ? t.studio.purgingBtn : t.studio.purgeBtn}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

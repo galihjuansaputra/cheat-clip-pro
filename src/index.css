@@ -49,7 +49,11 @@ body {
   background-attachment: fixed;
   min-height: 100vh;
   color: var(--text-primary);
-  overflow-x: hidden;
+  min-width: 1200px;
+}
+
+#root {
+  min-width: 1200px;
 }
 
 /* Custom Scrollbar */
@@ -1563,6 +1567,14 @@ label[for="manual-subtitle-file"]:hover {
   overflow: hidden;
   position: relative;
   background: #000;
+  flex-shrink: 0;
+  width: 320px;
+  height: 569px;
+  min-width: 320px;
+  max-width: 320px;
+  min-height: 569px;
+  max-height: 569px;
+  box-sizing: border-box;
 }
 
 .wireframe-bg {
@@ -1923,12 +1935,12 @@ label[for="manual-subtitle-file"]:hover {
   color: #ffffff;
   padding: 0.22rem 0.6rem;
   border-radius: 4px;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.02em;
   white-space: pre-line;
-  line-height: 1.25;
-  max-width: 94%;
+  line-height: 1.08;
+  max-width: 96%;
   display: inline-block;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.95);
 }
 
 /* Caption Overlay in Wireframe - Strictly 1 Single Line */
@@ -2000,6 +2012,18 @@ label[for="manual-subtitle-file"]:hover {
   font-weight: 700;
   border-radius: 10px;
   cursor: pointer;
+}
+
+.studio-btn-render:disabled,
+.studio-btn-render.big-render-cta:disabled {
+  opacity: 0.45 !important;
+  cursor: not-allowed !important;
+  filter: grayscale(0.85) !important;
+  transform: none !important;
+  box-shadow: none !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  color: #94a3b8 !important;
 }
 
 /* ============================================================
@@ -2418,7 +2442,7 @@ label[for="manual-subtitle-file"]:hover {
   border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03);
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 
 /* Glowing top accent gradient line */
@@ -2430,6 +2454,7 @@ label[for="manual-subtitle-file"]:hover {
   right: 0;
   height: 3px;
   background: linear-gradient(90deg, #ff5e3a 0%, #a855f7 50%, #3b82f6 100%);
+  border-radius: 20px 20px 0 0;
 }
 
 .studio-section-header {
@@ -2475,6 +2500,7 @@ label[for="manual-subtitle-file"]:hover {
   letter-spacing: -0.02em;
   background: linear-gradient(135deg, #ffffff 40%, #ffc0a8 100%);
   -webkit-background-clip: text;
+  background-clip: text;
   -webkit-text-fill-color: transparent;
   margin: 0;
 }
@@ -2703,16 +2729,24 @@ label[for="manual-subtitle-file"]:hover {
   display: flex;
   flex-direction: column;
   align-items: center;
+  position: -webkit-sticky;
+  position: sticky;
+  top: 1.5rem;
+  align-self: start;
+  z-index: 20;
+  flex-shrink: 0;
+  min-width: 340px;
+  max-width: 340px;
 }
 
 .preview-sticky-wrap {
-  position: sticky;
-  top: 1rem;
+  position: relative;
+  width: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 0.65rem;
-  max-height: calc(100vh - 2rem);
+  max-height: calc(100vh - 2.5rem);
   overflow-y: auto;
   overflow-x: hidden;
   scrollbar-width: thin;
@@ -3433,13 +3467,96 @@ label[for="manual-subtitle-file"]:hover {
 .studio-batch-queue-card {
   background: rgba(13, 17, 23, 0.95);
   border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
-  padding: 0.75rem 0.95rem;
+  border-radius: 14px;
+  padding: 0.85rem 1rem;
   width: 100%;
   max-width: 320px;
   box-sizing: border-box;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
   animation: fadeIn 0.2s ease;
+  transition: all 0.3s ease;
+}
+
+.studio-batch-queue-card.is-processing {
+  border: 1px solid rgba(255, 94, 58, 0.6);
+  box-shadow: 0 0 25px rgba(255, 94, 58, 0.3), 0 8px 32px rgba(0, 0, 0, 0.6);
+  animation: studioQueuePulse 2.2s infinite alternate ease-in-out;
+}
+
+@keyframes studioQueuePulse {
+  0% {
+    border-color: rgba(255, 94, 58, 0.45);
+    box-shadow: 0 0 16px rgba(255, 94, 58, 0.2), 0 6px 24px rgba(0, 0, 0, 0.6);
+  }
+  100% {
+    border-color: rgba(255, 42, 95, 0.85);
+    box-shadow: 0 0 32px rgba(255, 42, 95, 0.45), 0 10px 36px rgba(0, 0, 0, 0.75);
+  }
+}
+
+.batch-engine-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  color: #ff5e3a;
+  background: rgba(255, 94, 58, 0.12);
+  border: 1px solid rgba(255, 94, 58, 0.35);
+  border-radius: 6px;
+  padding: 0.15rem 0.45rem;
+  animation: pulseIndicator 1.5s infinite alternate ease-in-out;
+}
+
+@keyframes pulseIndicator {
+  0% { opacity: 0.75; transform: scale(0.98); }
+  100% { opacity: 1; transform: scale(1.02); }
+}
+
+/* Number Input Badge for Slider Controls */
+.slider-input-badge-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  padding: 0.1rem 0.35rem;
+  transition: all 0.15s ease;
+}
+
+.slider-input-badge-wrap:focus-within {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.3);
+}
+
+.slider-number-input {
+  width: 44px;
+  background: transparent;
+  border: none;
+  color: #38bdf8;
+  font-family: 'Outfit', monospace, sans-serif;
+  font-weight: 700;
+  font-size: 0.74rem;
+  text-align: right;
+  outline: none;
+  padding: 0;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.slider-number-input::-webkit-outer-spin-button,
+.slider-number-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.slider-input-badge-wrap .unit-label {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: var(--text-muted);
 }
 
 .studio-batch-queue-card .batch-progress-header {
@@ -3577,5 +3694,203 @@ label[for="manual-subtitle-file"]:hover {
   filter: brightness(1.1);
   transform: translateY(-1px);
 }
+
+/* ==========================================================================
+   Background Music (BGM) & Watermark Controls
+   ========================================================================== */
+
+.bgm-dropzone,
+.bgm-upload-dropzone {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 1rem 1.25rem;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1.5px dashed rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.bgm-dropzone:hover,
+.bgm-upload-dropzone:hover {
+  background: rgba(168, 85, 247, 0.06);
+  border-color: rgba(168, 85, 247, 0.45);
+  box-shadow: 0 0 16px rgba(168, 85, 247, 0.15);
+}
+
+.bgm-dropzone.drag-over,
+.bgm-upload-dropzone.drag-over {
+  background: rgba(168, 85, 247, 0.14) !important;
+  border-color: #c084fc !important;
+  border-style: solid !important;
+  box-shadow: 0 0 24px rgba(168, 85, 247, 0.35) !important;
+  transform: scale(1.008);
+}
+
+.dropzone-icon {
+  font-size: 1.7rem;
+  flex-shrink: 0;
+}
+
+.dropzone-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.dropzone-main-text {
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.dropzone-sub-text {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+.bgm-active-file-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.7rem 0.9rem;
+  background: rgba(168, 85, 247, 0.08);
+  border: 1px solid rgba(168, 85, 247, 0.25);
+  border-radius: 10px;
+  gap: 0.8rem;
+}
+
+.bgm-info {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.bgm-icon {
+  font-size: 1.3rem;
+  flex-shrink: 0;
+}
+
+.bgm-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+.bgm-filename {
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #ffffff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bgm-status-tag {
+  font-size: 0.68rem;
+  color: #10b981;
+  font-weight: 600;
+}
+
+.bgm-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-shrink: 0;
+}
+
+.bgm-preview-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  font-size: 0.82rem;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.bgm-preview-btn:hover {
+  background: var(--primary);
+  border-color: var(--primary);
+  box-shadow: 0 0 10px var(--primary-glow);
+}
+
+.bgm-remove-btn {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #ef4444;
+  font-size: 0.82rem;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.bgm-remove-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  border-color: #ef4444;
+  color: #ffffff;
+}
+
+.bgm-hint-text {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-top: 0.4rem;
+  line-height: 1.4;
+}
+
+/* Watermark styles */
+.watermark-controls-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-top: 0.65rem;
+}
+
+.wireframe-watermark-overlay {
+  position: absolute;
+  z-index: 25;
+  transition: opacity 0.15s ease;
+  user-select: none;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.wireframe-watermark-overlay img {
+  filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.8));
+  user-select: none;
+}
+
+.wireframe-watermark-overlay .wm-text-badge {
+  font-family: 'Outfit', sans-serif;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  color: #ffffff;
+  text-shadow: 0 0 3px #000, 0 2px 4px rgba(0, 0, 0, 0.95);
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  white-space: nowrap;
+  user-select: none;
+  backdrop-filter: blur(4px);
+}
+
 
 

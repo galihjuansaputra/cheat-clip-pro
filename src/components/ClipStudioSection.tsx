@@ -58,8 +58,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [textCase, setTextCase] = useState<TextCaseOption>('uppercase');
 
   // Manual Up/Down positioning for All Formats
-  const [titleYPercent, setTitleYPercent] = useState<number>(14);
-  const [subtitleYPercent, setSubtitleYPercent] = useState<number>(18);
+  const [titleYPercent, setTitleYPercent] = useState<number>(17);
+  const [subtitleYPercent, setSubtitleYPercent] = useState<number>(21);
   const [subtitlePositionMode, setSubtitlePositionMode] = useState<SubtitlePositionMode>('bottom');
   const [subtitleCenterYPercent, setSubtitleCenterYPercent] = useState<number>(50);
   const [isCustomTitleY, setIsCustomTitleY] = useState<boolean>(false);
@@ -67,6 +67,48 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [isClearingTemp, setIsClearingTemp] = useState<boolean>(false);
   const [tempClearMsg, setTempClearMsg] = useState<string>('');
   const [showClearConfirmModal, setShowClearConfirmModal] = useState<boolean>(false);
+
+  // Original Voice Audio Boost (0% - 200%, default 100%)
+  const [originalAudioVolume, setOriginalAudioVolume] = useState<number>(100);
+
+  // Background Music (BGM) state
+  const [bgmEnabled, setBgmEnabled] = useState<boolean>(false);
+  const [bgmFileName, setBgmFileName] = useState<string>('');
+  const [bgmFilePath, setBgmFilePath] = useState<string>('');
+  const [bgmAudioUrl, setBgmAudioUrl] = useState<string>('');
+  const [bgmVolume, setBgmVolume] = useState<number>(25);
+  const [bgmDuration, setBgmDuration] = useState<number>(0);
+  const [bgmStartOffset, setBgmStartOffset] = useState<number>(0);
+  const [isBgmPlaying, setIsBgmPlaying] = useState<boolean>(false);
+  const [isUploadingBgm, setIsUploadingBgm] = useState<boolean>(false);
+  const [isBgmDragging, setIsBgmDragging] = useState<boolean>(false);
+  const bgmAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Hook Sound Effect (SFX) state
+  const [hookSfxEnabled, setHookSfxEnabled] = useState<boolean>(false);
+  const [hookSfxFileName, setHookSfxFileName] = useState<string>('');
+  const [hookSfxFilePath, setHookSfxFilePath] = useState<string>('');
+  const [hookSfxAudioUrl, setHookSfxAudioUrl] = useState<string>('');
+  const [hookSfxVolume, setHookSfxVolume] = useState<number>(100);
+  const [isHookSfxPlaying, setIsHookSfxPlaying] = useState<boolean>(false);
+  const [isUploadingHookSfx, setIsUploadingHookSfx] = useState<boolean>(false);
+  const [isHookSfxDragging, setIsHookSfxDragging] = useState<boolean>(false);
+  const hookSfxAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  // Watermark state & default configs
+  const [watermarkEnabled, setWatermarkEnabled] = useState<boolean>(false);
+  const [watermarkType, setWatermarkType] = useState<'image' | 'text'>('image');
+  const [watermarkImageFileName, setWatermarkImageFileName] = useState<string>('');
+  const [watermarkImageFilePath, setWatermarkImageFilePath] = useState<string>('');
+  const [watermarkImageUrl, setWatermarkImageUrl] = useState<string>('');
+  const [watermarkText, setWatermarkText] = useState<string>('');
+  const [watermarkSize, setWatermarkSize] = useState<number>(20);
+  const [watermarkOpacity, setWatermarkOpacity] = useState<number>(80);
+  const [watermarkX, setWatermarkX] = useState<number>(88);
+  const [watermarkY, setWatermarkY] = useState<number>(8);
+  const [isUploadingWatermark, setIsUploadingWatermark] = useState<boolean>(false);
+  const [isWatermarkDragging, setIsWatermarkDragging] = useState<boolean>(false);
+  const phoneContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Playable video player state
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
@@ -86,6 +128,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   const previewPlayerRef = useRef<any>(null);
   const directVideoRef = useRef<HTMLVideoElement | null>(null);
+  const ambientVideoRef = useRef<HTMLVideoElement | null>(null);
   const trackingTimerRef = useRef<number | null>(null);
 
   // Keep selectedClips in sync if markedClips updates from outside (including 0 clips)
@@ -244,11 +287,16 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           const t = directVideoRef.current.currentTime;
           if (typeof t === 'number' && !isNaN(t)) {
             setCurrentTime(t);
+            if (ambientVideoRef.current && Math.abs(ambientVideoRef.current.currentTime - t) > 0.3) {
+              ambientVideoRef.current.currentTime = t;
+            }
             if (currentPreviewClip && t >= currentPreviewClip.end_time) {
               if (isLooping) {
                 directVideoRef.current.currentTime = currentPreviewClip.start_time;
+                if (ambientVideoRef.current) ambientVideoRef.current.currentTime = currentPreviewClip.start_time;
               } else {
                 directVideoRef.current.pause();
+                if (ambientVideoRef.current) ambientVideoRef.current.pause();
                 setIsPlaying(false);
               }
             }
@@ -287,6 +335,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       } catch (e) {}
     } else if (directVideoRef.current) {
       directVideoRef.current.currentTime = clipStart;
+      if (ambientVideoRef.current) ambientVideoRef.current.currentTime = clipStart;
     }
   }, [previewClipIndex, clipStart]);
 
@@ -305,12 +354,15 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     } else if (directVideoRef.current) {
       if (isPlaying) {
         directVideoRef.current.pause();
+        if (ambientVideoRef.current) ambientVideoRef.current.pause();
         setIsPlaying(false);
       } else {
         if (currentPreviewClip && (currentTime >= currentPreviewClip.end_time || currentTime < currentPreviewClip.start_time)) {
           directVideoRef.current.currentTime = currentPreviewClip.start_time;
+          if (ambientVideoRef.current) ambientVideoRef.current.currentTime = currentPreviewClip.start_time;
         }
         directVideoRef.current.play();
+        if (ambientVideoRef.current) ambientVideoRef.current.play().catch(() => {});
         setIsPlaying(true);
         startTracking();
       }
@@ -325,6 +377,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       } catch (e) {}
     } else if (directVideoRef.current) {
       directVideoRef.current.currentTime = newTime;
+      if (ambientVideoRef.current) ambientVideoRef.current.currentTime = newTime;
     }
   };
 
@@ -402,10 +455,278 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     }
   };
 
+  // Background Music handlers
+  const uploadBgmFile = async (file: File) => {
+    if (!file) return;
+    setIsUploadingBgm(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/upload-bgm', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Failed to upload background music');
+      }
+      const data = await res.json();
+      setBgmFileName(data.filename || file.name);
+      setBgmFilePath(data.file_path);
+      setBgmAudioUrl(data.url);
+      setBgmEnabled(true);
+    } catch (err) {
+      console.error('BGM upload error:', err);
+      alert('Failed to upload background music file. Please try an MP3, WAV, or M4A file.');
+    } finally {
+      setIsUploadingBgm(false);
+    }
+  };
+
+  const handleBgmUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) uploadBgmFile(file);
+    e.target.value = '';
+  };
+
+  const handleBgmLoadedMetadata = () => {
+    if (bgmAudioRef.current) {
+      const dur = bgmAudioRef.current.duration;
+      if (dur && !isNaN(dur)) {
+        setBgmDuration(dur);
+      }
+    }
+  };
+
+  const handleBgmStartOffsetChange = (newOffset: number) => {
+    setBgmStartOffset(newOffset);
+    if (bgmAudioRef.current) {
+      bgmAudioRef.current.currentTime = newOffset;
+    }
+  };
+
+  const handleRemoveBgm = () => {
+    if (bgmAudioRef.current) {
+      bgmAudioRef.current.pause();
+    }
+    setIsBgmPlaying(false);
+    setBgmEnabled(false);
+    setBgmFileName('');
+    setBgmFilePath('');
+    setBgmAudioUrl('');
+    setBgmDuration(0);
+    setBgmStartOffset(0);
+  };
+
+  const toggleBgmPlayback = () => {
+    if (!bgmAudioRef.current) return;
+    if (isBgmPlaying) {
+      bgmAudioRef.current.pause();
+      setIsBgmPlaying(false);
+    } else {
+      bgmAudioRef.current.currentTime = bgmStartOffset;
+      bgmAudioRef.current.volume = Math.max(0, Math.min(1, bgmVolume / 100));
+      bgmAudioRef.current.play().then(() => setIsBgmPlaying(true)).catch(console.error);
+    }
+  };
+
+  useEffect(() => {
+    if (bgmAudioRef.current) {
+      bgmAudioRef.current.volume = Math.max(0, Math.min(1, bgmVolume / 100));
+    }
+  }, [bgmVolume]);
+
+  // Hook SFX handlers
+  const uploadHookSfxFile = async (file: File) => {
+    if (!file) return;
+    setIsUploadingHookSfx(true);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/upload-sfx', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Failed to upload hook sound effect');
+      }
+      const data = await res.json();
+      setHookSfxFileName(data.filename || file.name);
+      setHookSfxFilePath(data.file_path);
+      setHookSfxAudioUrl(data.url);
+      setHookSfxEnabled(true);
+    } catch (err) {
+      console.error('SFX upload error:', err);
+      alert('Failed to upload sound effect file. Please try an MP3, WAV, or M4A file.');
+    } finally {
+      setIsUploadingHookSfx(false);
+    }
+  };
+
+  const handleHookSfxUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) uploadHookSfxFile(file);
+    e.target.value = '';
+  };
+
+  const handleRemoveHookSfx = () => {
+    if (hookSfxAudioRef.current) {
+      hookSfxAudioRef.current.pause();
+    }
+    setIsHookSfxPlaying(false);
+    setHookSfxEnabled(false);
+    setHookSfxFileName('');
+    setHookSfxFilePath('');
+    setHookSfxAudioUrl('');
+  };
+
+  const toggleHookSfxPlayback = () => {
+    if (!hookSfxAudioRef.current) return;
+    if (isHookSfxPlaying) {
+      hookSfxAudioRef.current.pause();
+      setIsHookSfxPlaying(false);
+    } else {
+      hookSfxAudioRef.current.currentTime = 0;
+      hookSfxAudioRef.current.volume = Math.max(0, Math.min(1, hookSfxVolume / 100));
+      hookSfxAudioRef.current.play().then(() => setIsHookSfxPlaying(true)).catch(console.error);
+    }
+  };
+
+  useEffect(() => {
+    if (hookSfxAudioRef.current) {
+      hookSfxAudioRef.current.volume = Math.max(0, Math.min(1, hookSfxVolume / 100));
+    }
+  }, [hookSfxVolume]);
+
+  // Watermark handlers
+  const uploadWatermarkFile = async (file: File) => {
+    if (!file) return;
+    setIsUploadingWatermark(true);
+    try {
+      const localUrl = URL.createObjectURL(file);
+      setWatermarkImageUrl(localUrl);
+      setWatermarkImageFileName(file.name);
+
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/upload-watermark', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || 'Failed to upload watermark');
+      }
+      const data = await res.json();
+      setWatermarkImageFilePath(data.file_path);
+      setWatermarkImageFileName(data.filename || file.name);
+      setWatermarkImageUrl(data.url || localUrl);
+      setWatermarkEnabled(true);
+    } catch (err) {
+      console.error('Watermark upload error:', err);
+      alert('Failed to upload watermark image.');
+    } finally {
+      setIsUploadingWatermark(false);
+    }
+  };
+
+  const handleWatermarkUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) uploadWatermarkFile(file);
+    e.target.value = '';
+  };
+
+  const handleRemoveWatermarkImage = () => {
+    setWatermarkImageFileName('');
+    setWatermarkImageFilePath('');
+    setWatermarkImageUrl('');
+  };
+
+  const getDefaultWatermarkConfig = (type: 'image' | 'text') => {
+    if (type === 'image') {
+      return {
+        size: 20,
+        opacity: 80,
+        x: 88,
+        y: 8,
+      };
+    } else {
+      return {
+        size: 20,
+        opacity: 80,
+        x: 50,
+        y: 92,
+      };
+    }
+  };
+
+  const handleSelectWatermarkType = (type: 'image' | 'text') => {
+    setWatermarkType(type);
+    const defaults = getDefaultWatermarkConfig(type);
+    setWatermarkSize(defaults.size);
+    setWatermarkOpacity(defaults.opacity);
+    setWatermarkX(defaults.x);
+    setWatermarkY(defaults.y);
+    if (type === 'text' && !watermarkText.trim()) {
+      setWatermarkText('@channel');
+    }
+  };
+
+  const handleResetWatermark = () => {
+    const defaults = getDefaultWatermarkConfig(watermarkType);
+    setWatermarkSize(defaults.size);
+    setWatermarkOpacity(defaults.opacity);
+    setWatermarkX(defaults.x);
+    setWatermarkY(defaults.y);
+    if (watermarkType === 'text' && !watermarkText.trim()) {
+      setWatermarkText('@channel');
+    }
+  };
+
+  const applyWatermarkPreset = (preset: 'tl' | 'tc' | 'tr' | 'c' | 'bl' | 'bc' | 'br') => {
+    const halfW = Math.round(watermarkSize / 2);
+    const leftX = Math.max(4, Math.min(50, halfW + 2));
+    const rightX = Math.min(96, Math.max(50, 100 - halfW - 2));
+    const topY = 8;
+    const bottomY = 92;
+
+    switch (preset) {
+      case 'tl':
+        setWatermarkX(leftX);
+        setWatermarkY(topY);
+        break;
+      case 'tc':
+        setWatermarkX(50);
+        setWatermarkY(topY);
+        break;
+      case 'tr':
+        setWatermarkX(rightX);
+        setWatermarkY(topY);
+        break;
+      case 'c':
+        setWatermarkX(50);
+        setWatermarkY(50);
+        break;
+      case 'bl':
+        setWatermarkX(leftX);
+        setWatermarkY(bottomY);
+        break;
+      case 'bc':
+        setWatermarkX(50);
+        setWatermarkY(bottomY);
+        break;
+      case 'br':
+        setWatermarkX(rightX);
+        setWatermarkY(bottomY);
+        break;
+    }
+  };
+
   const applyLetterCase = (text: string, style: TextCaseOption): string => {
     if (style === 'uppercase') return text.toUpperCase();
     if (style === 'lowercase') return text.toLowerCase();
-    return text.replace(/\b\w/g, c => c.toUpperCase());
+    return text.toLowerCase().replace(/(?:^|\s|\b)\w/g, c => c.toUpperCase());
   };
 
   /**
@@ -493,8 +814,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   ): { titleY: number; subtitleY: number; subCenterY: number } => {
     if (ratio === '1:1') {
       return {
-        titleY: lines >= 3 ? 10.3 : lines === 2 ? 12.2 : 16.5,
-        subtitleY: 18.0,
+        titleY: lines >= 3 ? 11.5 : lines === 2 ? 13.5 : 17.0,
+        subtitleY: 20.0,
         subCenterY: 50,
       };
     }
@@ -514,8 +835,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     }
     // 9:16 Fullscreen
     return {
-      titleY: lines >= 3 ? 9.5 : lines === 2 ? 11.5 : 13.5,
-      subtitleY: 18.0,
+      titleY: lines >= 3 ? 12.0 : lines === 2 ? 14.5 : 17.0,
+      subtitleY: 21.0,
       subCenterY: 50,
     };
   };
@@ -621,6 +942,29 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       subtitlePositionMode,
       subtitleCenterYPercent: safeSubCenterY,
       selectedClips,
+      // Background Music
+      bgmEnabled: bgmEnabled && !!bgmFilePath,
+      bgmFilePath,
+      bgmFileName,
+      bgmVolume,
+      bgmStartOffset,
+      // Hook SFX
+      hookSfxEnabled: hookSfxEnabled && !!hookSfxFilePath,
+      hookSfxFilePath,
+      hookSfxFileName,
+      hookSfxVolume,
+      // Watermark
+      watermarkEnabled,
+      watermarkType,
+      watermarkFilePath: watermarkImageFilePath,
+      watermarkUrl: watermarkImageUrl,
+      watermarkText,
+      watermarkSize,
+      watermarkOpacity,
+      watermarkX,
+      watermarkY,
+      // Original Voice Audio Boost
+      originalAudioVolume,
     });
   };
 
@@ -789,9 +1133,24 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             <div className="slider-control-row">
               <div className="slider-meta-header">
                 <span className="slider-label">{t.studio.titleYLabel}</span>
-                <span className="slider-value-badge">
-                  {t.studio.titleYVal(safeTitleY, titleLineCount >= 3)}
-                </span>
+                <div className="slider-input-badge-wrap">
+                  <input
+                    type="number"
+                    className="slider-number-input"
+                    min={aspectRatio === '9:16' ? 5 : 4}
+                    max={maxTitleY}
+                    step="0.5"
+                    value={safeTitleY}
+                    onChange={e => {
+                      const val = Number(e.target.value);
+                      if (!isNaN(val)) {
+                        setTitleYPercent(val);
+                        setIsCustomTitleY(true);
+                      }
+                    }}
+                  />
+                  <span className="slider-input-unit">%</span>
+                </div>
               </div>
               <div className="slider-input-wrapper">
                 <input
@@ -810,16 +1169,16 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   {aspectRatio === '9:16' ? (
                     <>
                       <button type="button" onClick={() => { setTitleYPercent(6); setIsCustomTitleY(true); }}>{t.studio.quickHigh(6)}</button>
-                      <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 9.5 : 13.5); setIsCustomTitleY(true); }}>
-                        {t.studio.quickDefault(titleLineCount >= 3 ? '9.5%' : '13.5%')}
+                      <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 12.0 : 17.0); setIsCustomTitleY(true); }}>
+                        {t.studio.quickDefault(titleLineCount >= 3 ? '12%' : '17%')}
                       </button>
-                      <button type="button" onClick={() => { setTitleYPercent(18); setIsCustomTitleY(true); }}>{t.studio.quickLower(18)}</button>
+                      <button type="button" onClick={() => { setTitleYPercent(20); setIsCustomTitleY(true); }}>{t.studio.quickLower(20)}</button>
                     </>
                   ) : aspectRatio === '1:1' ? (
                     <>
                       <button type="button" onClick={() => { setTitleYPercent(7); setIsCustomTitleY(true); }}>{t.studio.quickHigh(7)}</button>
-                      <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 10.3 : 16.5); setIsCustomTitleY(true); }}>
-                        {t.studio.quickSnugDefault(titleLineCount >= 3 ? '10.3%' : '16.5%')}
+                      <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 11.5 : 17.0); setIsCustomTitleY(true); }}>
+                        {t.studio.quickSnugDefault(titleLineCount >= 3 ? '11.5%' : '17%')}
                       </button>
                     </>
                   ) : aspectRatio === '4:3' ? (
@@ -867,7 +1226,21 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               <div className="slider-control-row" style={{ marginTop: '0.65rem' }}>
                 <div className="slider-meta-header">
                   <span className="slider-label">{t.studio.subYBottomLabel}</span>
-                  <span className="slider-value-badge">{t.studio.subYBottomVal(safeSubtitleY)}</span>
+                  <div className="slider-input-badge-wrap">
+                    <input
+                      type="number"
+                      className="slider-number-input"
+                      min={aspectRatio === '9:16' ? 5 : 6}
+                      max={maxSubY}
+                      step="0.5"
+                      value={safeSubtitleY}
+                      onChange={e => {
+                        const val = Number(e.target.value);
+                        if (!isNaN(val)) setSubtitleYPercent(val);
+                      }}
+                    />
+                    <span className="slider-input-unit">%</span>
+                  </div>
                 </div>
                 <div className="slider-input-wrapper">
                   <input
@@ -882,14 +1255,14 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   <div className="slider-quick-buttons">
                     {aspectRatio === '9:16' ? (
                       <>
-                        <button type="button" onClick={() => setSubtitleYPercent(10)}>{t.studio.quickLow(10)}</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(18)}>{t.studio.quickDefault('18%')}</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(26)}>{t.studio.quickMid(26)}</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(12)}>{t.studio.quickLow(12)}</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(21)}>{t.studio.quickDefault('21%')}</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(28)}>{t.studio.quickMid(28)}</button>
                       </>
                     ) : aspectRatio === '1:1' ? (
                       <>
-                        <button type="button" onClick={() => setSubtitleYPercent(12)}>{t.studio.quickLow(12)}</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(18)}>{t.studio.quickSnugDefault('18%')}</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(14)}>{t.studio.quickLow(14)}</button>
+                        <button type="button" onClick={() => setSubtitleYPercent(20)}>{t.studio.quickSnugDefault('20%')}</button>
                       </>
                     ) : aspectRatio === '4:3' ? (
                       <>
@@ -909,16 +1282,21 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               <div className="slider-control-row" style={{ marginTop: '0.65rem' }}>
                 <div className="slider-meta-header">
                   <span className="slider-label">{t.studio.subYCenterLabel}</span>
-                  <span className="slider-value-badge">
-                    {t.studio.subYCenterVal(
-                      safeSubCenterY,
-                      safeSubCenterY === 50
-                        ? t.studio.posDeadCenter
-                        : safeSubCenterY < 50
-                        ? t.studio.posUpper
-                        : t.studio.posLower
-                    )}
-                  </span>
+                  <div className="slider-input-badge-wrap">
+                    <input
+                      type="number"
+                      className="slider-number-input"
+                      min={minCenterY}
+                      max={maxCenterY}
+                      step="1"
+                      value={safeSubCenterY}
+                      onChange={e => {
+                        const val = Number(e.target.value);
+                        if (!isNaN(val)) setSubtitleCenterYPercent(val);
+                      }}
+                    />
+                    <span className="slider-input-unit">%</span>
+                  </div>
                 </div>
                 <div className="slider-input-wrapper">
                   <input
@@ -1212,7 +1590,639 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             )}
           </div>
 
-          {/* 6. Selected Clips Checklist */}
+          {/* 6. Background Music (BGM) */}
+          <div className="studio-card-group">
+            <div className="group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <span className="group-title">{t.studio.bgmTitle}</span>
+                {bgmFilePath && (
+                  <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={bgmEnabled}
+                      onChange={e => setBgmEnabled(e.target.checked)}
+                      style={{ accentColor: 'var(--primary)', width: '16px', height: '16px', cursor: 'pointer' }}
+                    />
+                  </label>
+                )}
+              </div>
+              <span className="group-badge" style={{ color: bgmEnabled && bgmFilePath ? '#10b981' : 'var(--text-muted)' }}>
+                {bgmEnabled && bgmFilePath ? t.studio.bgmActiveBadge : t.studio.bgmOptionalBadge}
+              </span>
+            </div>
+
+            <div className="bgm-control-card">
+              {!bgmFilePath ? (
+                <label
+                  className={`bgm-dropzone ${isBgmDragging ? 'drag-over' : ''}`}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsBgmDragging(true);
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsBgmDragging(false);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsBgmDragging(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) uploadBgmFile(file);
+                  }}
+                >
+                  <input
+                    type="file"
+                    accept=".mp3,.wav,.m4a,.aac,.ogg,.flac,audio/*"
+                    onChange={handleBgmUpload}
+                    style={{ display: 'none' }}
+                    disabled={isUploadingBgm}
+                  />
+                  <div className="dropzone-icon">{isUploadingBgm ? '⏳' : isBgmDragging ? '📥' : '🎶'}</div>
+                  <div className="dropzone-text">
+                    <span className="dropzone-main-text">
+                      {isUploadingBgm ? 'Uploading Audio...' : isBgmDragging ? t.studio.bgmDropActive : t.studio.bgmUploadMain}
+                    </span>
+                    <span className="dropzone-sub-text">{t.studio.bgmUploadSub}</span>
+                  </div>
+                </label>
+              ) : (
+                <div className="bgm-active-file-row">
+                  <div className="bgm-info">
+                    <span className="bgm-icon">🎧</span>
+                    <div className="bgm-details">
+                      <span className="bgm-filename" title={bgmFileName}>{bgmFileName}</span>
+                      <span className="bgm-status-tag">{t.studio.bgmReadyTag}</span>
+                    </div>
+                  </div>
+                  <div className="bgm-actions">
+                    {bgmAudioUrl && (
+                      <button
+                        type="button"
+                        className="bgm-preview-btn"
+                        onClick={toggleBgmPlayback}
+                        title={isBgmPlaying ? t.studio.bgmPause : t.studio.bgmPlay}
+                      >
+                        {isBgmPlaying ? '⏸' : '▶'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="bgm-remove-btn"
+                      onClick={handleRemoveBgm}
+                      title={t.studio.bgmRemoveTooltip}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Volume Slider & Quick Presets */}
+              {bgmFilePath && (
+                <div className="slider-control-item" style={{ marginTop: '0.9rem' }}>
+                  <div className="slider-label-row">
+                    <span className="slider-label">{t.studio.bgmVolumeLabel}</span>
+                    <div className="slider-input-badge-wrap">
+                      <input
+                        type="number"
+                        className="slider-number-input"
+                        min={0}
+                        max={100}
+                        value={bgmVolume}
+                        onChange={e => setBgmVolume(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+                      />
+                      <span className="slider-input-unit">%</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    className="studio-slider"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={bgmVolume}
+                    onChange={e => setBgmVolume(Number(e.target.value))}
+                  />
+                  <div className="slider-quick-buttons">
+                    <button type="button" onClick={() => setBgmVolume(10)}>10%</button>
+                    <button type="button" onClick={() => setBgmVolume(20)}>20% (Default)</button>
+                    <button type="button" onClick={() => setBgmVolume(35)}>35%</button>
+                    <button type="button" onClick={() => setBgmVolume(50)}>50%</button>
+                    <button type="button" onClick={() => setBgmVolume(80)}>80%</button>
+                  </div>
+                  {/* BGM Start Offset Selector */}
+                  <div className="slider-control-item" style={{ marginTop: '0.85rem' }}>
+                    <div className="slider-label-row">
+                      <span className="slider-label">{t.studio.bgmStartOffsetLabel}</span>
+                      <span className="slider-val-badge">
+                        {formatDuration(bgmStartOffset)} {bgmDuration > 0 ? `/ ${formatDuration(bgmDuration)}` : ''}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      className="studio-slider"
+                      min="0"
+                      max={bgmDuration > 0 ? Math.floor(bgmDuration) : 180}
+                      step="0.5"
+                      value={bgmStartOffset}
+                      onChange={e => handleBgmStartOffsetChange(Number(e.target.value))}
+                    />
+                    <div className="slider-quick-buttons" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.35rem' }}>
+                      <button type="button" onClick={() => handleBgmStartOffsetChange(0)}>{t.studio.bgmStartFromBeginning}</button>
+                      {bgmDuration > 0 ? (
+                        <>
+                          {bgmDuration > 15 && <button type="button" onClick={() => handleBgmStartOffsetChange(15)}>0:15</button>}
+                          {bgmDuration > 30 && <button type="button" onClick={() => handleBgmStartOffsetChange(30)}>0:30</button>}
+                          {bgmDuration > 45 && <button type="button" onClick={() => handleBgmStartOffsetChange(45)}>0:45</button>}
+                          {bgmDuration > 60 && <button type="button" onClick={() => handleBgmStartOffsetChange(60)}>1:00</button>}
+                          {bgmDuration > 90 && <button type="button" onClick={() => handleBgmStartOffsetChange(90)}>1:30</button>}
+                        </>
+                      ) : (
+                        <>
+                          <button type="button" onClick={() => handleBgmStartOffsetChange(15)}>0:15</button>
+                          <button type="button" onClick={() => handleBgmStartOffsetChange(30)}>0:30</button>
+                          <button type="button" onClick={() => handleBgmStartOffsetChange(60)}>1:00</button>
+                        </>
+                      )}
+                    </div>
+                    <p className="bgm-hint-text" style={{ marginTop: '0.35rem' }}>
+                      {t.studio.bgmStartOffsetHint}
+                    </p>
+                  </div>
+
+                  <p className="bgm-hint-text">{t.studio.bgmHint}</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 6. Hook Sound Effect (SFX) */}
+          <div className="studio-card-group">
+            <div className="group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <span className="group-title">{t.studio.hookSfxTitle}</span>
+                <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={hookSfxEnabled}
+                    onChange={e => setHookSfxEnabled(e.target.checked)}
+                    style={{ accentColor: 'var(--primary)', width: '16px', height: '16px', cursor: 'pointer' }}
+                  />
+                </label>
+                <span className={`status-pill ${hookSfxEnabled && hookSfxFilePath ? 'pill-active' : ''}`} style={{ fontSize: '0.68rem', padding: '0.15rem 0.5rem' }}>
+                  {hookSfxEnabled && hookSfxFilePath ? t.studio.hookSfxActiveBadge : t.studio.bgmOptionalBadge}
+                </span>
+              </div>
+            </div>
+
+            <div className="group-content" style={{ marginTop: '0.6rem' }}>
+              {!hookSfxFilePath ? (
+                <label
+                  className={`bgm-dropzone ${isHookSfxDragging ? 'drag-over' : ''}`}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsHookSfxDragging(true);
+                  }}
+                  onDragLeave={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsHookSfxDragging(false);
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setIsHookSfxDragging(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) uploadHookSfxFile(file);
+                  }}
+                >
+                  <input
+                    type="file"
+                    accept="audio/mp3,audio/wav,audio/m4a,audio/aac,audio/ogg,audio/flac,audio/mpeg,audio/*"
+                    onChange={handleHookSfxUpload}
+                    style={{ display: 'none' }}
+                    disabled={isUploadingHookSfx}
+                  />
+                  <div className="dropzone-icon">{isUploadingHookSfx ? '⏳' : isHookSfxDragging ? '📥' : '⚡'}</div>
+                  <div className="dropzone-text">
+                    <span className="dropzone-main-text">
+                      {isUploadingHookSfx ? 'Uploading SFX...' : isHookSfxDragging ? t.studio.hookSfxDropActive : t.studio.hookSfxUploadMain}
+                    </span>
+                    <span className="dropzone-sub-text">{t.studio.hookSfxUploadSub}</span>
+                  </div>
+                </label>
+              ) : (
+                <div className="bgm-active-file-row">
+                  <div className="bgm-info">
+                    <span className="bgm-icon">⚡</span>
+                    <div className="bgm-details">
+                      <span className="bgm-filename" title={hookSfxFileName}>{hookSfxFileName}</span>
+                      <span className="bgm-status-tag" style={{ background: 'rgba(234, 179, 8, 0.15)', color: '#facc15', borderColor: 'rgba(234, 179, 8, 0.3)' }}>
+                        {t.studio.hookSfxFirstFrameBadge}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="bgm-actions">
+                    {hookSfxAudioUrl && (
+                      <button
+                        type="button"
+                        className="bgm-preview-btn"
+                        onClick={toggleHookSfxPlayback}
+                        title={isHookSfxPlaying ? t.studio.hookSfxPause : t.studio.hookSfxPlay}
+                      >
+                        {isHookSfxPlaying ? '⏸' : '▶'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="bgm-remove-btn"
+                      onClick={handleRemoveHookSfx}
+                      title={t.studio.hookSfxRemoveTooltip}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Volume Slider & Presets for SFX */}
+              {hookSfxFilePath && (
+                <div className="slider-control-item" style={{ marginTop: '0.9rem' }}>
+                  <div className="slider-label-row">
+                    <span className="slider-label">{t.studio.hookSfxVolumeLabel}</span>
+                    <div className="slider-input-badge-wrap">
+                      <input
+                        type="number"
+                        className="slider-number-input"
+                        min={0}
+                        max={150}
+                        value={hookSfxVolume}
+                        onChange={e => setHookSfxVolume(Math.max(0, Math.min(150, Number(e.target.value) || 0)))}
+                      />
+                      <span className="slider-input-unit">%</span>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    className="studio-slider"
+                    min="0"
+                    max="150"
+                    step="5"
+                    value={hookSfxVolume}
+                    onChange={e => setHookSfxVolume(Number(e.target.value))}
+                  />
+                  <div className="slider-quick-buttons">
+                    <button type="button" onClick={() => setHookSfxVolume(50)}>50%</button>
+                    <button type="button" onClick={() => setHookSfxVolume(80)}>80%</button>
+                    <button type="button" onClick={() => setHookSfxVolume(100)}>100% (Default)</button>
+                    <button type="button" onClick={() => setHookSfxVolume(125)}>125% (Punchy)</button>
+                  </div>
+                  <p className="bgm-hint-text">{t.studio.hookSfxHint}</p>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 7. Original Clip Voice Audio Boost */}
+          <div className="studio-card-group">
+            <div className="group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <span className="group-title">{t.studio.rawAudioTitle}</span>
+                <span className={`status-pill ${originalAudioVolume > 100 ? 'pill-active' : ''}`} style={{ fontSize: '0.68rem', padding: '0.15rem 0.5rem' }}>
+                  {originalAudioVolume > 100 ? `⚡ Boosted (${originalAudioVolume}%)` : `${originalAudioVolume}% Volume`}
+                </span>
+              </div>
+            </div>
+
+            <div className="group-content" style={{ marginTop: '0.6rem' }}>
+              <div className="slider-control-item">
+                <div className="slider-label-row">
+                  <span className="slider-label">{t.studio.rawAudioVolumeLabel}</span>
+                  <div className="slider-input-badge-wrap">
+                    <input
+                      type="number"
+                      className="slider-number-input"
+                      min={0}
+                      max={200}
+                      step={5}
+                      value={originalAudioVolume}
+                      onChange={e => setOriginalAudioVolume(Math.max(0, Math.min(200, Number(e.target.value) || 0)))}
+                    />
+                    <span className="slider-input-unit">%</span>
+                  </div>
+                </div>
+                <input
+                  type="range"
+                  className="studio-slider"
+                  min="0"
+                  max="200"
+                  step="5"
+                  value={originalAudioVolume}
+                  onChange={e => setOriginalAudioVolume(Number(e.target.value))}
+                />
+                <div className="slider-quick-buttons">
+                  <button type="button" onClick={() => setOriginalAudioVolume(50)}>50%</button>
+                  <button type="button" onClick={() => setOriginalAudioVolume(80)}>80%</button>
+                  <button type="button" onClick={() => setOriginalAudioVolume(100)}>100% (Normal)</button>
+                  <button type="button" onClick={() => setOriginalAudioVolume(125)}>125%</button>
+                  <button type="button" onClick={() => setOriginalAudioVolume(150)}>150% (Punchy)</button>
+                  <button type="button" onClick={() => setOriginalAudioVolume(200)}>200% (Max Boost)</button>
+                </div>
+                <p className="bgm-hint-text">{t.studio.rawAudioVolumeHint}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* 8. Video Watermark Branding */}
+          <div className="studio-card-group">
+            <div className="group-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                <span className="group-title">{t.studio.watermarkTitle}</span>
+                <label style={{ display: 'inline-flex', alignItems: 'center', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={watermarkEnabled}
+                    onChange={e => setWatermarkEnabled(e.target.checked)}
+                    style={{ accentColor: 'var(--primary)', width: '16px', height: '16px', cursor: 'pointer' }}
+                  />
+                </label>
+                <span className={`status-pill ${watermarkEnabled ? 'pill-active' : ''}`} style={{ fontSize: '0.68rem', padding: '0.15rem 0.5rem' }}>
+                  {watermarkEnabled ? t.studio.watermarkBadgeEnabled : t.studio.watermarkBadgeDisabled}
+                </span>
+              </div>
+            </div>
+
+            {watermarkEnabled && (
+              <div className="group-content" style={{ marginTop: '0.6rem' }}>
+                {/* Type Selection */}
+                <div className="watermark-type-toggle" style={{ display: 'flex', alignItems: 'center', gap: '0.8rem', marginBottom: '0.75rem' }}>
+                  <span style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', fontWeight: 600 }}>{t.studio.watermarkTypeLabel}</span>
+                  <div className="toggle-pill-group">
+                    <button
+                      type="button"
+                      className={`pill-btn ${watermarkType === 'image' ? 'active' : ''}`}
+                      onClick={() => handleSelectWatermarkType('image')}
+                    >
+                      {t.studio.watermarkTypeImage}
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill-btn ${watermarkType === 'text' ? 'active' : ''}`}
+                      onClick={() => handleSelectWatermarkType('text')}
+                    >
+                      {t.studio.watermarkTypeText}
+                    </button>
+                  </div>
+                </div>
+
+                {watermarkType === 'image' ? (
+                  <div className="watermark-upload-area">
+                    {!watermarkImageUrl ? (
+                      <label
+                        className={`bgm-dropzone ${isWatermarkDragging ? 'drag-over' : ''}`}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setIsWatermarkDragging(true);
+                        }}
+                        onDragLeave={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setIsWatermarkDragging(false);
+                        }}
+                        onDrop={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setIsWatermarkDragging(false);
+                          const file = e.dataTransfer.files?.[0];
+                          if (file) uploadWatermarkFile(file);
+                        }}
+                      >
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp,image/svg+xml,image/*"
+                          onChange={handleWatermarkUpload}
+                          style={{ display: 'none' }}
+                          disabled={isUploadingWatermark}
+                        />
+                        <div className="dropzone-icon">{isUploadingWatermark ? '⏳' : isWatermarkDragging ? '📥' : '🖼️'}</div>
+                        <div className="dropzone-text">
+                          <span className="dropzone-main-text">
+                            {isUploadingWatermark ? 'Uploading Watermark...' : isWatermarkDragging ? t.studio.watermarkDropActive : t.studio.watermarkUploadMain}
+                          </span>
+                          <span className="dropzone-sub-text">{t.studio.watermarkUploadSub}</span>
+                        </div>
+                      </label>
+                    ) : (
+                      <div className="bgm-active-file-row">
+                        <div className="bgm-info">
+                          <img
+                            src={watermarkImageUrl}
+                            alt="Logo"
+                            style={{ width: '28px', height: '28px', objectFit: 'contain', borderRadius: '4px', background: 'rgba(255,255,255,0.08)' }}
+                          />
+                          <div className="bgm-details">
+                            <span className="bgm-filename" title={watermarkImageFileName}>{watermarkImageFileName}</span>
+                            <span className="bgm-status-tag">{t.studio.watermarkActiveTag}</span>
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          className="bgm-remove-btn"
+                          onClick={handleRemoveWatermarkImage}
+                          title={t.studio.watermarkRemoveTooltip}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div className="watermark-text-wrap" style={{ display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                    <input
+                      type="text"
+                      className="studio-title-input"
+                      placeholder={t.studio.watermarkTextPlaceholder}
+                      value={watermarkText}
+                      onChange={e => setWatermarkText(e.target.value)}
+                      style={{ fontSize: '0.85rem', padding: '0.55rem 0.8rem' }}
+                    />
+                  </div>
+                )}
+
+                {/* Sliders: Size (up to 500%), Opacity, Horizontal X, Vertical Y */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem', marginTop: '0.4rem' }}>
+                  {/* Size (0% - 500%) */}
+                  <div className="slider-control-item">
+                    <div className="slider-label-row">
+                      <span className="slider-label">{t.studio.watermarkSizeLabel}</span>
+                      <div className="slider-input-badge-wrap">
+                        <input
+                          type="number"
+                          className="slider-number-input"
+                          min={0}
+                          max={500}
+                          value={watermarkSize}
+                          onChange={e => setWatermarkSize(Math.max(0, Math.min(500, Number(e.target.value) || 0)))}
+                        />
+                        <span className="slider-input-unit">%</span>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      className="studio-slider"
+                      min="0"
+                      max="500"
+                      step="1"
+                      value={watermarkSize}
+                      onChange={e => setWatermarkSize(Number(e.target.value))}
+                    />
+                    <div className="slider-quick-buttons" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.35rem' }}>
+                      {[10, 25, 50, 100, 200, 350, 500].map(sz => (
+                        <button
+                          key={sz}
+                          type="button"
+                          className={`quick-sz-btn ${watermarkSize === sz ? 'active' : ''}`}
+                          style={{
+                            padding: '0.2rem 0.5rem',
+                            fontSize: '0.72rem',
+                            borderRadius: '4px',
+                            background: watermarkSize === sz ? 'var(--primary)' : 'rgba(255,255,255,0.06)',
+                            color: watermarkSize === sz ? '#fff' : 'var(--text-muted)',
+                            border: '1px solid rgba(255,255,255,0.1)',
+                            cursor: 'pointer',
+                          }}
+                          onClick={() => setWatermarkSize(sz)}
+                        >
+                          {sz}%
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Opacity */}
+                  <div className="slider-control-item">
+                    <div className="slider-label-row">
+                      <span className="slider-label">{t.studio.watermarkOpacityLabel}</span>
+                      <div className="slider-input-badge-wrap">
+                        <input
+                          type="number"
+                          className="slider-number-input"
+                          min={10}
+                          max={100}
+                          value={watermarkOpacity}
+                          onChange={e => setWatermarkOpacity(Math.max(10, Math.min(100, Number(e.target.value) || 10)))}
+                        />
+                        <span className="slider-input-unit">%</span>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      className="studio-slider"
+                      min="10"
+                      max="100"
+                      step="5"
+                      value={watermarkOpacity}
+                      onChange={e => setWatermarkOpacity(Number(e.target.value))}
+                    />
+                  </div>
+
+                  {/* Horizontal Position X */}
+                  <div className="slider-control-item">
+                    <div className="slider-label-row">
+                      <span className="slider-label">{t.studio.watermarkXLabel}</span>
+                      <div className="slider-input-badge-wrap">
+                        <input
+                          type="number"
+                          className="slider-number-input"
+                          min={0}
+                          max={100}
+                          value={watermarkX}
+                          onChange={e => setWatermarkX(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+                        />
+                        <span className="slider-input-unit">%</span>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      className="studio-slider"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={watermarkX}
+                      onChange={e => setWatermarkX(Number(e.target.value))}
+                    />
+                  </div>
+
+                  {/* Vertical Position Y */}
+                  <div className="slider-control-item">
+                    <div className="slider-label-row">
+                      <span className="slider-label">{t.studio.watermarkYLabel}</span>
+                      <div className="slider-input-badge-wrap">
+                        <input
+                          type="number"
+                          className="slider-number-input"
+                          min={0}
+                          max={100}
+                          value={watermarkY}
+                          onChange={e => setWatermarkY(Math.max(0, Math.min(100, Number(e.target.value) || 0)))}
+                        />
+                        <span className="slider-input-unit">%</span>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      className="studio-slider"
+                      min="0"
+                      max="100"
+                      step="1"
+                      value={watermarkY}
+                      onChange={e => setWatermarkY(Number(e.target.value))}
+                    />
+                  </div>
+
+                  {/* Quick Preset Buttons */}
+                  <div className="slider-quick-buttons" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem', marginTop: '0.35rem' }}>
+                    <button type="button" onClick={() => applyWatermarkPreset('tl')}>{t.studio.watermarkPresetTopLeft}</button>
+                    <button type="button" onClick={() => applyWatermarkPreset('tc')}>{t.studio.watermarkPresetTopCenter}</button>
+                    <button type="button" onClick={() => applyWatermarkPreset('tr')}>{t.studio.watermarkPresetTopRight}</button>
+                    <button type="button" onClick={() => applyWatermarkPreset('c')}>{t.studio.watermarkPresetCenter}</button>
+                    <button type="button" onClick={() => applyWatermarkPreset('bl')}>{t.studio.watermarkPresetBottomLeft}</button>
+                    <button type="button" onClick={() => applyWatermarkPreset('bc')}>{t.studio.watermarkPresetBottomCenter}</button>
+                    <button type="button" onClick={() => applyWatermarkPreset('br')}>{t.studio.watermarkPresetBottomRight}</button>
+                  </div>
+
+                  {/* Reset Button */}
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '0.2rem' }}>
+                    <button
+                      type="button"
+                      onClick={handleResetWatermark}
+                      style={{
+                        background: 'rgba(239, 68, 68, 0.15)',
+                        color: '#f87171',
+                        border: '1px solid rgba(239, 68, 68, 0.3)',
+                        fontSize: '0.72rem',
+                        padding: '0.25rem 0.6rem',
+                        borderRadius: '5px',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                      }}
+                    >
+                      {t.studio.watermarkResetBtn}
+                    </button>
+                  </div>
+
+                  <p className="bgm-hint-text">{t.studio.watermarkDragHint}</p>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 8. Selected Clips Checklist */}
           <div className="studio-card-group">
             <div className="group-header">
               <span className="group-title">
@@ -1274,6 +2284,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             </div>
 
             <div
+              ref={phoneContainerRef}
               className="phone-wireframe-container real-preview-container"
               style={{ width: `${phoneWidth}px`, height: `${phoneHeight}px` }}
             >
@@ -1283,8 +2294,36 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 style={{ backgroundColor: '#000000' }}
               >
                 {backgroundStyle === 'blurred' && aspectRatio !== '9:16' && (
-                  <div className="ambient-blur-backdrop" style={{ filter: 'blur(28px)', opacity: 0.45 }}>
-                    <div style={{ width: '100%', height: '100%', background: 'radial-gradient(circle, #3b82f6 0%, #1e1b4b 60%, #000 100%)' }}></div>
+                  <div className="ambient-blur-backdrop" style={{ overflow: 'hidden' }}>
+                    {videoUrl && (videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.includes('/api/video')) ? (
+                      <video
+                        ref={ambientVideoRef}
+                        src={videoUrl}
+                        playsInline
+                        muted
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                          filter: 'blur(20px) brightness(0.8) saturate(1.35)',
+                          transform: 'scale(1.2)',
+                          pointerEvents: 'none',
+                        }}
+                      />
+                    ) : (
+                      <img
+                        src={videoId ? `https://img.youtube.com/vi/${videoId}/hqdefault.jpg` : undefined}
+                        alt="Ambient Blurred"
+                        style={{
+                          width: '100%',
+                          height: '100%',
+                          objectFit: 'cover',
+                          filter: 'blur(20px) brightness(0.8) saturate(1.35)',
+                          transform: 'scale(1.2)',
+                          pointerEvents: 'none',
+                        }}
+                      />
+                    )}
                   </div>
                 )}
 
@@ -1332,13 +2371,25 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                           playsInline
                           muted={isMuted}
                           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                          onPlay={() => { setIsPlaying(true); startTracking(); }}
-                          onPause={() => { setIsPlaying(false); stopTracking(); }}
+                          onPlay={() => {
+                            setIsPlaying(true);
+                            startTracking();
+                            if (ambientVideoRef.current) ambientVideoRef.current.play().catch(() => {});
+                          }}
+                          onPause={() => {
+                            setIsPlaying(false);
+                            stopTracking();
+                            if (ambientVideoRef.current) ambientVideoRef.current.pause();
+                          }}
                           onEnded={() => {
                             if (isLooping && currentPreviewClip) {
                               if (directVideoRef.current) {
                                 directVideoRef.current.currentTime = currentPreviewClip.start_time;
                                 directVideoRef.current.play();
+                              }
+                              if (ambientVideoRef.current) {
+                                ambientVideoRef.current.currentTime = currentPreviewClip.start_time;
+                                ambientVideoRef.current.play().catch(() => {});
                               }
                             }
                           }}
@@ -1403,16 +2454,16 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         fontSize:
                           fontSize === 'small'
                             ? titleLineCount >= 3
-                              ? '14px'
-                              : '16px'
+                              ? '15.5px'
+                              : '17.5px'
                             : fontSize === 'big'
                             ? titleLineCount >= 3
-                              ? '20px'
-                              : '23px'
+                              ? '22px'
+                              : '25.5px'
                             : titleLineCount >= 3
-                            ? '17px'
-                            : '19.5px',
-                        lineHeight: titleLineCount >= 3 ? 1.15 : 1.22,
+                            ? '18.5px'
+                            : '21px',
+                        lineHeight: titleLineCount >= 3 ? 1.10 : 1.08,
                         letterSpacing: '0.02em',
                         whiteSpace: 'pre-line',
                         textAlign: 'center',
@@ -1459,7 +2510,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       className="wireframe-caption-text"
                       style={{
                         fontFamily: captionFont,
-                        fontSize: fontSize === 'small' ? '15px' : fontSize === 'big' ? '22px' : '18.5px',
+                        fontSize: fontSize === 'small' ? '17px' : fontSize === 'big' ? '25px' : '20.5px',
                         fontWeight: 800,
                         letterSpacing: '0.03em',
                         textAlign: 'center',
@@ -1511,8 +2562,67 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     </span>
                   </div>
                 )}
+
+                {/* Real-time Watermark Overlay */}
+                {watermarkEnabled && (
+                  <div
+                    className="wireframe-watermark-overlay"
+                    style={{
+                      left: `${watermarkX}%`,
+                      top: `${watermarkY}%`,
+                      transform: 'translate(-50%, -50%)',
+                      opacity: watermarkOpacity / 100,
+                      zIndex: 25,
+                      pointerEvents: 'none',
+                      userSelect: 'none',
+                    }}
+                  >
+                    {watermarkType === 'image' && watermarkImageUrl ? (
+                      <img
+                        src={watermarkImageUrl}
+                        alt="Watermark"
+                        draggable={false}
+                        style={{
+                          width: watermarkSize === 0 ? '0px' : `${Math.round((phoneWidth * watermarkSize) / 100)}px`,
+                          height: 'auto',
+                          objectFit: 'contain',
+                          display: watermarkSize === 0 ? 'none' : 'block',
+                          pointerEvents: 'none',
+                        }}
+                      />
+                    ) : watermarkText.trim() ? (
+                      <span
+                        className="wm-text-badge"
+                        style={{
+                          fontSize: watermarkSize === 0 ? '0px' : `${Math.max(8, Math.round((watermarkSize / 100) * 56))}px`,
+                          display: watermarkSize === 0 ? 'none' : 'inline-block',
+                          pointerEvents: 'none',
+                        }}
+                      >
+                        {watermarkText}
+                      </span>
+                    ) : null}
+                  </div>
+                )}
               </div>
             </div>
+
+            {/* Hidden Audio element for background music preview */}
+            <audio
+              ref={bgmAudioRef}
+              src={bgmAudioUrl}
+              onEnded={() => setIsBgmPlaying(false)}
+              onLoadedMetadata={handleBgmLoadedMetadata}
+              style={{ display: 'none' }}
+            />
+
+            {/* Hidden Audio element for hook sound effect preview */}
+            <audio
+              ref={hookSfxAudioRef}
+              src={hookSfxAudioUrl}
+              onEnded={() => setIsHookSfxPlaying(false)}
+              style={{ display: 'none' }}
+            />
 
             {/* External Video Player Controls (Outside preview clip, YouTube-like) */}
             <div className="studio-player-controls-card">
@@ -1622,28 +2732,56 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 <div className="history-recent-list">
                   <span className="recent-list-title">{t.studio.recentFilesTitle}</span>
                   <div className="recent-items-scroll">
-                    {batchProgress.clips.filter(c => c.status === 'completed').map((c, i) => (
-                      <div key={i} className="recent-file-row">
-                        <span className="file-idx">#{i + 1}</span>
-                        <span className="file-name" title={c.title}>{c.title}</span>
-                        {c.download_url && (
-                          <a href={c.download_url} download className="quick-dl-btn">
-                            ⬇️ MP4
-                          </a>
-                        )}
-                      </div>
-                    ))}
+                    {batchProgress.clips.filter(c => c.status === 'completed').map((c, i) => {
+                      const cleanTitle = (c.title || `clip_${i + 1}`).replace(/[\\/*?:"<>|]/g, '').trim() || `clip_${i + 1}`;
+                      let dupCount = 0;
+                      const completedClips = batchProgress.clips.filter(x => x.status === 'completed');
+                      for (let k = 0; k < i; k++) {
+                        const priorTitle = (completedClips[k].title || `clip_${k + 1}`).replace(/[\\/*?:"<>|]/g, '').trim() || `clip_${k + 1}`;
+                        if (priorTitle.toLowerCase() === cleanTitle.toLowerCase()) {
+                          dupCount++;
+                        }
+                      }
+                      const finalClipName = dupCount > 0 ? `${cleanTitle} (${dupCount})` : cleanTitle;
+                      const dlUrlWithTitle = c.download_url
+                        ? `${c.download_url}${c.download_url.includes('?') ? '&' : '?'}title=${encodeURIComponent(finalClipName)}`
+                        : '';
+
+                      return (
+                        <div key={i} className="recent-file-row">
+                          <span className="file-idx">#{i + 1}</span>
+                          <span className="file-name" title={c.title}>{c.title}</span>
+                          {c.download_url && (
+                            <a
+                              href={dlUrlWithTitle}
+                              download={`${finalClipName}.mp4`}
+                              className="quick-dl-btn"
+                              title={`Download ${finalClipName}.mp4`}
+                            >
+                              ⬇️ MP4
+                            </a>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
             </div>
 
-            {/* Batch Render Queue Card - placed directly under Render Specs & History */}
+            {/* Batch Render Queue Card - Fancy glowing when generating */}
             {batchProgress && (
-              <div className="studio-batch-queue-card">
+              <div className={`studio-batch-queue-card ${batchProgress.overall_status === 'running' ? 'is-processing' : ''}`}>
                 <div className="batch-progress-header">
                   <div>
-                    <h4 className="batch-queue-title">{t.studio.batchQueueTitle}</h4>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <h4 className="batch-queue-title">{t.studio.batchQueueTitle}</h4>
+                      {batchProgress.overall_status === 'running' && (
+                        <span className="queue-generating-pill">
+                          <span className="queue-pulse-dot"></span> ⚡ GENERATING VIDEO...
+                        </span>
+                      )}
+                    </div>
                     <p className="batch-subtitle">
                       {batchProgress.overall_status === 'completed'
                         ? t.studio.allClipsRendered(batchProgress.total_clips)
@@ -1712,31 +2850,52 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
                 {/* Render Items List */}
                 <div className="batch-render-items-list">
-                  {batchProgress.clips.map((clip, idx) => (
-                    <div key={idx} className={`batch-item-row status-${clip.status}`} style={{ padding: '0.42rem 0.65rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', maxWidth: '62%' }}>
-                        <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>#{idx + 1}</span>
-                        <span style={{ fontSize: '0.74rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{clip.title}</span>
-                      </div>
-                      <div>
-                        {clip.status === 'pending' && <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{t.studio.statusWaitingShort}</span>}
-                        {clip.status === 'downloading' && <span style={{ fontSize: '0.68rem', color: '#f59e0b' }}>{t.studio.statusSlicingShort}</span>}
-                        {clip.status === 'transcribing' && <span style={{ fontSize: '0.68rem', color: '#8b5cf6' }}>{t.studio.statusCaptionsShort}</span>}
-                        {clip.status === 'rendering' && <span style={{ fontSize: '0.68rem', color: '#3b82f6' }}>{t.studio.statusRenderingShort}</span>}
-                        {clip.status === 'completed' && (
-                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                            <span style={{ fontSize: '0.68rem', color: '#10b981', fontWeight: 600 }}>{t.studio.statusDoneShort}</span>
-                            {clip.download_url && (
-                              <a href={clip.download_url} download className="btn-download-clip" style={{ padding: '0.15rem 0.45rem', fontSize: '0.68rem', borderRadius: '4px', background: 'rgba(16, 185, 129, 0.2)', color: '#10b981', textDecoration: 'none', border: '1px solid rgba(16, 185, 129, 0.4)' }}>
+                  {batchProgress.clips.map((clip, idx) => {
+                    const cleanTitle = (clip.title || `clip_${idx + 1}`).replace(/[\\/*?:"<>|]/g, '').trim() || `clip_${idx + 1}`;
+                    let dupCount = 0;
+                    for (let i = 0; i < idx; i++) {
+                      const priorTitle = (batchProgress.clips[i].title || `clip_${i + 1}`).replace(/[\\/*?:"<>|]/g, '').trim() || `clip_${i + 1}`;
+                      if (priorTitle.toLowerCase() === cleanTitle.toLowerCase()) {
+                        dupCount++;
+                      }
+                    }
+                    const finalClipName = dupCount > 0 ? `${cleanTitle} (${dupCount})` : cleanTitle;
+                    const dlUrlWithTitle = clip.download_url
+                      ? `${clip.download_url}${clip.download_url.includes('?') ? '&' : '?'}title=${encodeURIComponent(finalClipName)}`
+                      : '';
+
+                    return (
+                      <div key={idx} className={`batch-item-row status-${clip.status}`} style={{ padding: '0.42rem 0.65rem', borderRadius: '6px', background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.06)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', maxWidth: '62%' }}>
+                          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>#{idx + 1}</span>
+                          <span style={{ fontSize: '0.74rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{clip.title}</span>
+                        </div>
+                        <div>
+                          {clip.status === 'pending' && <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{t.studio.statusWaitingShort}</span>}
+                          {clip.status === 'downloading' && <span style={{ fontSize: '0.68rem', color: '#f59e0b' }}>{t.studio.statusSlicingShort}</span>}
+                          {clip.status === 'transcribing' && <span style={{ fontSize: '0.68rem', color: '#8b5cf6' }}>{t.studio.statusCaptionsShort}</span>}
+                          {clip.status === 'rendering' && <span style={{ fontSize: '0.68rem', color: '#3b82f6' }}>{t.studio.statusRenderingShort}</span>}
+                          {clip.status === 'completed' && (
+                            clip.download_url ? (
+                              <a
+                                href={dlUrlWithTitle}
+                                download={`${finalClipName}.mp4`}
+                                className="quick-dl-btn"
+                                title={`Download ${finalClipName}.mp4`}
+                              >
                                 ⬇️ MP4
                               </a>
-                            )}
-                          </div>
-                        )}
-                        {clip.status === 'error' && <span style={{ fontSize: '0.68rem', color: '#ef4444' }}>{t.studio.statusFailedShort}</span>}
+                            ) : (
+                              <span className="quick-dl-btn" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>
+                                ✓ Done
+                              </span>
+                            )
+                          )}
+                          {clip.status === 'error' && <span style={{ fontSize: '0.68rem', color: '#ef4444' }}>{t.studio.statusFailedShort}</span>}
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -1785,9 +2944,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
         <button
           className="studio-btn-render glowing-btn big-render-cta"
           onClick={handleLaunch}
-          disabled={isRendering || selectedClips.length === 0}
+          disabled={isRendering || batchProgress?.overall_status === 'running' || selectedClips.length === 0}
         >
-          {isRendering ? (
+          {batchProgress?.overall_status === 'running' ? (
+            <>{t.studio.renderingInProgressBadge}</>
+          ) : isRendering ? (
             <>{t.studio.launchingRenderBtn}</>
           ) : selectedClips.length === 0 ? (
             <>{t.studio.selectClipWarning}</>
@@ -1807,11 +2968,31 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               🧹
             </div>
             <h3 className="confirm-modal-title">{t.studio.confirmModalTitle}</h3>
-            <p className="confirm-modal-desc">
+            <p className="confirm-modal-desc" style={{ marginBottom: '1rem' }}>
               {t.studio.confirmModalDesc}
-              <br /><br />
-              <strong style={{ color: '#4ade80' }}>{t.studio.confirmModalNotice}</strong>
             </p>
+            <div style={{
+              width: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.5rem',
+              margin: '0 0 1.5rem 0',
+              padding: '0.85rem 1rem',
+              borderRadius: '10px',
+              background: 'rgba(255, 255, 255, 0.04)',
+              border: '1px solid rgba(255, 255, 255, 0.08)',
+              textAlign: 'left',
+              fontSize: '0.78rem'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#4ade80' }}>
+                <span>✓</span>
+                <strong>{t.studio.confirmModalNotice}</strong>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#38bdf8' }}>
+                <span>🛡️</span>
+                <strong>{t.studio.confirmModalCookieNotice}</strong>
+              </div>
+            </div>
             <div className="confirm-modal-actions">
               <button
                 type="button"

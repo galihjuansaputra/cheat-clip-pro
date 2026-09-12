@@ -27,6 +27,11 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
       setHasCookies(data.exists);
       setCookieSize(data.size || 0);
       setSampleLines(data.sample_lines || []);
+      if (data.cookies_content) {
+        setCookieText(data.cookies_content);
+      } else if (!data.exists) {
+        setCookieText('');
+      }
       if (onCookieStatusChange) {
         onCookieStatusChange(data.exists);
       }
@@ -75,7 +80,6 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
       const data = await res.json();
       if (res.ok && data.success) {
         setMessage({ text: t.cookies.saveSuccess, type: 'success' });
-        setCookieText('');
         fetchStatus();
       } else {
         setMessage({ text: data.detail || t.cookies.saveFailed, type: 'error' });
@@ -87,8 +91,9 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
     }
   };
 
-  const handleDelete = async () => {
-    if (!window.confirm(t.cookies.deleteConfirm)) return;
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState<boolean>(false);
+
+  const executeDeleteCookies = async () => {
     setIsLoading(true);
     setMessage(null);
     try {
@@ -106,6 +111,7 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
       setMessage({ text: err.message || t.cookies.networkError, type: 'error' });
     } finally {
       setIsLoading(false);
+      setShowDeleteConfirm(false);
     }
   };
 
@@ -157,10 +163,11 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
               <button
                 type="button"
                 className="btn-danger-outline"
-                onClick={handleDelete}
+                onClick={() => setShowDeleteConfirm(true)}
                 disabled={isLoading}
+                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' }}
               >
-                {t.cookies.deleteBtn}
+                {t.cookies.clearCookiesBtn}
               </button>
             </div>
           ) : (
@@ -174,6 +181,24 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
               </div>
             </div>
           )}
+        </div>
+
+        {/* Separate Storage Security Notice */}
+        <div style={{
+          margin: '0 1.5rem 0.6rem',
+          padding: '0.65rem 0.95rem',
+          borderRadius: '8px',
+          background: 'rgba(56, 189, 248, 0.08)',
+          border: '1px solid rgba(56, 189, 248, 0.25)',
+          fontSize: '0.78rem',
+          color: 'var(--text-secondary)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.6rem',
+          lineHeight: 1.45
+        }}>
+          <span style={{ fontSize: '1.15rem' }}>🛡️</span>
+          <span>{t.cookies.clearCookiesNotice}</span>
         </div>
 
         {message && (
@@ -240,6 +265,39 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
             {isLoading ? t.cookies.savingBtn : t.cookies.saveBtn}
           </button>
         </div>
+
+        {/* Fancy Clear Cookies Confirmation Modal */}
+        {showDeleteConfirm && (
+          <div className="custom-confirm-modal-overlay" style={{ zIndex: 10005 }}>
+            <div className="custom-confirm-modal-card">
+              <div className="confirm-modal-icon-wrap" style={{ background: 'rgba(239, 68, 68, 0.15)', borderColor: 'rgba(239, 68, 68, 0.4)', color: '#ef4444' }}>
+                🍪
+              </div>
+              <h3 className="confirm-modal-title">{t.cookies.clearCookiesConfirmTitle}</h3>
+              <p className="confirm-modal-desc">
+                {t.cookies.clearCookiesConfirmDesc}
+              </p>
+              <div className="confirm-modal-actions">
+                <button
+                  type="button"
+                  className="btn-confirm-cancel"
+                  onClick={() => setShowDeleteConfirm(false)}
+                  disabled={isLoading}
+                >
+                  {t.cookies.clearCookiesConfirmKeep}
+                </button>
+                <button
+                  type="button"
+                  className="btn-confirm-purge"
+                  onClick={executeDeleteCookies}
+                  disabled={isLoading}
+                >
+                  {isLoading ? t.cookies.deletingBtn : t.cookies.clearCookiesConfirmPurge}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
