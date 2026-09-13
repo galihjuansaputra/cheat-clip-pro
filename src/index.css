@@ -3127,55 +3127,79 @@ label[for="manual-subtitle-file"]:hover {
   max-width: none;
 }
 
-/* 
- * Hide all YouTube player UI (top title, channel avatar, watch later, share, and bottom watermark/logo)
- * by overscaling the 16:9 iframe vertically inside overflow:hidden.
- * The top (~75px) and bottom (~70px) YouTube UI bars are pushed completely outside the visible viewport.
+/*
+ * The preview must crop the video EXACTLY like the FFmpeg render does
+ * (video_engine.py): a 16:9 iframe scaled so its height fills the container,
+ * then center-cropped horizontally. That keeps 100% of the video height
+ * visible (no chopped heads) and the same width fraction as the render:
+ *   9:16 -> 31.6% of source width | 1:1 -> 56.2% | 4:3 -> 75% | 16:9 -> 100%.
+ * Residual YouTube chrome (title bar / watermark, which only appear when the
+ * player is cued or paused) is absorbed by the soft cinematic gradients below.
  */
+.studio-yt-embed-slot::before,
+.studio-yt-embed-slot::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: min(54px, 16%);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.studio-yt-embed-slot::before {
+  top: 0;
+  background: linear-gradient(to bottom, rgba(0, 0, 0, 0.72) 42%, rgba(0, 0, 0, 0) 100%);
+}
+
+.studio-yt-embed-slot::after {
+  bottom: 0;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.72) 42%, rgba(0, 0, 0, 0) 100%);
+}
 
 /* In 9:16 full-bleed vertical mode (container: 320x569) */
 .aspect-916 .studio-yt-embed-slot iframe {
-  width: 1352px;
-  height: 760px;
+  width: 1012px;
+  height: 569px;
 }
 
 /* In 1:1 square crop mode (container: 320x320) */
 .aspect-11 .studio-yt-embed-slot iframe {
-  width: 836px;
-  height: 470px;
+  width: 569px;
+  height: 320px;
 }
 
 /* In 4:3 standard crop mode (container: 320x240) */
 .aspect-43 .studio-yt-embed-slot iframe {
-  width: 676px;
-  height: 380px;
+  width: 427px;
+  height: 240px;
 }
 
 /* In 16:9 widescreen mode (container: 320x180) */
 .aspect-169 .studio-yt-embed-slot iframe {
-  width: 552px;
-  height: 310px;
+  width: 320px;
+  height: 180px;
 }
 
 /* Split-mode overrides for bottom feed */
 .wireframe-content-box.split-mode.aspect-916 .studio-yt-embed-slot iframe {
-  width: 729px;
-  height: 410px;
+  width: 468px;
+  height: 263px;
 }
 
 .wireframe-content-box.split-mode.aspect-11 .studio-yt-embed-slot iframe {
-  width: 712px;
-  height: 400px;
+  width: 453px;
+  height: 255px;
 }
 
 .wireframe-content-box.split-mode.aspect-43 .studio-yt-embed-slot iframe {
-  width: 658px;
-  height: 370px;
+  width: 400px;
+  height: 225px;
 }
 
 .wireframe-content-box.split-mode.aspect-169 .studio-yt-embed-slot iframe {
-  width: 552px;
-  height: 310px;
+  width: 320px;
+  height: 180px;
 }
 
 .studio-preview-click-overlay {
