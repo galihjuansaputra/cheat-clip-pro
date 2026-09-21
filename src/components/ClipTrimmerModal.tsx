@@ -55,10 +55,8 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
 }) => {
   const { t } = useLanguage();
 
-  if (!isOpen || !clip) return null;
-
-  const origStart = clip.start_time;
-  const origEnd = clip.end_time;
+  const origStart = clip?.start_time ?? 0;
+  const origEnd = clip?.end_time ?? 0;
   const effectiveTotalDur = videoDuration > 0 ? videoDuration : origEnd + CONTEXT_LIMIT_SEC;
 
   // Maximum ±2 minutes (120 seconds) context window
@@ -77,11 +75,22 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
   const [isDownloading, setIsDownloading] = useState<boolean>(false);
   const [downloadSuccess, setDownloadSuccess] = useState<boolean>(false);
   const [playerReady, setPlayerReady] = useState<boolean>(false);
+  const [isDragging, setIsDragging] = useState<boolean>(false);
 
   const timelineBarRef = useRef<HTMLDivElement | null>(null);
-  const draggingRef = useRef<'start' | 'end' | 'playhead' | null>(null);
   const ytPlayerRef = useRef<any>(null);
   const timePollRef = useRef<number | null>(null);
+  const playerReadyRef = useRef<boolean>(false);
+  const isDraggingRef = useRef<boolean>(false);
+  const throttledSeekRef = useRef<number | null>(null);
+  const boundsRef = useRef<{ start: number; end: number }>({ start: origStart, end: origEnd });
+  const activeDragInfoRef = useRef<{
+    type: 'start' | 'end' | 'playhead' | 'range';
+    startClientX: number;
+    initialStart: number;
+    initialEnd: number;
+    clipDur: number;
+  } | null>(null);
 
   // Initialize or reset when clip changes
   useEffect(() => {
@@ -106,6 +115,11 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
     setEndInputVal(formatSeconds(adjustedEnd));
   }, [adjustedEnd]);
 
+  // Keep bounds ref synced for interval checks without re-creating interval
+  useEffect(() => {
+    boundsRef.current = { start: adjustedStart, end: adjustedEnd };
+  }, [adjustedStart, adjustedEnd]);
+
   // Reset download success banner when timestamps change
   useEffect(() => {
     setDownloadSuccess(false);
@@ -118,6 +132,7 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
     let fallbackTimer: number | null = null;
     let attempts = 0;
 
+    playerReadyRef.current = false;
     setPlayerReady(false);
 
     // Ensure YouTube IFrame API is present
@@ -129,14 +144,15 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
     }
 
     const loadDirectIframe = (container: HTMLElement) => {
-      if (!isMounted) return;
+      if (!isMounted || playerReadyRef.current) return;
       const embedUrl = `https://www.youtube.com/embed/${videoId}?start=${Math.floor(adjustedStart)}&controls=1&rel=0&playsinline=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`;
       container.innerHTML = `<iframe id="trimmer-direct-yt-iframe" src="${embedUrl}" style="width:100%!important;height:100%!important;border:none;display:block;position:absolute;top:0;left:0;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
+      playerReadyRef.current = true;
       setPlayerReady(true);
     };
 
     const setupPlayer = () => {
-      if (!isMounted) return;
+      if (!isMounted || playerReadyRef.current) return;
 
       const container = document.getElementById('trimmer-yt-player-container');
       if (!container) {
@@ -152,7 +168,6 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
         if (attempts < 40) {
           pollTimer = window.setTimeout(setupPlayer, 120);
         } else {
-          // If YT API doesn't arrive within ~4.5 seconds, use direct embed iframe
           loadDirectIframe(container);
         }
         return;
@@ -183,6 +198,11 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
           events: {
             onReady: (e: any) => {
               if (!isMounted) return;
+              if (fallbackTimer) {
+                clearTimeout(fallbackTimer);
+                fallbackTimer = null;
+              }
+              playerReadyRef.current = true;
               setPlayerReady(true);
               try {
                 e.target.seekTo(adjustedStart, true);
@@ -192,9 +212,9 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
               if (!isMounted) return;
               setIsPlaying(e.data === 1);
             },
-            onError: () => {
-              if (!isMounted) return;
-              loadDirectIframe(container);
+            onError: (err: any) => {
+              // Log transient seek/playback errors without wiping container and destroying the player!
+              console.warn('YouTube Player transient error in trimmer:', err);
             }
           }
         });
@@ -209,11 +229,11 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
       }
     };
 
-    // Safety fallback timer if onReady never triggers within 4.5s
+    // Safety fallback timer ONLY if player never initialized and playerReadyRef is false
     fallbackTimer = window.setTimeout(() => {
-      if (isMounted && !playerReady) {
+      if (isMounted && !playerReadyRef.current && !ytPlayerRef.current) {
         const container = document.getElementById('trimmer-yt-player-container');
-        if (container && (!ytPlayerRef.current || !playerReady)) {
+        if (container) {
           loadDirectIframe(container);
         }
       }
@@ -237,12 +257,16 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
   // Monitor playhead and enforce looping/pause at adjustedEnd
   useEffect(() => {
     timePollRef.current = window.setInterval(() => {
+      // Do not poll or overwrite playhead while user is dragging
+      if (isDraggingRef.current) return;
       if (ytPlayerRef.current && typeof ytPlayerRef.current.getCurrentTime === 'function') {
         try {
           const curr = ytPlayerRef.current.getCurrentTime();
           setCurrentTime(curr);
-          if (curr >= adjustedEnd) {
-            ytPlayerRef.current.seekTo(adjustedStart, true);
+          const currentEnd = boundsRef.current.end;
+          const currentStart = boundsRef.current.start;
+          if (curr >= currentEnd) {
+            ytPlayerRef.current.seekTo(currentStart, true);
             ytPlayerRef.current.pauseVideo();
             setIsPlaying(false);
           }
@@ -256,12 +280,29 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
         timePollRef.current = null;
       }
     };
-  }, [adjustedStart, adjustedEnd]);
+  }, []);
 
-  // Player seeking helper
+  // Throttled seeking helper during dragging to prevent YouTube postMessage flooding & player crashes
+  const doThrottledSeek = useCallback((targetSec: number) => {
+    if (throttledSeekRef.current) return;
+    throttledSeekRef.current = window.setTimeout(() => {
+      throttledSeekRef.current = null;
+      if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+        try {
+          ytPlayerRef.current.seekTo(targetSec, false);
+        } catch {}
+      }
+    }, 120);
+  }, []);
+
+  // Player seeking helper (immediate)
   const seekToTime = useCallback((targetSec: number, play: boolean = false) => {
     const clamped = Math.max(minTimelineStart, Math.min(maxTimelineEnd, targetSec));
     setCurrentTime(clamped);
+    if (throttledSeekRef.current) {
+      clearTimeout(throttledSeekRef.current);
+      throttledSeekRef.current = null;
+    }
     if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
       try {
         ytPlayerRef.current.seekTo(clamped, true);
@@ -302,50 +343,113 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
     return minTimelineStart + ratio * timelineSpan;
   }, [minTimelineStart, timelineSpan]);
 
-  // Dragging logic for timeline handles
-  const handlePointerDown = (type: 'start' | 'end' | 'playhead', e: React.PointerEvent) => {
+  // Smooth dragging logic using global window pointer event listeners
+  const handlePointerDown = (type: 'start' | 'end' | 'playhead' | 'range', e: React.PointerEvent) => {
+    if (isDownloading) return;
     e.preventDefault();
     e.stopPropagation();
-    draggingRef.current = type;
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-  };
 
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (!draggingRef.current || !timelineBarRef.current) return;
-    const rect = timelineBarRef.current.getBoundingClientRect();
-    const clientX = e.clientX;
-    const clickPct = ((clientX - rect.left) / rect.width) * 100;
-    const targetTime = pctToTime(clickPct);
-
-    if (draggingRef.current === 'start') {
-      const newStart = Math.max(minTimelineStart, Math.min(adjustedEnd - 3, Math.round(targetTime)));
-      setAdjustedStart(newStart);
-      seekToTime(newStart, false);
-    } else if (draggingRef.current === 'end') {
-      const newEnd = Math.min(maxTimelineEnd, Math.max(adjustedStart + 3, Math.round(targetTime)));
-      setAdjustedEnd(newEnd);
-      seekToTime(newEnd, false);
-    } else if (draggingRef.current === 'playhead') {
-      const newTime = Math.max(adjustedStart, Math.min(adjustedEnd, targetTime));
-      seekToTime(newTime, false);
-    }
-  };
-
-  const handlePointerUp = (e: React.PointerEvent) => {
-    if (draggingRef.current) {
-      try {
-        (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
-      } catch {}
-      draggingRef.current = null;
-    }
-  };
-
-  const handleTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!timelineBarRef.current) return;
     const rect = timelineBarRef.current.getBoundingClientRect();
-    const clickPct = ((e.clientX - rect.left) / rect.width) * 100;
-    const targetTime = Math.round(pctToTime(clickPct));
-    seekToTime(targetTime, false);
+    const clickPct = Math.max(0, Math.min(100, ((e.clientX - rect.left) / rect.width) * 100));
+    const targetTime = pctToTime(clickPct);
+
+    activeDragInfoRef.current = {
+      type,
+      startClientX: e.clientX,
+      initialStart: adjustedStart,
+      initialEnd: adjustedEnd,
+      clipDur: Math.max(1, adjustedEnd - adjustedStart),
+    };
+    isDraggingRef.current = true;
+    setIsDragging(true);
+
+    if (type === 'playhead') {
+      const clamped = Math.max(minTimelineStart, Math.min(maxTimelineEnd, targetTime));
+      setCurrentTime(clamped);
+      doThrottledSeek(clamped);
+    }
+
+    const onGlobalPointerMove = (ev: PointerEvent) => {
+      if (!isDraggingRef.current || !activeDragInfoRef.current || !timelineBarRef.current) return;
+      const barRect = timelineBarRef.current.getBoundingClientRect();
+      const currentPct = Math.max(0, Math.min(100, ((ev.clientX - barRect.left) / barRect.width) * 100));
+      const currentT = pctToTime(currentPct);
+      const { type: dragType, initialStart, clipDur, startClientX } = activeDragInfoRef.current;
+
+      if (dragType === 'start') {
+        const newStart = Math.max(minTimelineStart, Math.min(adjustedEnd - 3, Math.round(currentT)));
+        setAdjustedStart(newStart);
+        setCurrentTime(newStart);
+        doThrottledSeek(newStart);
+      } else if (dragType === 'end') {
+        const newEnd = Math.min(maxTimelineEnd, Math.max(adjustedStart + 3, Math.round(currentT)));
+        setAdjustedEnd(newEnd);
+        setCurrentTime(newEnd);
+        doThrottledSeek(newEnd);
+      } else if (dragType === 'playhead') {
+        const newPlayhead = Math.max(minTimelineStart, Math.min(maxTimelineEnd, currentT));
+        setCurrentTime(newPlayhead);
+        doThrottledSeek(newPlayhead);
+      } else if (dragType === 'range') {
+        const pixelDelta = ev.clientX - startClientX;
+        const timeDelta = (pixelDelta / barRect.width) * timelineSpan;
+        let newStart = Math.round(initialStart + timeDelta);
+        let newEnd = newStart + clipDur;
+        if (newStart < minTimelineStart) {
+          newStart = minTimelineStart;
+          newEnd = newStart + clipDur;
+        }
+        if (newEnd > maxTimelineEnd) {
+          newEnd = maxTimelineEnd;
+          newStart = newEnd - clipDur;
+        }
+        setAdjustedStart(newStart);
+        setAdjustedEnd(newEnd);
+        setCurrentTime(newStart);
+        doThrottledSeek(newStart);
+      }
+    };
+
+    const onGlobalPointerUp = (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', onGlobalPointerMove);
+      window.removeEventListener('pointerup', onGlobalPointerUp);
+      window.removeEventListener('pointercancel', onGlobalPointerUp);
+
+      if (isDraggingRef.current && activeDragInfoRef.current && timelineBarRef.current) {
+        const barRect = timelineBarRef.current.getBoundingClientRect();
+        const currentPct = Math.max(0, Math.min(100, ((ev.clientX - barRect.left) / barRect.width) * 100));
+        const currentT = pctToTime(currentPct);
+        const { type: dragType } = activeDragInfoRef.current;
+
+        let finalSeek = currentT;
+        if (dragType === 'start') {
+          finalSeek = Math.max(minTimelineStart, Math.min(adjustedEnd - 3, Math.round(currentT)));
+        } else if (dragType === 'end') {
+          finalSeek = Math.min(maxTimelineEnd, Math.max(adjustedStart + 3, Math.round(currentT)));
+        } else if (dragType === 'playhead') {
+          finalSeek = Math.max(minTimelineStart, Math.min(maxTimelineEnd, currentT));
+        }
+
+        if (throttledSeekRef.current) {
+          clearTimeout(throttledSeekRef.current);
+          throttledSeekRef.current = null;
+        }
+        if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+          try {
+            ytPlayerRef.current.seekTo(finalSeek, true);
+          } catch {}
+        }
+      }
+
+      isDraggingRef.current = false;
+      activeDragInfoRef.current = null;
+      setIsDragging(false);
+    };
+
+    window.addEventListener('pointermove', onGlobalPointerMove);
+    window.addEventListener('pointerup', onGlobalPointerUp);
+    window.addEventListener('pointercancel', onGlobalPointerUp);
   };
 
   // Stepper handlers
@@ -395,6 +499,8 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
       setIsDownloading(false);
     }
   };
+
+  if (!isOpen || !clip) return null;
 
   return (
     <div className="modal-backdrop" onClick={onClose} style={{ zIndex: 10000, padding: '1rem' }}>
@@ -517,7 +623,8 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
                   position: 'relative',
                   zIndex: 2,
                   opacity: playerReady ? 1 : 0,
-                  transition: 'opacity 0.28s ease'
+                  transition: 'opacity 0.28s ease',
+                  pointerEvents: isDragging ? 'none' : 'auto'
                 }}
               ></div>
               {/* Overlay Player Controls */}
@@ -749,17 +856,20 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
             {/* Timeline Track Bar */}
             <div
               ref={timelineBarRef}
-              onClick={isDownloading ? undefined : handleTrackClick}
-              onPointerMove={isDownloading ? undefined : handlePointerMove}
-              onPointerUp={isDownloading ? undefined : handlePointerUp}
+              onPointerDown={(e) => {
+                if (isDownloading) return;
+                // Clicking anywhere on the track immediately jumps & scrubs the playhead
+                handlePointerDown('playhead', e);
+              }}
               style={{
                 position: 'relative',
-                height: '54px',
+                height: '56px',
                 background: 'rgba(20, 24, 40, 0.9)',
                 borderRadius: '10px',
                 border: '1px solid rgba(255, 255, 255, 0.1)',
                 cursor: isDownloading ? 'not-allowed' : 'pointer',
                 userSelect: 'none',
+                touchAction: 'none',
                 overflow: 'visible',
                 boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.5)',
                 opacity: isDownloading ? 0.7 : 1
@@ -776,10 +886,11 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
                   width: `${timeToPct(origStart)}%`,
                   background: 'repeating-linear-gradient(45deg, rgba(56, 189, 248, 0.03), rgba(56, 189, 248, 0.03) 10px, rgba(56, 189, 248, 0.07) 10px, rgba(56, 189, 248, 0.07) 20px)',
                   borderRight: '1px dashed rgba(234, 179, 8, 0.4)',
+                  pointerEvents: 'none'
                 }}
               />
 
-              {/* 2. Original AI Highlight Zone (Center) */}
+              {/* 2. Original AI Highlight Zone (Center - Amber/Orange borders) */}
               <div
                 style={{
                   position: 'absolute',
@@ -788,8 +899,8 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
                   left: `${timeToPct(origStart)}%`,
                   width: `${timeToPct(origEnd) - timeToPct(origStart)}%`,
                   background: 'rgba(234, 179, 8, 0.12)',
-                  borderLeft: '1px solid rgba(234, 179, 8, 0.6)',
-                  borderRight: '1px solid rgba(234, 179, 8, 0.6)',
+                  borderLeft: '2px solid rgba(234, 179, 8, 0.75)',
+                  borderRight: '2px solid rgba(234, 179, 8, 0.75)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -806,7 +917,8 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
                   borderRadius: '4px',
                   border: '1px solid rgba(234, 179, 8, 0.4)',
                   whiteSpace: 'nowrap',
-                  textShadow: '0 1px 2px rgba(0,0,0,0.5)'
+                  textShadow: '0 1px 2px rgba(0,0,0,0.5)',
+                  pointerEvents: 'none'
                 }}>
                   ✨ AI Pick ({origDuration}s)
                 </span>
@@ -822,11 +934,13 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
                   right: 0,
                   background: 'repeating-linear-gradient(45deg, rgba(168, 85, 247, 0.03), rgba(168, 85, 247, 0.03) 10px, rgba(168, 85, 247, 0.07) 10px, rgba(168, 85, 247, 0.07) 20px)',
                   borderLeft: '1px dashed rgba(234, 179, 8, 0.4)',
+                  pointerEvents: 'none'
                 }}
               />
 
-              {/* Active Selected Range Overlay */}
+              {/* Active Selected Range Overlay (Draggable Window) */}
               <div
+                onPointerDown={(e) => !isDownloading && handlePointerDown('range', e)}
                 style={{
                   position: 'absolute',
                   top: '4px',
@@ -837,10 +951,12 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
                   borderTop: '2px solid #38bdf8',
                   borderBottom: '2px solid #c084fc',
                   boxShadow: '0 0 15px rgba(56, 189, 248, 0.2)',
-                  pointerEvents: 'none',
+                  cursor: isDownloading ? 'not-allowed' : 'grab',
                   zIndex: 3,
-                  borderRadius: '4px'
+                  borderRadius: '4px',
+                  touchAction: 'none'
                 }}
+                title="Drag to slide entire clip window"
               />
 
               {/* Draggable Start Handle */}
@@ -851,8 +967,8 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
                   top: '-4px',
                   bottom: '-4px',
                   left: `${timeToPct(adjustedStart)}%`,
-                  width: '16px',
-                  marginLeft: '-8px',
+                  width: '20px',
+                  marginLeft: '-10px',
                   background: 'linear-gradient(180deg, #38bdf8, #0284c7)',
                   borderRadius: '4px',
                   cursor: isDownloading ? 'not-allowed' : 'ew-resize',
@@ -860,11 +976,12 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
                   boxShadow: '0 2px 8px rgba(0,0,0,0.6), 0 0 8px rgba(56, 189, 248, 0.5)',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center'
+                  justifyContent: 'center',
+                  touchAction: 'none'
                 }}
                 title={`${t.trimmer.startTimeLabel}: ${formatSeconds(adjustedStart)}`}
               >
-                <div style={{ width: '2px', height: '24px', background: '#fff', borderRadius: '1px' }}></div>
+                <div style={{ width: '2px', height: '24px', background: '#fff', borderRadius: '1px', pointerEvents: 'none' }}></div>
                 <div style={{
                   position: 'absolute',
                   top: '-24px',
@@ -892,8 +1009,8 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
                   top: '-4px',
                   bottom: '-4px',
                   left: `${timeToPct(adjustedEnd)}%`,
-                  width: '16px',
-                  marginLeft: '-8px',
+                  width: '20px',
+                  marginLeft: '-10px',
                   background: 'linear-gradient(180deg, #c084fc, #9333ea)',
                   borderRadius: '4px',
                   cursor: isDownloading ? 'not-allowed' : 'ew-resize',
@@ -901,11 +1018,12 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
                   boxShadow: '0 2px 8px rgba(0,0,0,0.6), 0 0 8px rgba(192, 132, 252, 0.5)',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center'
+                  justifyContent: 'center',
+                  touchAction: 'none'
                 }}
                 title={`${t.trimmer.endTimeLabel}: ${formatSeconds(adjustedEnd)}`}
               >
-                <div style={{ width: '2px', height: '24px', background: '#fff', borderRadius: '1px' }}></div>
+                <div style={{ width: '2px', height: '24px', background: '#fff', borderRadius: '1px', pointerEvents: 'none' }}></div>
                 <div style={{
                   position: 'absolute',
                   top: '-24px',
@@ -925,29 +1043,46 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
                 </div>
               </div>
 
-              {/* Playhead Needle */}
+              {/* Playhead Needle ("The Orange/Red Scrub Line") with Generous Grab Target */}
               <div
                 onPointerDown={(e) => !isDownloading && handlePointerDown('playhead', e)}
                 style={{
                   position: 'absolute',
-                  top: '-10px',
-                  bottom: '-6px',
+                  top: '-14px',
+                  bottom: '-8px',
                   left: `${timeToPct(currentTime)}%`,
-                  width: '2px',
-                  background: '#ef4444',
-                  boxShadow: '0 0 6px rgba(239, 68, 68, 0.8)',
-                  zIndex: 8,
-                  cursor: isDownloading ? 'not-allowed' : 'pointer'
+                  width: '28px',
+                  marginLeft: '-14px',
+                  zIndex: 15,
+                  cursor: isDownloading ? 'not-allowed' : 'ew-resize',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  touchAction: 'none',
+                  pointerEvents: 'auto'
                 }}
+                title={`Playhead: ${formatSeconds(currentTime)}`}
               >
+                {/* Playhead Glowing Cap */}
                 <div style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: '-4px',
-                  width: '10px',
-                  height: '10px',
+                  width: '14px',
+                  height: '14px',
                   background: '#ef4444',
-                  borderRadius: '50%'
+                  borderRadius: '50%',
+                  border: '2px solid #ffffff',
+                  boxShadow: '0 0 10px rgba(239, 68, 68, 0.9), 0 2px 4px rgba(0,0,0,0.5)',
+                  flexShrink: 0,
+                  transition: 'transform 0.15s ease',
+                  transform: isDragging ? 'scale(1.25)' : 'scale(1)',
+                  pointerEvents: 'none'
+                }} />
+                {/* Playhead Vertical Line */}
+                <div style={{
+                  width: '2px',
+                  flex: 1,
+                  background: '#ef4444',
+                  boxShadow: '0 0 8px rgba(239, 68, 68, 0.85)',
+                  pointerEvents: 'none'
                 }} />
               </div>
             </div>
