@@ -10,3 +10,4 @@ opencv-python>=4.8.0
 openai-whisper>=20231117
 torch>=2.0.0
 python-multipart>=0.0.9
+Pillow>=10.0.0
