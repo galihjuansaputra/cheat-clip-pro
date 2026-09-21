@@ -59,6 +59,7 @@ export type TitlePosition = 'auto' | 'safe_zone' | 'middle' | 'none';
 export type TitleDurationOption = 'entire' | '5s' | '10s';
 export type SubtitlePositionMode = 'bottom' | 'center';
 export type StreamerPreset = 'none' | 'split_top_cam' | 'pip_corner';
+export type FacecamPosition = 'auto' | 'bottom_right' | 'top_right' | 'bottom_left' | 'top_left' | 'center';
 export type FontSizeOption = 'small' | 'medium' | 'big';
 export type TextCaseOption = 'uppercase' | 'capitalize' | 'lowercase';
 export type HardwareAccelOption = 'auto' | 'nvenc' | 'amf' | 'qsv' | 'cpu';
@@ -87,6 +88,7 @@ export interface RenderSettings {
   backgroundStyle: BackgroundStyle;
   enableFaceTracking: boolean;
   streamerPreset: StreamerPreset;
+  facecamPosition?: FacecamPosition;
   titleText?: string;
   titlePrefix?: string;
   titleSuffix?: string;

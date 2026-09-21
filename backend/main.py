@@ -2182,6 +2182,7 @@ class RenderSettingsModel(BaseModel):
     background_style: str = "black"
     enable_face_tracking: bool = True
     streamer_preset: str = "none"
+    facecam_position: Optional[str] = "auto"
     title_text: Optional[str] = None
     title_prefix: Optional[str] = ""
     title_suffix: Optional[str] = ""
@@ -2369,6 +2370,7 @@ async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
                 background_style=settings.background_style,
                 enable_face_tracking=settings.enable_face_tracking,
                 streamer_preset=settings.streamer_preset,
+                facecam_position=getattr(settings, "facecam_position", "auto") or "auto",
                 title_text=display_title if not skip_ass_title else None,
                 title_position=settings.title_position,
                 ass_subtitles_path=ass_path,
@@ -3045,16 +3047,25 @@ async def get_clip_frame(video_id: str, timestamp: float = 0.0, video_url: Optio
 
 
 @app.get("/api/detect-face")
-async def detect_face(video_id: str, timestamp: float = 0.0, video_url: Optional[str] = None):
+async def detect_face(
+    video_id: str,
+    timestamp: float = 0.0,
+    video_url: Optional[str] = None,
+    facecam_position: Optional[str] = "auto",
+    streamer_preset: Optional[str] = "none"
+):
     """
     Detects speaker face coordinates (cx, cy, w, h) on the video at timestamp.
     Returns normalized coordinates and the frame URL.
     """
+    is_streamer = (streamer_preset or "none") in ["split_top_cam", "pip_corner"]
+    default_cx = 0.85 if is_streamer else 0.5
+    default_cy = 0.78 if is_streamer else 0.35
     default_res = {
         "found": False,
-        "cx": 0.5,
-        "cy": 0.35,
-        "w": 0.25,
+        "cx": default_cx,
+        "cy": default_cy,
+        "w": 0.22,
         "h": 0.25,
         "frame_url": f"/api/clip-frame?video_id={video_id}&timestamp={timestamp}"
     }
@@ -3062,7 +3073,12 @@ async def detect_face(video_id: str, timestamp: float = 0.0, video_url: Optional
         # First try to extract or get the cached frame
         frame_path = await asyncio.to_thread(extract_clip_frame, video_url or "", video_id, timestamp)
         if frame_path and os.path.exists(frame_path):
-            box = await asyncio.to_thread(detect_speaker_face_box, frame_path)
+            box = await asyncio.to_thread(
+                detect_speaker_face_box,
+                frame_path,
+                facecam_position or "auto",
+                streamer_preset or "none"
+            )
             box["frame_url"] = f"/api/clip-frame?video_id={video_id}&timestamp={timestamp}"
             return box
 
@@ -3071,7 +3087,12 @@ async def detect_face(video_id: str, timestamp: float = 0.0, video_url: Optional
         local_candidates = list(TEMP_DIR.glob(f"*{safe_id}*.mp4")) + list(EXPORTS_DIR.glob(f"*{safe_id}*.mp4"))
         for candidate in local_candidates:
             if candidate.exists() and candidate.stat().st_size > 10000 and "slice_" not in candidate.name:
-                box = await asyncio.to_thread(detect_speaker_face_box, str(candidate))
+                box = await asyncio.to_thread(
+                    detect_speaker_face_box,
+                    str(candidate),
+                    facecam_position or "auto",
+                    streamer_preset or "none"
+                )
                 box["frame_url"] = f"/api/clip-frame?video_id={video_id}&timestamp={timestamp}"
                 return box
     except Exception as e:

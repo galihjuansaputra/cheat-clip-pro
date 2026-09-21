@@ -9,6 +9,7 @@ import type {
   CaptionFont,
   TitlePosition,
   StreamerPreset,
+  FacecamPosition,
   FontSizeOption,
   TextCaseOption
 } from '../types';
@@ -39,6 +40,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
   const [backgroundStyle, setBackgroundStyle] = useState<BackgroundStyle>('black');
   const [enableFaceTracking, setEnableFaceTracking] = useState<boolean>(true);
   const [streamerPreset, setStreamerPreset] = useState<StreamerPreset>('none');
+  const [facecamPosition, setFacecamPosition] = useState<FacecamPosition>('auto');
   const [titleText, setTitleText] = useState<string>('');
   const [titlePosition, setTitlePosition] = useState<TitlePosition>('auto');
   const [captionStyle, setCaptionStyle] = useState<CaptionStyle>('viral_pop');
@@ -65,6 +67,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
       backgroundStyle,
       enableFaceTracking,
       streamerPreset,
+      facecamPosition,
       titleText,
       titlePosition,
       titleFontSize,
@@ -248,6 +251,39 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                   {t.studio.streamerPip}
                 </button>
               </div>
+
+              {streamerPreset !== 'none' && (
+                <div style={{ marginTop: '0.85rem' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
+                    <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                      {t.studio.facecamPositionLabel || 'Facecam Position in Source:'}
+                    </span>
+                    <span style={{ fontSize: '0.72rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '0.1rem 0.45rem', borderRadius: '4px' }}>
+                      {facecamPosition === 'auto' ? 'AI AUTO-DETECT' : facecamPosition.toUpperCase().replace('_', '-')}
+                    </span>
+                  </div>
+                  <div className="toggle-pill-group" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                    {[
+                      { id: 'auto', label: t.studio.facecamAuto || 'Auto (AI Detect)' },
+                      { id: 'bottom_right', label: t.studio.facecamBottomRight || 'Bottom-Right' },
+                      { id: 'top_right', label: t.studio.facecamTopRight || 'Top-Right' },
+                      { id: 'bottom_left', label: t.studio.facecamBottomLeft || 'Bottom-Left' },
+                      { id: 'top_left', label: t.studio.facecamTopLeft || 'Top-Left' },
+                      { id: 'center', label: t.studio.facecamCenter || 'Center' },
+                    ].map(opt => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        className={`pill-btn ${facecamPosition === opt.id ? 'active' : ''}`}
+                        onClick={() => setFacecamPosition(opt.id as FacecamPosition)}
+                        style={{ fontSize: '0.74rem', padding: '0.25rem 0.6rem' }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* 3. Title / Hook Banner */}
@@ -558,11 +594,13 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                           </div>
                           <div className="skeleton-label-wrap">
                             <span className="skeleton-main-label">STREAMER CAM</span>
-                            <span className="skeleton-sub-label">AUTO FACE-CROP ({aspectRatio})</span>
+                            <span className="skeleton-sub-label">
+                              {facecamPosition === 'auto' ? `AUTO FACE-CROP (${aspectRatio})` : `${facecamPosition.toUpperCase().replace('_', '-')} CROP (${aspectRatio})`}
+                            </span>
                           </div>
                         </div>
                         <div className="wireframe-cam-badge">
-                          <span className="live-dot"></span> FACECAM ({aspectRatio})
+                          <span className="live-dot"></span> FACECAM ({facecamPosition === 'auto' ? 'AI AUTO' : facecamPosition.toUpperCase().replace('_', '-')})
                         </div>
                       </div>
                       <div className="wireframe-split-divider"></div>

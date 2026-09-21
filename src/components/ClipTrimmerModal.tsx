@@ -66,7 +66,7 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
 
   const [adjustedStart, setAdjustedStart] = useState<number>(origStart);
   const [adjustedEnd, setAdjustedEnd] = useState<number>(origEnd);
-  const [clipTitle, setClipTitle] = useState<string>(clip.title_suggestion || clip.title || 'Clip');
+  const [clipTitle, setClipTitle] = useState<string>(clip?.title_suggestion || clip?.title || 'Clip');
   const [startInputVal, setStartInputVal] = useState<string>(formatSeconds(origStart));
   const [endInputVal, setEndInputVal] = useState<string>(formatSeconds(origEnd));
   const [currentTime, setCurrentTime] = useState<number>(origStart);
@@ -479,9 +479,12 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
 
   // Construct adjusted clip object for downloading
   const getAdjustedClip = (): ViralClip => ({
-    ...clip,
-    title: clipTitle.trim() || clip.title,
-    title_suggestion: clipTitle.trim() || clip.title_suggestion,
+    virality_score: 85,
+    key_quotes: [],
+    transcript: '',
+    ...(clip || {}),
+    title: clipTitle.trim() || clip?.title || 'Clip',
+    title_suggestion: clipTitle.trim() || clip?.title_suggestion || 'Clip',
     start_time: adjustedStart,
     end_time: adjustedEnd,
   });

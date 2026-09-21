@@ -9,6 +9,7 @@ import type {
   CaptionFont,
   TitlePosition,
   StreamerPreset,
+  FacecamPosition,
   FontSizeOption,
   TextCaseOption,
   TitleDurationOption,
@@ -157,6 +158,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [backgroundStyle, setBackgroundStyle] = useState<BackgroundStyle>('black');
   const [enableFaceTracking, setEnableFaceTracking] = useState<boolean>(true);
   const [streamerPreset, setStreamerPreset] = useState<StreamerPreset>('none');
+  const [facecamPosition, setFacecamPosition] = useState<FacecamPosition>('auto');
   const [titlePrefix, setTitlePrefix] = useState<string>('');
   const [titleSuffix, setTitleSuffix] = useState<string>('');
   const [customClipTitles, setCustomClipTitles] = useState<Record<string, string>>({});
@@ -291,7 +293,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     let isMounted = true;
     const fetchFace = async () => {
       try {
-        const res = await fetch(`/api/detect-face?video_id=${encodeURIComponent(videoId)}&timestamp=${clipStart}&video_url=${encodeURIComponent(videoUrl || '')}`);
+        const res = await fetch(`/api/detect-face?video_id=${encodeURIComponent(videoId)}&timestamp=${clipStart}&video_url=${encodeURIComponent(videoUrl || '')}&facecam_position=${encodeURIComponent(facecamPosition)}&streamer_preset=${encodeURIComponent(streamerPreset)}`);
         if (res.ok && isMounted) {
           const data = await res.json();
           if (data && typeof data.cx === 'number') {
@@ -304,7 +306,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     };
     fetchFace();
     return () => { isMounted = false; };
-  }, [videoId, previewClipIndex, clipStart, videoUrl]);
+  }, [videoId, previewClipIndex, clipStart, videoUrl, facecamPosition, streamerPreset]);
 
   // Helper duration formatter
   const formatDuration = (seconds: number) => {
@@ -1084,6 +1086,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       backgroundStyle,
       enableFaceTracking,
       streamerPreset,
+      facecamPosition,
       titleText: enrichedSelectedClips.length === 1 ? activeTitle : undefined,
       titlePrefix,
       titleSuffix,
@@ -1513,6 +1516,42 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 {t.studio.streamerPip}
               </button>
             </div>
+
+            {streamerPreset !== 'none' && (
+              <div className="streamer-facecam-position-wrap" style={{ marginTop: '0.85rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.45rem' }}>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                    {t.studio.facecamPositionLabel || 'Facecam Position in Source:'}
+                  </span>
+                  <span style={{ fontSize: '0.72rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '0.1rem 0.45rem', borderRadius: '4px' }}>
+                    {facecamPosition === 'auto' ? 'AI AUTO-DETECT' : facecamPosition.toUpperCase().replace('_', '-')}
+                  </span>
+                </div>
+                <div className="toggle-pill-group" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                  {[
+                    { id: 'auto', label: t.studio.facecamAuto || 'Auto (AI Detect)' },
+                    { id: 'bottom_right', label: t.studio.facecamBottomRight || 'Bottom-Right' },
+                    { id: 'top_right', label: t.studio.facecamTopRight || 'Top-Right' },
+                    { id: 'bottom_left', label: t.studio.facecamBottomLeft || 'Bottom-Left' },
+                    { id: 'top_left', label: t.studio.facecamTopLeft || 'Top-Left' },
+                    { id: 'center', label: t.studio.facecamCenter || 'Center' },
+                  ].map(opt => (
+                    <button
+                      key={opt.id}
+                      type="button"
+                      className={`pill-btn ${facecamPosition === opt.id ? 'active' : ''}`}
+                      onClick={() => setFacecamPosition(opt.id as FacecamPosition)}
+                      style={{ fontSize: '0.74rem', padding: '0.25rem 0.6rem' }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <p style={{ fontSize: '0.72rem', color: 'var(--text-muted, #94a3b8)', marginTop: '0.35rem', margin: '0.35rem 0 0 0' }}>
+                  {t.studio.facecamHint || 'Tip: Select your webcam corner if auto-detection misses dark rooms or VTuber avatars.'}
+                </p>
+              </div>
+            )}
           </div>
 
           {/* 4. Title / Hook Banner */}
@@ -2836,11 +2875,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                           </div>
                           <div className="skeleton-label-wrap">
                             <span className="skeleton-main-label">STREAMER CAM</span>
-                            <span className="skeleton-sub-label">AUTO FACE-CROP ({aspectRatio})</span>
+                            <span className="skeleton-sub-label">
+                              {facecamPosition === 'auto' ? `AUTO FACE-CROP (${aspectRatio})` : `${facecamPosition.toUpperCase().replace('_', '-')} CROP (${aspectRatio})`}
+                            </span>
                           </div>
                         </div>
                         <div className="wireframe-cam-badge">
-                          <span className="live-dot"></span> FACECAM ({aspectRatio})
+                          <span className="live-dot"></span> FACECAM ({facecamPosition === 'auto' ? 'AI AUTO' : facecamPosition.toUpperCase().replace('_', '-')})
                         </div>
                       </div>
                       <div className="wireframe-split-divider"></div>

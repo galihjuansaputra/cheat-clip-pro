@@ -1168,10 +1168,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return output_ass_path
 
 
-def detect_speaker_face_box(source_path: str) -> Dict[str, Any]:
+def detect_speaker_face_box(
+    source_path: str,
+    facecam_position: str = "auto",
+    streamer_preset: str = "none"
+) -> Dict[str, Any]:
     """
-    Detects speaker face bounding box using OpenCV Haar Cascade Classifier.
+    Detects speaker face bounding box using OpenCV Haar Cascade Classifier ensemble.
     Can accept a video file or an image frame.
+    Supports manual facecam position overrides ('bottom_right', 'top_right', 'bottom_left', 'top_left', 'center')
+    or 'auto' smart detection using multi-cascade models (alt2, profile, default) + contrast enhancement + clustering.
     Returns normalized coordinates:
     {
         "found": bool,
@@ -1180,20 +1186,93 @@ def detect_speaker_face_box(source_path: str) -> Dict[str, Any]:
         "w": float,   # face width ratio (0.0 to 1.0)
         "h": float    # face height ratio (0.0 to 1.0)
     }
-    Defaults to cx=0.5, cy=0.35, w=0.25, h=0.25 if no face is detected.
     """
-    default_res = {"found": False, "cx": 0.5, "cy": 0.35, "w": 0.25, "h": 0.25}
+    pos = (facecam_position or "auto").lower().strip()
+    if pos == "bottom_right":
+        return {"found": True, "cx": 0.85, "cy": 0.78, "w": 0.22, "h": 0.25}
+    elif pos == "top_right":
+        return {"found": True, "cx": 0.85, "cy": 0.22, "w": 0.22, "h": 0.25}
+    elif pos == "bottom_left":
+        return {"found": True, "cx": 0.15, "cy": 0.78, "w": 0.22, "h": 0.25}
+    elif pos == "top_left":
+        return {"found": True, "cx": 0.15, "cy": 0.22, "w": 0.22, "h": 0.25}
+    elif pos == "center":
+        return {"found": True, "cx": 0.50, "cy": 0.35, "w": 0.25, "h": 0.25}
+
+    is_streamer = streamer_preset in ["split_top_cam", "pip_corner"]
+    default_cx = 0.85 if is_streamer else 0.50
+    default_cy = 0.78 if is_streamer else 0.35
+    default_res = {"found": False, "cx": default_cx, "cy": default_cy, "w": 0.22, "h": 0.25}
+
     if not source_path or not os.path.exists(source_path):
         return default_res
 
     try:
         import cv2
 
-        if not CASCADE_PATH.exists():
-            logger.warning(f"Haar cascade XML not found at {CASCADE_PATH}")
+        cascades = []
+        cascade_names = [
+            "haarcascade_frontalface_alt2.xml",
+            "haarcascade_profileface.xml",
+            "haarcascade_frontalface_default.xml"
+        ]
+        opencv_data_dir = getattr(cv2, "data", None)
+        haarcascades_dir = getattr(opencv_data_dir, "haarcascades", None) if opencv_data_dir else None
+
+        for c_name in cascade_names:
+            p_cv = os.path.join(haarcascades_dir, c_name) if haarcascades_dir else ""
+            if p_cv and os.path.exists(p_cv):
+                try:
+                    c = cv2.CascadeClassifier(p_cv)
+                    if not c.empty():
+                        cascades.append(c)
+                except Exception:
+                    pass
+            elif (BASE_DIR / c_name).exists():
+                try:
+                    c = cv2.CascadeClassifier(str(BASE_DIR / c_name))
+                    if not c.empty():
+                        cascades.append(c)
+                except Exception:
+                    pass
+
+        if not cascades and CASCADE_PATH.exists():
+            try:
+                c = cv2.CascadeClassifier(str(CASCADE_PATH))
+                if not c.empty():
+                    cascades.append(c)
+            except Exception:
+                pass
+
+        if not cascades:
+            logger.warning("No Haar cascade XML files could be loaded.")
             return default_res
 
-        cascade = cv2.CascadeClassifier(str(CASCADE_PATH))
+        def detect_in_frame(img):
+            h, w = img.shape[:2]
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            eq = cv2.equalizeHist(gray)
+            frame_faces = []
+            for cascade in cascades:
+                for g in [eq, gray]:
+                    faces = cascade.detectMultiScale(g, scaleFactor=1.1, minNeighbors=3, minSize=(28, 28))
+                    if len(faces) > 0:
+                        for (fx, fy, fw, fh) in faces:
+                            fcx = (fx + fw / 2.0) / w
+                            fcy = (fy + fh / 2.0) / h
+                            frame_faces.append((fcx, fcy, float(fw) / w, float(fh) / h))
+                if frame_faces:
+                    break
+
+            if not frame_faces:
+                return None
+
+            if is_streamer:
+                corner_faces = [f for f in frame_faces if ((f[0] - 0.5)**2 + (f[1] - 0.5)**2) > 0.06]
+                if corner_faces:
+                    return max(corner_faces, key=lambda f: f[2] * f[3])
+
+            return max(frame_faces, key=lambda f: f[2] * f[3])
 
         # Check if source is an image
         ext = os.path.splitext(source_path)[1].lower()
@@ -1201,20 +1280,14 @@ def detect_speaker_face_box(source_path: str) -> Dict[str, Any]:
             frame = cv2.imread(source_path)
             if frame is None:
                 return default_res
-            h, w = frame.shape[:2]
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(28, 28))
-            if len(faces) > 0:
-                largest = max(faces, key=lambda f: f[2] * f[3])
-                fx, fy, fw, fh = largest
-                cx = float(fx + fw / 2.0) / w
-                cy = float(fy + fh / 2.0) / h
+            best = detect_in_frame(frame)
+            if best:
                 return {
                     "found": True,
-                    "cx": round(float(cx), 3),
-                    "cy": round(float(cy), 3),
-                    "w": round(float(fw / w), 3),
-                    "h": round(float(fh / h), 3)
+                    "cx": round(float(best[0]), 3),
+                    "cy": round(float(best[1]), 3),
+                    "w": round(float(best[2]), 3),
+                    "h": round(float(best[3]), 3)
                 }
             return default_res
 
@@ -1225,7 +1298,6 @@ def detect_speaker_face_box(source_path: str) -> Dict[str, Any]:
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        # Sample across the entire clip duration rather than only the first ~18 seconds
         step = max(1, total_frames // 25) if total_frames > 25 else max(1, int(fps * 0.75))
 
         detections = []
@@ -1234,36 +1306,45 @@ def detect_speaker_face_box(source_path: str) -> Dict[str, Any]:
         while cap.isOpened() and frame_idx < total_frames and checked < 25:
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
-            if not ret:
-                # Seek may miss non-keyframes; continue to next frame instead of aborting the loop
-                frame_idx += step
-                checked += 1
-                continue
-            checked += 1
-            h, w = frame.shape[:2]
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(28, 28))
-            if len(faces) > 0:
-                largest = max(faces, key=lambda f: f[2] * f[3])
-                fx, fy, fw, fh = largest
-                cx = float(fx + fw / 2.0) / w
-                cy = float(fy + fh / 2.0) / h
-                detections.append((cx, cy, float(fw) / w, float(fh) / h))
-
             frame_idx += step
+            checked += 1
+            if not ret or frame is None:
+                continue
+
+            best = detect_in_frame(frame)
+            if best:
+                detections.append(best)
 
         cap.release()
 
         if detections:
-            avg_cx = sum(d[0] for d in detections) / len(detections)
-            avg_cy = sum(d[1] for d in detections) / len(detections)
-            avg_w = sum(d[2] for d in detections) / len(detections)
-            avg_h = sum(d[3] for d in detections) / len(detections)
-            logger.info(f"Face tracking detected speaker: center=({avg_cx:.3f}, {avg_cy:.3f}), size=({avg_w:.3f}x{avg_h:.3f}) across {len(detections)} frames")
+            clusters = []
+            for d in detections:
+                matched = False
+                for c in clusters:
+                    dist = ((c['cx'] - d[0])**2 + (c['cy'] - d[1])**2)**0.5
+                    if dist < 0.16:
+                        c['pts'].append(d)
+                        c['cx'] = sum(p[0] for p in c['pts']) / len(c['pts'])
+                        c['cy'] = sum(p[1] for p in c['pts']) / len(c['pts'])
+                        matched = True
+                        break
+                if not matched:
+                    clusters.append({'cx': d[0], 'cy': d[1], 'pts': [d]})
+
+            if is_streamer and len(clusters) > 1:
+                corner_clusters = [c for c in clusters if ((c['cx'] - 0.5)**2 + (c['cy'] - 0.5)**2) > 0.06]
+                best_cluster = max(corner_clusters or clusters, key=lambda c: len(c['pts']))
+            else:
+                best_cluster = max(clusters, key=lambda c: len(c['pts']))
+
+            avg_w = sum(p[2] for p in best_cluster['pts']) / len(best_cluster['pts'])
+            avg_h = sum(p[3] for p in best_cluster['pts']) / len(best_cluster['pts'])
+            logger.info(f"Enhanced face tracking detected speaker: center=({best_cluster['cx']:.3f}, {best_cluster['cy']:.3f}), size=({avg_w:.3f}x{avg_h:.3f}) across {len(best_cluster['pts'])} frames")
             return {
                 "found": True,
-                "cx": round(float(avg_cx), 3),
-                "cy": round(float(avg_cy), 3),
+                "cx": round(float(best_cluster['cx']), 3),
+                "cy": round(float(best_cluster['cy']), 3),
                 "w": round(float(avg_w), 3),
                 "h": round(float(avg_h), 3)
             }
@@ -1273,12 +1354,12 @@ def detect_speaker_face_box(source_path: str) -> Dict[str, Any]:
     return default_res
 
 
-def detect_speaker_center_ratio(video_path: str) -> float:
+def detect_speaker_center_ratio(video_path: str, facecam_position: str = "auto", streamer_preset: str = "none") -> float:
     """
     Detects speaker faces across sample frames and returns the smoothed horizontal center ratio (0.0 to 1.0).
     Defaults to 0.5 (center) if no face is detected.
     """
-    box = detect_speaker_face_box(video_path)
+    box = detect_speaker_face_box(video_path, facecam_position=facecam_position, streamer_preset=streamer_preset)
     return float(box.get("cx", 0.5))
 
 
@@ -1299,16 +1380,19 @@ def build_ffmpeg_filtergraph(
     filters = []
 
     face_cx = float(face_box.get("cx", face_center_ratio)) if face_box else face_center_ratio
-    face_cy = float(face_box.get("cy", 0.35)) if face_box else 0.35
+    face_cy = float(face_box.get("cy", 0.78 if streamer_preset in ["split_top_cam", "pip_corner"] else 0.35)) if face_box else 0.35
 
     # 1. Base Layout & Scaling
     if streamer_preset == "split_top_cam":
-        # Ensure both top facecam and bottom content box share the EXACT SAME aspect ratio
         if aspect_ratio == "16:9":
-            # 16:9 split: top cam 1080x608 (16:9) cropped around face, bottom feed 1080x608 (16:9)
+            # 16:9 split: top cam 1080x608 (16:9) tightly cropped around face, bottom feed 1080x608 (16:9)
+            cam_h = "min(ih, max(240, ih*0.38))"
+            cam_w = f"min(iw, ({cam_h})*16/9)"
+            cam_x = f"max(0, min(iw-ow, iw*{face_cx:.3f}-ow/2))"
+            cam_y = f"max(0, min(ih-oh, ih*{face_cy:.3f}-oh/2))"
             filters.append(
                 f"[0:v]split=2[cam_raw][game_raw];"
-                f"[cam_raw]crop='min(iw,ih*16/9*0.65)':'min(ih,iw*9/16*0.65)':'max(0,min(iw-ow,iw*{face_cx:.3f}-ow/2))':'max(0,min(ih-oh,ih*{face_cy:.3f}-oh/2))',scale=1080:608[cam_box];"
+                f"[cam_raw]crop='{cam_w}':'{cam_h}':'{cam_x}':'{cam_y}',scale=1080:608[cam_box];"
                 f"[game_raw]crop='min(iw,ih*16/9)':'min(ih,iw*9/16)':'(iw-min(iw,ih*16/9))/2':'(ih-min(ih,iw*9/16))/2',scale=1080:608[game_box];"
                 f"[cam_box][game_box]vstack=inputs=2[both_split]"
             )
@@ -1321,11 +1405,15 @@ def build_ffmpeg_filtergraph(
                 filters.append(f"[both_split]pad=1080:1920:0:352:black[layout_base]")
 
         elif aspect_ratio == "1:1":
-            # 1:1 split: top cam 960x960 (1:1) cropped around face, bottom feed 960x960 (1:1)
+            # 1:1 split: top cam 960x960 (1:1) tightly cropped around face, bottom feed 960x960 (1:1)
+            cam_h = "min(ih, max(280, ih*0.38))"
+            cam_w = f"min(iw, {cam_h})"
+            cam_x = f"max(0, min(iw-ow, iw*{face_cx:.3f}-ow/2))"
+            cam_y = f"max(0, min(ih-oh, ih*{face_cy:.3f}-oh/2))"
             filters.append(
                 f"[0:v]split=2[cam_raw][game_raw];"
-                f"[cam_raw]crop='min(iw,ih*0.65)':'min(iw,ih*0.65)':'max(0,min(iw-ow,iw*{face_cx:.3f}-ow/2))':'max(0,min(ih-oh,ih*{face_cy:.3f}-oh/2))',scale=960:960[cam_box];"
-                f"[game_raw]crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=960:960[game_box];"
+                f"[cam_raw]crop='{cam_w}':'{cam_h}':'{cam_x}':'{cam_y}',scale=960:960[cam_box];"
+                f"[game_raw]crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(ih,iw))/2',scale=960:960[game_box];"
                 f"[cam_box][game_box]vstack=inputs=2[both_split]"
             )
             if background_style == "blurred":
@@ -1337,10 +1425,14 @@ def build_ffmpeg_filtergraph(
                 filters.append(f"[both_split]pad=1080:1920:60:0:black[layout_base]")
 
         elif aspect_ratio == "4:3":
-            # 4:3 split: top cam 1080x810 (4:3) cropped around face, bottom feed 1080x810 (4:3)
+            # 4:3 split: top cam 1080x810 (4:3) tightly cropped around face, bottom feed 1080x810 (4:3)
+            cam_h = "min(ih, max(280, ih*0.38))"
+            cam_w = f"min(iw, ({cam_h})*4/3)"
+            cam_x = f"max(0, min(iw-ow, iw*{face_cx:.3f}-ow/2))"
+            cam_y = f"max(0, min(ih-oh, ih*{face_cy:.3f}-oh/2))"
             filters.append(
                 f"[0:v]split=2[cam_raw][game_raw];"
-                f"[cam_raw]crop='min(iw,ih*4/3*0.65)':'min(ih,iw*3/4*0.65)':'max(0,min(iw-ow,iw*{face_cx:.3f}-ow/2))':'max(0,min(ih-oh,ih*{face_cy:.3f}-oh/2))',scale=1080:810[cam_box];"
+                f"[cam_raw]crop='{cam_w}':'{cam_h}':'{cam_x}':'{cam_y}',scale=1080:810[cam_box];"
                 f"[game_raw]crop='min(iw,ih*4/3)':'min(ih,iw*3/4)':'(iw-min(iw,ih*4/3))/2':'(ih-min(ih,iw*3/4))/2',scale=1080:810[game_box];"
                 f"[cam_box][game_box]vstack=inputs=2[both_split]"
             )
@@ -1353,26 +1445,33 @@ def build_ffmpeg_filtergraph(
                 filters.append(f"[both_split]pad=1080:1920:0:150:black[layout_base]")
 
         else:  # 9:16
-            # 9:16 split: top cam 540x960 (9:16) cropped around face, bottom feed 540x960 (9:16)
+            # 9:16 Split: full bleed 1080x1920 with crisp facecam on top and centered gameplay on bottom
+            cam_h = "min(ih, max(280, ih*0.38))"
+            cam_w = f"min(iw, ({cam_h})*4/3)"
+            cam_x = f"max(0, min(iw-ow, iw*{face_cx:.3f}-ow/2))"
+            cam_y = f"max(0, min(ih-oh, ih*{face_cy:.3f}-oh/2))"
+
+            game_w = "min(iw, ih*1080/1110)"
+            game_h = "ih"
+            game_x = "(iw-ow)/2"
+            game_y = "(ih-oh)/2"
+
             filters.append(
                 f"[0:v]split=2[cam_raw][game_raw];"
-                f"[cam_raw]crop='min(iw,ih*9/16)':'ih':'max(0,min(iw-ow,iw*{face_cx:.3f}-ow/2))':'max(0,min(ih-oh,ih*{face_cy:.3f}-oh/2))',scale=540:960[cam_box];"
-                f"[game_raw]crop='min(iw,ih*9/16)':'ih':'(iw-min(iw,ih*9/16))/2':'(ih-min(ih,iw*9/16))/2',scale=540:960[game_box];"
-                f"[cam_box][game_box]vstack=inputs=2[both_split]"
+                f"[cam_raw]crop='{cam_w}':'{cam_h}':'{cam_x}':'{cam_y}',scale=1080:810[cam_box];"
+                f"[game_raw]crop='{game_w}':'{game_h}':'{game_x}':'{game_y}',scale=1080:1110[game_box];"
+                f"[cam_box][game_box]vstack=inputs=2[layout_base]"
             )
-            if background_style == "blurred":
-                filters.append(
-                    f"[0:v]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920,boxblur=20:5,eq=saturation=1.2:contrast=1.05[bg_blurred];"
-                    f"[bg_blurred][both_split]overlay=270:0[layout_base]"
-                )
-            else:
-                filters.append(f"[both_split]pad=1080:1920:270:0:black[layout_base]")
 
         current_v = "[layout_base]"
 
     elif streamer_preset == "pip_corner":
-        # PIP Box cropped on face, placed in the top-right corner of the video content for EACH aspect ratio
-        pip_crop = f"[pip_raw]crop='min(iw,ih*4/3*0.5)':'ih*0.5':'max(0,min(iw-ow,iw*{face_cx:.3f}-ow/2))':'max(0,min(ih-oh,ih*{face_cy:.3f}-oh/2))',scale=320:240[pip_box];"
+        # PIP Box tightly cropped on face (320x240)
+        pip_cam_h = "min(ih, max(220, ih*0.35))"
+        pip_cam_w = f"min(iw, ({pip_cam_h})*4/3)"
+        pip_cam_x = f"max(0, min(iw-ow, iw*{face_cx:.3f}-ow/2))"
+        pip_cam_y = f"max(0, min(ih-oh, ih*{face_cy:.3f}-oh/2))"
+        pip_crop = f"[pip_raw]crop='{pip_cam_w}':'{pip_cam_h}':'{pip_cam_x}':'{pip_cam_y}',scale=320:240[pip_box];"
 
         if aspect_ratio == "1:1":
             crop_main = "crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=1080:1080"
@@ -1552,6 +1651,7 @@ def render_clip_to_mp4(
     background_style: str = "black",
     enable_face_tracking: bool = True,
     streamer_preset: str = "none",
+    facecam_position: str = "auto",
     title_text: Optional[str] = None,
     title_position: str = "auto",
     ass_subtitles_path: Optional[str] = None,
@@ -1586,9 +1686,16 @@ def render_clip_to_mp4(
     Renders the final 1080x1920 short-form video with layout, aspect ratio, titles, subtitles,
     watermark branding, background music with start offset, and hook sound effect at frame 0.
     """
-    face_box = {"found": False, "cx": 0.5, "cy": 0.35, "w": 0.25, "h": 0.25}
-    if enable_face_tracking or streamer_preset in ["pip_corner", "split_top_cam"]:
-        face_box = detect_speaker_face_box(video_path)
+    is_streamer = streamer_preset in ["pip_corner", "split_top_cam"]
+    default_cx = 0.85 if is_streamer else 0.50
+    default_cy = 0.78 if is_streamer else 0.35
+    face_box = {"found": False, "cx": default_cx, "cy": default_cy, "w": 0.22, "h": 0.25}
+    if enable_face_tracking or is_streamer:
+        face_box = detect_speaker_face_box(
+            video_path,
+            facecam_position=facecam_position,
+            streamer_preset=streamer_preset
+        )
 
     filter_complex, out_video_map = build_ffmpeg_filtergraph(
         aspect_ratio=aspect_ratio,

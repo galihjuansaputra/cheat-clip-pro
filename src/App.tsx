@@ -197,6 +197,7 @@ export default function App() {
             background_style: settings.backgroundStyle,
             enable_face_tracking: settings.enableFaceTracking,
             streamer_preset: settings.streamerPreset,
+            facecam_position: settings.facecamPosition || 'auto',
             title_text: settings.titleText,
             title_prefix: settings.titlePrefix || '',
             title_suffix: settings.titleSuffix || '',
