@@ -768,11 +768,12 @@ h1, h2, h3, h4 {
 .timestamp-dropdown-menu {
   position: absolute;
   top: calc(100% + 6px);
-  min-width: 270px;
+  min-width: 290px;
+  max-width: 340px;
   background: #0e1526;
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 10px;
-  padding: 0.45rem;
+  padding: 0.5rem;
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.75), 0 0 20px rgba(255, 94, 58, 0.12);
   z-index: 9999;
   display: flex;
@@ -781,6 +782,83 @@ h1, h2, h3, h4 {
   backdrop-filter: blur(16px);
   text-align: left;
   animation: fadeIn 0.15s ease-out;
+}
+
+.timestamp-scope-selector {
+  display: flex;
+  background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 3px;
+  gap: 4px;
+  margin-bottom: 0.25rem;
+}
+
+.timestamp-scope-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.timestamp-scope-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.timestamp-scope-btn.active {
+  background: rgba(255, 94, 58, 0.15);
+  border-color: rgba(255, 94, 58, 0.45);
+  color: var(--secondary);
+  box-shadow: 0 2px 8px rgba(255, 94, 58, 0.15);
+}
+
+.timestamp-scope-btn.active.scope-marked {
+  background: rgba(168, 85, 247, 0.18);
+  border-color: rgba(168, 85, 247, 0.5);
+  color: #c084fc;
+  box-shadow: 0 2px 8px rgba(168, 85, 247, 0.2);
+}
+
+.timestamp-scope-count {
+  font-size: 0.68rem;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+}
+
+.timestamp-scope-btn.active .timestamp-scope-count {
+  background: rgba(255, 94, 58, 0.25);
+  color: #fff;
+}
+
+.timestamp-scope-btn.active.scope-marked .timestamp-scope-count {
+  background: rgba(168, 85, 247, 0.3);
+  color: #fff;
+}
+
+.timestamp-menu-empty-notice {
+  font-size: 0.72rem;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px dashed rgba(245, 158, 11, 0.3);
+  border-radius: 6px;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.25rem;
+  line-height: 1.35;
 }
 
 .timestamp-menu-item {
@@ -799,7 +877,7 @@ h1, h2, h3, h4 {
   transition: var(--transition-smooth);
 }
 
-.timestamp-menu-item:hover {
+.timestamp-menu-item:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.06);
 }
 
