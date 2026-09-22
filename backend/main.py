@@ -49,6 +49,8 @@ try:
         TEMP_DIR,
         EXPORTS_DIR,
         COOKIES_PATH,
+        ROOT_COOKIES_PATH,
+        get_effective_cookies_path,
         download_clip_segment,
         download_full_raw_video,
         transcribe_clip_words,
@@ -67,6 +69,8 @@ except ImportError:
         TEMP_DIR,
         EXPORTS_DIR,
         COOKIES_PATH,
+        ROOT_COOKIES_PATH,
+        get_effective_cookies_path,
         download_clip_segment,
         download_full_raw_video,
         transcribe_clip_words,
@@ -611,8 +615,10 @@ def fetch_video_metadata(url: str, custom_proxy: Optional[str] = None):
             'proxy': attempt_proxy,
             'socket_timeout': 10
         }
-        if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 0:
-            ydl_opts['cookiefile'] = str(COOKIES_PATH)
+        eff_cookies = get_effective_cookies_path()
+        if eff_cookies:
+            ydl_opts['cookiefile'] = str(eff_cookies)
+        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['default', 'web_embedded', 'ios']}}
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -854,8 +860,10 @@ def fetch_transcript_ytdlp(video_id: str, proxy: Optional[str] = None) -> List[d
         'proxy': proxy,
         'socket_timeout': 10
     }
-    if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 0:
-        ydl_opts['cookiefile'] = str(COOKIES_PATH)
+    eff_cookies = get_effective_cookies_path()
+    if eff_cookies:
+        ydl_opts['cookiefile'] = str(eff_cookies)
+    ydl_opts['extractor_args'] = {'youtube': {'player_client': ['default', 'web_embedded', 'ios']}}
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -2196,8 +2204,8 @@ class RenderSettingsModel(BaseModel):
     font_size: str = "medium"
     title_font_size: Optional[str] = "medium"
     text_case: str = "uppercase"
-    title_y_percent: Optional[float] = 14.0
-    subtitle_y_percent: Optional[float] = 18.0
+    title_y_percent: Optional[float] = None
+    subtitle_y_percent: Optional[float] = None
     subtitle_position_mode: Optional[str] = "bottom"
     subtitle_center_y_percent: Optional[float] = 50.0
     # Background Music
@@ -2311,8 +2319,9 @@ async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
                         font_size_preset=settings.font_size or "medium",
                         text_case=settings.text_case or "uppercase",
                         title_position=settings.title_position or "auto",
-                        title_y_percent=settings.title_y_percent if settings.title_y_percent is not None else 14.0,
-                        title_font_size_preset=settings.title_font_size or settings.font_size or "medium"
+                        title_y_percent=settings.title_y_percent,
+                        title_font_size_preset=settings.title_font_size or settings.font_size or "medium",
+                        streamer_preset=settings.streamer_preset or "none"
                     )
                     if rendered_overlay and os.path.exists(rendered_overlay):
                         title_overlay_path = rendered_overlay
@@ -2347,12 +2356,13 @@ async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
                     title_position=settings.title_position,
                     title_duration=settings.title_duration if settings.title_duration else "entire",
                     duration_seconds=duration_sec,
-                    title_y_percent=settings.title_y_percent if settings.title_y_percent is not None else 14.0,
-                    subtitle_y_percent=settings.subtitle_y_percent if settings.subtitle_y_percent is not None else 18.0,
+                    title_y_percent=settings.title_y_percent,
+                    subtitle_y_percent=settings.subtitle_y_percent,
                     subtitle_position_mode=settings.subtitle_position_mode if settings.subtitle_position_mode else "bottom",
                     subtitle_center_y_percent=settings.subtitle_center_y_percent if settings.subtitle_center_y_percent is not None else 50.0,
                     skip_title=skip_ass_title,
-                    title_font_size_preset=settings.title_font_size or settings.font_size or "medium"
+                    title_font_size_preset=settings.title_font_size or settings.font_size or "medium",
+                    streamer_preset=settings.streamer_preset or "none"
                 )
 
             # 3. Render Final Vertical MP4
@@ -2393,7 +2403,8 @@ async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
                 hook_sfx_path=settings.hook_sfx_file_path,
                 hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
                 original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0),
-                hardware_accel=settings.hardware_accel or "auto"
+                hardware_accel=settings.hardware_accel or "auto",
+                title_y_percent=settings.title_y_percent
             )
 
             clip_status["status"] = "completed"
@@ -2731,6 +2742,11 @@ def save_youtube_cookies(req: CookiesSaveRequest):
     try:
         with open(COOKIES_PATH, "w", encoding="utf-8") as f:
             f.write(content)
+        try:
+            with open(ROOT_COOKIES_PATH, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception:
+            pass
         return {
             "success": True,
             "status": "saved",
@@ -2745,26 +2761,29 @@ def save_youtube_cookies(req: CookiesSaveRequest):
 
 @app.get("/api/cookies")
 def get_youtube_cookies_status():
-    if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 0:
+    eff = get_effective_cookies_path()
+    if eff:
         sample_lines = []
         cookies_content = ""
         try:
-            with open(COOKIES_PATH, "r", encoding="utf-8", errors="ignore") as f:
+            with open(eff, "r", encoding="utf-8", errors="ignore") as f:
                 cookies_content = f.read()
                 for line in cookies_content.splitlines():
                     line = line.strip()
                     if line and not line.startswith("#"):
-                        domain = line.split("\t")[0]
-                        if domain not in sample_lines:
-                            sample_lines.append(domain)
-                        if len(sample_lines) >= 6:
-                            break
+                        parts = line.split("\t")
+                        if parts and len(parts) > 0:
+                            domain = parts[0]
+                            if domain not in sample_lines:
+                                sample_lines.append(domain)
+                            if len(sample_lines) >= 6:
+                                break
         except Exception:
             pass
         return {
             "exists": True,
             "has_cookies": True,
-            "size": COOKIES_PATH.stat().st_size,
+            "size": eff.stat().st_size,
             "sample_lines": sample_lines,
             "cookies_content": cookies_content
         }
@@ -2773,11 +2792,12 @@ def get_youtube_cookies_status():
 
 @app.delete("/api/cookies")
 def delete_youtube_cookies():
-    if COOKIES_PATH.exists():
-        try:
-            COOKIES_PATH.unlink()
-        except Exception:
-            pass
+    for p in [COOKIES_PATH, ROOT_COOKIES_PATH]:
+        if p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
     return {"success": True, "status": "deleted", "exists": False, "has_cookies": False}
 
 

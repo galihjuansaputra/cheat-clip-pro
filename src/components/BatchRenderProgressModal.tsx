@@ -16,7 +16,7 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
   const { t } = useLanguage();
   if (!isOpen || !progress) return null;
 
-  const isAllDone = progress.overall_status === 'completed';
+  const isAllDone = progress.overall_status === 'completed' || progress.overall_status === 'error';
   const completedCount = progress.clips.filter(c => c.status === 'completed').length;
   const overallPercent = Math.round((completedCount / (progress.total_clips || 1)) * 100);
 
@@ -27,9 +27,11 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
           <div>
             <h3>{t.batchProgress.modalTitle}</h3>
             <p className="batch-subtitle">
-              {isAllDone
-                ? t.batchProgress.allDoneSubtitle(progress.total_clips)
-                : t.batchProgress.processingSubtitle((progress.current_clip_index || 0) + 1, progress.total_clips)}
+              {progress.overall_status === 'error'
+                ? (progress.error_message || t.batchProgress.statusFailed)
+                : isAllDone
+                  ? t.batchProgress.allDoneSubtitle(progress.total_clips)
+                  : t.batchProgress.processingSubtitle((progress.current_clip_index || 0) + 1, progress.total_clips)}
             </p>
           </div>
           {isAllDone && (

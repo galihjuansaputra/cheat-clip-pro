@@ -138,116 +138,107 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
           </button>
         </div>
 
-        {/* Status banner */}
-        <div className="cookies-status-section">
-          {hasCookies ? (
-            <div className="cookie-status-box active">
-              <span className="status-icon">🛡️</span>
-              <div className="status-info">
-                <strong>{t.cookies.installedTitle}</strong>
-                <p>
-                  {t.cookies.installedDesc(cookieSize)}
-                </p>
-                {sampleLines.length > 0 && (
-                  <details className="cookie-preview-details">
-                    <summary>{t.cookies.viewDomains(sampleLines.length)}</summary>
-                    <div className="cookie-preview-code">
-                      {sampleLines.map((line, idx) => (
-                        <div key={idx}>{line}</div>
-                      ))}
-                    </div>
-                  </details>
-                )}
+        {/* Scrollable Content Area */}
+        <div className="cookies-modal-scrollable">
+          {/* Status banner */}
+          <div className="cookies-status-section">
+            {hasCookies ? (
+              <div className="cookie-status-box active">
+                <span className="status-icon">🛡️</span>
+                <div className="status-info">
+                  <strong>{t.cookies.installedTitle}</strong>
+                  <p>
+                    {t.cookies.installedDesc(cookieSize)}
+                  </p>
+                  {sampleLines.length > 0 && (
+                    <details className="cookie-preview-details">
+                      <summary>{t.cookies.viewDomains(sampleLines.length)}</summary>
+                      <div className="cookie-preview-code">
+                        {sampleLines.map((line, idx) => (
+                          <div key={idx}>{line}</div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="btn-danger-outline"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  disabled={isLoading}
+                  style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' }}
+                >
+                  {t.cookies.clearCookiesBtn}
+                </button>
               </div>
-              <button
-                type="button"
-                className="btn-danger-outline"
-                onClick={() => setShowDeleteConfirm(true)}
-                disabled={isLoading}
-                style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', whiteSpace: 'nowrap' }}
-              >
-                {t.cookies.clearCookiesBtn}
-              </button>
-            </div>
-          ) : (
-            <div className="cookie-status-box warning">
-              <span className="status-icon">⚠️</span>
-              <div className="status-info">
-                <strong>{t.cookies.noCookiesTitle}</strong>
-                <p>
-                  {t.cookies.noCookiesDesc}
-                </p>
+            ) : (
+              <div className="cookie-status-box warning">
+                <span className="status-icon">⚠️</span>
+                <div className="status-info">
+                  <strong>{t.cookies.noCookiesTitle}</strong>
+                  <p>
+                    {t.cookies.noCookiesDesc}
+                  </p>
+                </div>
               </div>
+            )}
+          </div>
+
+          {/* Separate Storage Security Notice */}
+          <div className="cookies-storage-notice">
+            <span className="cookies-notice-icon">🛡️</span>
+            <span>{t.cookies.clearCookiesNotice}</span>
+          </div>
+
+          {message && (
+            <div className={`cookie-alert-box alert-${message.type}`}>
+              {message.text}
             </div>
           )}
-        </div>
 
-        {/* Separate Storage Security Notice */}
-        <div style={{
-          margin: '0 1.5rem 0.6rem',
-          padding: '0.65rem 0.95rem',
-          borderRadius: '8px',
-          background: 'rgba(56, 189, 248, 0.08)',
-          border: '1px solid rgba(56, 189, 248, 0.25)',
-          fontSize: '0.78rem',
-          color: 'var(--text-secondary)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '0.6rem',
-          lineHeight: 1.45
-        }}>
-          <span style={{ fontSize: '1.15rem' }}>🛡️</span>
-          <span>{t.cookies.clearCookiesNotice}</span>
-        </div>
+          {/* Input & Upload */}
+          <div className="cookies-body-section">
+            <div className="cookies-upload-row">
+              <label className="cookies-file-label">
+                {t.cookies.chooseFile}
+                <input
+                  type="file"
+                  accept=".txt"
+                  onChange={handleFileUpload}
+                  style={{ display: 'none' }}
+                />
+              </label>
+              <span className="cookies-or-divider">{t.cookies.orPaste}</span>
+            </div>
 
-        {message && (
-          <div className={`cookie-alert-box alert-${message.type}`}>
-            {message.text}
-          </div>
-        )}
+            <textarea
+              className="cookies-textarea"
+              rows={7}
+              placeholder={`# Netscape HTTP Cookie File\n# http://curl.haxx.se/rfc/cookie_spec.html\n.youtube.com\tTRUE\t/\tTRUE\t1750000000\tSID\t...\n.youtube.com\tTRUE\t/\tTRUE\t1750000000\tHSID\t...`}
+              value={cookieText}
+              onChange={(e) => setCookieText(e.target.value)}
+            />
 
-        {/* Input & Upload */}
-        <div className="cookies-body-section">
-          <div className="cookies-upload-row">
-            <label className="cookies-file-label">
-              {t.cookies.chooseFile}
-              <input
-                type="file"
-                accept=".txt"
-                onChange={handleFileUpload}
-                style={{ display: 'none' }}
-              />
-            </label>
-            <span className="cookies-or-divider">{t.cookies.orPaste}</span>
-          </div>
-
-          <textarea
-            className="cookies-textarea"
-            rows={7}
-            placeholder={`# Netscape HTTP Cookie File\n# http://curl.haxx.se/rfc/cookie_spec.html\n.youtube.com\tTRUE\t/\tTRUE\t1750000000\tSID\t...\n.youtube.com\tTRUE\t/\tTRUE\t1750000000\tHSID\t...`}
-            value={cookieText}
-            onChange={(e) => setCookieText(e.target.value)}
-          />
-
-          <div className="cookies-guide-card">
-            <h4>{t.cookies.guideTitle}</h4>
-            <ol>
-              <li>
-                {t.cookies.guideStep1Prefix}
-                <strong>{t.cookies.guideStep1Name}</strong>
-                {t.cookies.guideStep1Suffix}
-              </li>
-              <li>
-                {t.cookies.guideStep2Prefix}
-                <a href="https://www.youtube.com" target="_blank" rel="noopener noreferrer">YouTube.com</a>
-                {t.cookies.guideStep2Suffix}
-              </li>
-              <li>
-                {t.cookies.guideStep3Prefix}
-                <strong>{t.cookies.guideStep3Export}</strong>
-                {t.cookies.guideStep3Suffix}
-              </li>
-            </ol>
+            <div className="cookies-guide-card">
+              <h4>{t.cookies.guideTitle}</h4>
+              <ol>
+                <li>
+                  {t.cookies.guideStep1Prefix}
+                  <strong>{t.cookies.guideStep1Name}</strong>
+                  {t.cookies.guideStep1Suffix}
+                </li>
+                <li>
+                  {t.cookies.guideStep2Prefix}
+                  <a href="https://www.youtube.com" target="_blank" rel="noopener noreferrer">YouTube.com</a>
+                  {t.cookies.guideStep2Suffix}
+                </li>
+                <li>
+                  {t.cookies.guideStep3Prefix}
+                  <strong>{t.cookies.guideStep3Export}</strong>
+                  {t.cookies.guideStep3Suffix}
+                </li>
+              </ol>
+            </div>
           </div>
         </div>
 

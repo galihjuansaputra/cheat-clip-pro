@@ -940,13 +940,21 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
    * Guarantees title & subtitle NEVER touch or overlap content boxes.
    */
   /**
-   * Snug defaults for each aspect ratio and line count:
+   * Snug defaults for each aspect ratio, line count, and streamer preset:
    * Keeps title and subtitle CLOSE to the video content without touching.
    */
   const getDefaultPositions = (
     ratio: AspectRatioOption,
-    lines: number
+    lines: number,
+    preset: StreamerPreset = streamerPreset
   ): { titleY: number; subtitleY: number; subCenterY: number } => {
+    if (preset === 'split_top_cam') {
+      return {
+        titleY: lines >= 3 ? 3.5 : 4.5,
+        subtitleY: ratio === '4:3' ? 10.0 : 18.0,
+        subCenterY: 50,
+      };
+    }
     if (ratio === '1:1') {
       return {
         titleY: lines >= 3 ? 11.5 : lines === 2 ? 13.5 : 17.0,
@@ -979,7 +987,17 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   /**
    * Hard limits so slider adjustments cannot physically cross into content boxes.
    */
-  const getMaxPositions = (ratio: AspectRatioOption, lines: number) => {
+  const getMaxPositions = (
+    ratio: AspectRatioOption,
+    lines: number,
+    preset: StreamerPreset = streamerPreset
+  ) => {
+    if (preset === 'split_top_cam') {
+      return {
+        maxTitleY: 35.0,
+        maxSubY: 35.0,
+      };
+    }
     if (ratio === '1:1') {
       return {
         maxTitleY: lines >= 4 ? 12.5 : lines === 3 ? 13.5 : lines === 2 ? 15.0 : 18.0,
@@ -1035,7 +1053,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     titleFontSize
   );
 
-  const { maxTitleY, maxSubY } = getMaxPositions(aspectRatio, titleLineCount);
+  const { maxTitleY, maxSubY } = getMaxPositions(aspectRatio, titleLineCount, streamerPreset);
   const { min: minCenterY, max: maxCenterY } = getCenterBounds(aspectRatio);
 
   // Safe clamped values for preview rendering
@@ -1046,14 +1064,14 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   // If user hasn't explicitly customized positions, auto-keep optimal default for ratio & lines
   useEffect(() => {
     if (!isCustomTitleY) {
-      const defaults = getDefaultPositions(aspectRatio, titleLineCount);
+      const defaults = getDefaultPositions(aspectRatio, titleLineCount, streamerPreset);
       setTitleYPercent(defaults.titleY);
     }
-  }, [aspectRatio, titleLineCount, isCustomTitleY]);
+  }, [aspectRatio, titleLineCount, streamerPreset, isCustomTitleY]);
 
   const handleSelectAspectRatio = (newRatio: AspectRatioOption) => {
     setAspectRatio(newRatio);
-    const defaults = getDefaultPositions(newRatio, titleLineCount);
+    const defaults = getDefaultPositions(newRatio, titleLineCount, streamerPreset);
     setTitleYPercent(defaults.titleY);
     setSubtitleYPercent(defaults.subtitleY);
     setSubtitleCenterYPercent(defaults.subCenterY);
@@ -1061,7 +1079,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   };
 
   const handleResetPositions = () => {
-    const defaults = getDefaultPositions(aspectRatio, titleLineCount);
+    const defaults = getDefaultPositions(aspectRatio, titleLineCount, streamerPreset);
     setTitleYPercent(defaults.titleY);
     setSubtitleYPercent(defaults.subtitleY);
     setSubtitleCenterYPercent(defaults.subCenterY);
@@ -1307,7 +1325,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   <input
                     type="number"
                     className="slider-number-input"
-                    min={aspectRatio === '9:16' ? 5 : 4}
+                    min={aspectRatio === '9:16' || streamerPreset === 'split_top_cam' ? 2 : 4}
                     max={maxTitleY}
                     step="0.5"
                     value={safeTitleY}
@@ -1325,7 +1343,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               <div className="slider-input-wrapper">
                 <input
                   type="range"
-                  min={aspectRatio === '9:16' ? 5 : 4}
+                  min={aspectRatio === '9:16' || streamerPreset === 'split_top_cam' ? 2 : 4}
                   max={maxTitleY}
                   step="0.5"
                   value={safeTitleY}
@@ -1336,7 +1354,15 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   className="custom-range-slider"
                 />
                 <div className="slider-quick-buttons">
-                  {aspectRatio === '9:16' ? (
+                  {streamerPreset === 'split_top_cam' ? (
+                    <>
+                      <button type="button" onClick={() => { setTitleYPercent(3.5); setIsCustomTitleY(true); }}>3.5% (Top)</button>
+                      <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 3.5 : 4.5); setIsCustomTitleY(true); }}>
+                        {t.studio.quickDefault(titleLineCount >= 3 ? '3.5%' : '4.5%')}
+                      </button>
+                      <button type="button" onClick={() => { setTitleYPercent(8.0); setIsCustomTitleY(true); }}>8.0% (Low)</button>
+                    </>
+                  ) : aspectRatio === '9:16' ? (
                     <>
                       <button type="button" onClick={() => { setTitleYPercent(6); setIsCustomTitleY(true); }}>{t.studio.quickHigh(6)}</button>
                       <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 12.0 : 17.0); setIsCustomTitleY(true); }}>
@@ -1497,21 +1523,39 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               <button
                 type="button"
                 className={`streamer-btn ${streamerPreset === 'none' ? 'active' : ''}`}
-                onClick={() => setStreamerPreset('none')}
+                onClick={() => {
+                  setStreamerPreset('none');
+                  const defaults = getDefaultPositions(aspectRatio, titleLineCount, 'none');
+                  setTitleYPercent(defaults.titleY);
+                  setSubtitleYPercent(defaults.subtitleY);
+                  setIsCustomTitleY(false);
+                }}
               >
                 {t.studio.streamerNone}
               </button>
               <button
                 type="button"
                 className={`streamer-btn ${streamerPreset === 'split_top_cam' ? 'active' : ''}`}
-                onClick={() => setStreamerPreset('split_top_cam')}
+                onClick={() => {
+                  setStreamerPreset('split_top_cam');
+                  const defaults = getDefaultPositions(aspectRatio, titleLineCount, 'split_top_cam');
+                  setTitleYPercent(defaults.titleY);
+                  setSubtitleYPercent(defaults.subtitleY);
+                  setIsCustomTitleY(false);
+                }}
               >
                 {t.studio.streamerSplit}
               </button>
               <button
                 type="button"
                 className={`streamer-btn ${streamerPreset === 'pip_corner' ? 'active' : ''}`}
-                onClick={() => setStreamerPreset('pip_corner')}
+                onClick={() => {
+                  setStreamerPreset('pip_corner');
+                  const defaults = getDefaultPositions(aspectRatio, titleLineCount, 'pip_corner');
+                  setTitleYPercent(defaults.titleY);
+                  setSubtitleYPercent(defaults.subtitleY);
+                  setIsCustomTitleY(false);
+                }}
               >
                 {t.studio.streamerPip}
               </button>
@@ -2977,7 +3021,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   <div
                     className="wireframe-title-overlay"
                     style={{
-                      top: streamerPreset === 'split_top_cam' ? '24px' : `${safeTitleY}%`,
+                      top: `${safeTitleY}%`,
                       zIndex: 22,
                       pointerEvents: 'none',
                     }}

@@ -1283,6 +1283,7 @@ label[for="manual-subtitle-file"]:hover {
   justify-content: space-between;
   align-items: center;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
 }
 
 .studio-header-title {
@@ -2093,6 +2094,7 @@ label[for="manual-subtitle-file"]:hover {
   justify-content: flex-end;
   gap: 0.85rem;
   background: rgba(0, 0, 0, 0.2);
+  flex-shrink: 0;
 }
 
 .studio-btn-cancel {
@@ -2316,14 +2318,58 @@ label[for="manual-subtitle-file"]:hover {
   -webkit-backdrop-filter: blur(28px);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 18px;
-  width: 90%;
-  max-width: 600px;
-  max-height: 90vh;
+  width: 92%;
+  max-width: 620px;
+  max-height: 88vh;
   display: flex;
   flex-direction: column;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.05);
   overflow: hidden;
+  position: relative;
   animation: modalPop 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cookies-modal-scrollable {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  overscroll-behavior: contain;
+}
+
+.cookies-modal-scrollable::-webkit-scrollbar {
+  width: 6px;
+}
+.cookies-modal-scrollable::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.15);
+}
+.cookies-modal-scrollable::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.18);
+  border-radius: 4px;
+}
+.cookies-modal-scrollable::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.cookies-storage-notice {
+  margin: 0 1.5rem 0.75rem;
+  padding: 0.65rem 0.95rem;
+  border-radius: 8px;
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  line-height: 1.45;
+}
+
+.cookies-notice-icon {
+  font-size: 1.15rem;
+  flex-shrink: 0;
 }
 
 .cookies-status-section {

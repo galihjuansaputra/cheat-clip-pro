@@ -19,6 +19,15 @@ TEMP_DIR = BASE_DIR / "temp_clips"
 EXPORTS_DIR = BASE_DIR / "exports"
 FONTS_DIR = BASE_DIR / "fonts"
 COOKIES_PATH = BASE_DIR / "cookies.txt"
+ROOT_COOKIES_PATH = BASE_DIR.parent / "cookies.txt"
+
+def get_effective_cookies_path() -> Optional[Path]:
+    """Returns valid cookies file path from backend/cookies.txt or root cookies.txt."""
+    if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 0:
+        return COOKIES_PATH
+    if ROOT_COOKIES_PATH.exists() and ROOT_COOKIES_PATH.stat().st_size > 0:
+        return ROOT_COOKIES_PATH
+    return None
 
 CASCADE_PATH = BASE_DIR / "haarcascade_frontalface_default.xml"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
@@ -175,14 +184,15 @@ def format_section_time(seconds: float) -> str:
 
 def get_yt_dlp_cookies_args() -> List[str]:
     """Returns yt-dlp cookies arguments if cookies.txt exists and is non-empty."""
-    if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 0:
-        return ["--cookies", str(COOKIES_PATH)]
+    eff = get_effective_cookies_path()
+    if eff:
+        return ["--cookies", str(eff)]
     return []
 
 
-def get_yt_dlp_base_cmd() -> List[str]:
+def get_yt_dlp_base_cmd(include_cookies: bool = True) -> List[str]:
     """
-    Returns base command for yt-dlp with JavaScript runtime and cookies.
+    Returns base command for yt-dlp with JavaScript runtime, player extractor args, and cookies.
     Tries standalone 'yt-dlp' executable first, then falls back to python module:
     [sys.executable, "-m", "yt_dlp"] which works 100% of the time if installed via pip.
     """
@@ -198,14 +208,24 @@ def get_yt_dlp_base_cmd() -> List[str]:
                 "Please run 'pip install yt-dlp' or 'pip install -r backend/requirements.txt'."
             )
 
-    if shutil.which("node"):
-        cmd.extend(["--js-runtimes", "node"])
-    elif shutil.which("deno"):
+    # Prefer deno (fast challenge solver for modern YouTube player), then node
+    if shutil.which("deno"):
         cmd.extend(["--js-runtimes", "deno"])
+    elif shutil.which("node"):
+        cmd.extend(["--js-runtimes", "node"])
 
-    if COOKIES_PATH.exists() and COOKIES_PATH.stat().st_size > 0:
-        logger.info(f"Using YouTube cookies from: {COOKIES_PATH}")
-        cmd.extend(["--cookies", str(COOKIES_PATH)])
+    # Prevent 'The page needs to be reloaded. Please try again later.'
+    # by allowing yt-dlp to fall back from default/tv_downgraded to web_embedded and ios client APIs.
+    cmd.extend([
+        "--extractor-args", "youtube:player_client=default,web_embedded,ios",
+        "--force-ipv4"
+    ])
+
+    if include_cookies:
+        eff = get_effective_cookies_path()
+        if eff:
+            logger.info(f"Using YouTube cookies from: {eff}")
+            cmd.extend(["--cookies", str(eff)])
     return cmd
 
 
@@ -217,7 +237,7 @@ def download_clip_segment(
 ) -> str:
     """
     Downloads only the requested time slice in high definition (1080p) using yt-dlp.
-    Falls back to stream fetching + ffmpeg trimming if download-sections is unsupported.
+    Falls back to stream fetching + ffmpeg trimming, 720p, and guest mode if cookies trigger reload errors.
     """
     output_path = TEMP_DIR / output_filename
     if output_path.exists():
@@ -234,185 +254,207 @@ def download_clip_segment(
     clip_duration = max(1.0, end_time - start_time)
     t_start_fmt = format_section_time(start_time)
     t_end_fmt = format_section_time(end_time)
-    base_cmd = get_yt_dlp_base_cmd()
 
     # Dynamic timeout: Minimum 300s (5m), plus 5s per second of clip duration.
     # Prevents killing slow HLS/DASH downloads on 60-90s clips.
     timeout_sec = max(300, int(clip_duration * 5) + 120)
 
-    # Method 1: yt-dlp --download-sections with multi-fragment acceleration & retries
-    cmd = [
-        *base_cmd,
-        "--download-sections", f"*{t_start_fmt}-{t_end_fmt}",
-        "--force-keyframes-at-cuts",
-        "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
-        "-N", "4",
-        "--fragment-retries", "10",
-        "--retries", "10",
-        "--file-access-retries", "5",
-        "-o", str(output_path),
-        "--merge-output-format", "mp4",
-        "--no-warnings",
-        clean_url
-    ]
+    has_cookies = get_effective_cookies_path() is not None
+    # If cookies are present, try with cookies first; if rejected by YouTube (or any reload/bot error), try guest mode.
+    # If no cookies are present, try guest mode directly.
+    attempts = [True, False] if has_cookies else [False]
+    last_err_snippet = "unknown"
 
-    logger.info(f"Downloading HD section ({clip_duration:.1f}s) {t_start_fmt} -> {t_end_fmt} for {clean_url} (timeout: {timeout_sec}s)")
-    err_snippet = "unknown"
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
-        if output_path.exists() and output_path.stat().st_size > 10000:
-            logger.info(f"Successfully downloaded section: {output_path} ({output_path.stat().st_size} bytes)")
-            return str(output_path)
-        err_snippet = res.stderr[:300] if (res and res.stderr) else "empty output or invalid file"
-    except subprocess.TimeoutExpired:
-        logger.warning(f"yt-dlp download-sections timed out after {timeout_sec}s for {clean_url}. Triggering fallback...")
-        err_snippet = f"download-sections timed out after {timeout_sec}s"
-    except Exception as e:
-        logger.warning(f"yt-dlp download-sections failed ({e}). Triggering fallback...")
-        err_snippet = str(e)
+    for use_cookies in attempts:
+        mode_label = "with cookies" if use_cookies else "guest mode (without cookies)"
+        base_cmd = get_yt_dlp_base_cmd(include_cookies=use_cookies)
+        logger.info(f"Downloading HD section ({clip_duration:.1f}s) {t_start_fmt} -> {t_end_fmt} for {clean_url} ({mode_label}, timeout: {timeout_sec}s)")
 
-    # Method 2: Fallback - Extract direct stream URLs with yt-dlp and slice using FFmpeg
-    logger.info(f"Direct section download fallback ({err_snippet}), trying stream URL trimming...")
-    try:
-        url_cmd = [
-            *base_cmd,
-            "-g",
-            "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
-            clean_url
-        ]
-        url_res = subprocess.run(url_cmd, capture_output=True, text=True, timeout=45)
-        if url_res.returncode == 0 and url_res.stdout.strip():
-            urls = url_res.stdout.strip().split("\n")
-            video_stream = urls[0]
-            audio_stream = urls[1] if len(urls) > 1 else urls[0]
-
-            trim_timeout = max(120, int(clip_duration * 3) + 30)
-            trim_cmd = [
-                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                "-ss", str(start_time),
-                "-i", video_stream,
-                "-ss", str(start_time),
-                "-i", audio_stream,
-                "-t", str(clip_duration),
-                "-map", "0:v:0", "-map", "1:a:0?",
-                *ACTIVE_ENCODER_ARGS,
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-avoid_negative_ts", "make_zero",
-                "-movflags", "+faststart",
-                str(output_path)
-            ]
-            subprocess.run(trim_cmd, capture_output=True, timeout=trim_timeout)
-            if output_path.exists() and output_path.stat().st_size > 10000:
-                logger.info(f"Successfully trimmed stream URLs with FFmpeg: {output_path} ({output_path.stat().st_size} bytes)")
-                return str(output_path)
-    except Exception as e:
-        logger.error(f"Fallback stream trimming failed: {e}")
-
-    # Method 3: Fallback - Download at 720p (vastly lower bandwidth, skips SABR/1080p throttling)
-    logger.info(f"Method 3: Attempting fast 720p fallback section download for {clean_url}...")
-    try:
-        cmd_720p = [
+        # Method 1: yt-dlp --download-sections with multi-fragment acceleration & retries
+        cmd = [
             *base_cmd,
             "--download-sections", f"*{t_start_fmt}-{t_end_fmt}",
             "--force-keyframes-at-cuts",
-            "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+            "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
             "-N", "4",
             "--fragment-retries", "10",
             "--retries", "10",
+            "--file-access-retries", "5",
             "-o", str(output_path),
             "--merge-output-format", "mp4",
             "--no-warnings",
             clean_url
         ]
-        timeout_720p = max(180, int(clip_duration * 3) + 60)
-        res_720p = subprocess.run(cmd_720p, capture_output=True, text=True, timeout=timeout_720p)
-        if output_path.exists() and output_path.stat().st_size > 10000:
-            logger.info(f"Successfully downloaded 720p fallback section: {output_path} ({output_path.stat().st_size} bytes)")
-            return str(output_path)
-        if res_720p and res_720p.stderr:
-            err_snippet = res_720p.stderr[:300]
-    except Exception as e:
-        logger.warning(f"720p fallback failed: {e}")
-        err_snippet = str(e)
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
+            if output_path.exists() and output_path.stat().st_size > 10000:
+                logger.info(f"Successfully downloaded section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
+                return str(output_path)
+            last_err_snippet = res.stderr[:300] if (res and res.stderr) else "empty output or invalid file"
+        except subprocess.TimeoutExpired:
+            logger.warning(f"yt-dlp download-sections timed out after {timeout_sec}s for {clean_url} ({mode_label}).")
+            last_err_snippet = f"download-sections timed out after {timeout_sec}s"
+        except Exception as e:
+            logger.warning(f"yt-dlp download-sections failed ({e}) ({mode_label}).")
+            last_err_snippet = str(e)
 
-    err_lower = err_snippet.lower()
+        # Method 2: Fallback - Extract direct stream URLs with yt-dlp and slice using FFmpeg
+        logger.info(f"Direct section download fallback ({last_err_snippet}), trying stream URL trimming ({mode_label})...")
+        try:
+            url_cmd = [
+                *base_cmd,
+                "-g",
+                "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
+                clean_url
+            ]
+            url_res = subprocess.run(url_cmd, capture_output=True, text=True, timeout=45)
+            if url_res.returncode == 0 and url_res.stdout.strip():
+                urls = url_res.stdout.strip().split("\n")
+                video_stream = urls[0]
+                audio_stream = urls[1] if len(urls) > 1 else urls[0]
+
+                trim_timeout = max(120, int(clip_duration * 3) + 30)
+                trim_cmd = [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-ss", str(start_time),
+                    "-i", video_stream,
+                    "-ss", str(start_time),
+                    "-i", audio_stream,
+                    "-t", str(clip_duration),
+                    "-map", "0:v:0", "-map", "1:a:0?",
+                    *ACTIVE_ENCODER_ARGS,
+                    "-c:a", "aac",
+                    "-b:a", "192k",
+                    "-avoid_negative_ts", "make_zero",
+                    "-movflags", "+faststart",
+                    str(output_path)
+                ]
+                subprocess.run(trim_cmd, capture_output=True, timeout=trim_timeout)
+                if output_path.exists() and output_path.stat().st_size > 10000:
+                    logger.info(f"Successfully trimmed stream URLs with FFmpeg ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
+                    return str(output_path)
+        except Exception as e:
+            logger.error(f"Fallback stream trimming failed ({mode_label}): {e}")
+
+        # Method 3: Fallback - Download at 720p (vastly lower bandwidth, skips SABR/1080p throttling)
+        logger.info(f"Method 3: Attempting fast 720p fallback section download for {clean_url} ({mode_label})...")
+        try:
+            cmd_720p = [
+                *base_cmd,
+                "--download-sections", f"*{t_start_fmt}-{t_end_fmt}",
+                "--force-keyframes-at-cuts",
+                "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
+                "-N", "4",
+                "--fragment-retries", "10",
+                "--retries", "10",
+                "-o", str(output_path),
+                "--merge-output-format", "mp4",
+                "--no-warnings",
+                clean_url
+            ]
+            timeout_720p = max(180, int(clip_duration * 3) + 60)
+            res_720p = subprocess.run(cmd_720p, capture_output=True, text=True, timeout=timeout_720p)
+            if output_path.exists() and output_path.stat().st_size > 10000:
+                logger.info(f"Successfully downloaded 720p fallback section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
+                return str(output_path)
+            if res_720p and res_720p.stderr:
+                last_err_snippet = res_720p.stderr[:300]
+        except Exception as e:
+            logger.warning(f"720p fallback failed ({mode_label}): {e}")
+            last_err_snippet = str(e)
+
+        # If cookies were used and failed due to reload / session error or bot block, log and proceed to guest mode
+        if use_cookies:
+            logger.warning(f"Download with cookies failed ({last_err_snippet}). Automatically attempting guest mode fallback...")
+
+    err_lower = last_err_snippet.lower()
+    if "reloaded" in err_lower or "reload" in err_lower:
+        raise RuntimeError("YouTube rejected the session cookies ('The page needs to be reloaded'). Your cookies.txt may have expired or need refreshing. Please re-export fresh cookies from an active YouTube tab using the 🍪 Cookies Manager button in the top navbar.")
     if "confirm you're not a bot" in err_lower or "sign in" in err_lower or "login" in err_lower:
-        raise RuntimeError("YouTube blocked video download (Bot verification). Please import/save your YouTube cookies using the 🍪 Cookies Manager button in the top navbar.")
-    raise RuntimeError(f"Failed to download video clip segment from YouTube ({err_snippet}). Please try again or check your network/cookies.")
+        raise RuntimeError("YouTube blocked video download (Bot verification). Please import/save fresh YouTube cookies using the 🍪 Cookies Manager button in the top navbar.")
+    raise RuntimeError(f"Failed to download video clip segment from YouTube ({last_err_snippet}). Please try again or check your network/cookies.")
 
 
 def download_full_raw_video(video_url: str, output_path: str, progress_callback=None) -> str:
     """
     Downloads the full raw video from YouTube in maximum quality (up to 1080p).
     Reports real-time progress to progress_callback if provided.
+    Automatically retries in guest mode if session cookies are rejected.
     """
     clean_url = video_url.strip()
     if not clean_url.startswith("http"):
         clean_url = f"https://www.youtube.com/watch?v={clean_url}"
 
-    base_cmd = get_yt_dlp_base_cmd()
-    cmd = [
-        *base_cmd,
-        "--no-colors",
-        "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
-        "-o", str(output_path),
-        "--merge-output-format", "mp4",
-        "--newline",
-        "--progress-template", "download:%(progress._percent_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
-        clean_url
-    ]
-    logger.info(f"Downloading full raw video from {clean_url} to {output_path}...")
+    has_cookies = get_effective_cookies_path() is not None
+    attempts = [True, False] if has_cookies else [False]
 
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-    for line in iter(process.stdout.readline, ''):
-        raw_line = line.strip()
-        if not raw_line:
-            continue
-        clean_line = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw_line).strip()
+    for use_cookies in attempts:
+        base_cmd = get_yt_dlp_base_cmd(include_cookies=use_cookies)
+        mode_label = "with cookies" if use_cookies else "guest mode (without cookies)"
+        cmd = [
+            *base_cmd,
+            "--no-colors",
+            "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
+            "-o", str(output_path),
+            "--merge-output-format", "mp4",
+            "--newline",
+            "--progress-template", "download:%(progress._percent_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
+            clean_url
+        ]
+        logger.info(f"Downloading full raw video ({mode_label}) from {clean_url} to {output_path}...")
 
-        if clean_line.startswith("download:") and progress_callback:
-            raw_data = clean_line[len("download:"):].strip()
-            parts = raw_data.split("|")
-            if len(parts) >= 5:
-                pct_str, dl_str, tot_str, spd_str, eta_str = parts[0], parts[1], parts[2], parts[3], parts[4]
-                try:
-                    clean_pct = re.sub(r'[^0-9.]', '', pct_str)
-                    pct_val = float(clean_pct) if clean_pct else 0.0
-                except Exception:
-                    pct_val = 0.0
-                progress_callback({
-                    "percent": pct_val,
-                    "downloaded": dl_str.strip() if dl_str and dl_str != "NA" else f"{pct_val:.1f}%",
-                    "total": tot_str.strip() if tot_str and tot_str != "NA" else "",
-                    "speed": spd_str.strip() if spd_str and spd_str != "NA" else "",
-                    "eta": eta_str.strip() if eta_str and eta_str != "NA" else ""
-                })
-        elif "[download]" in clean_line and progress_callback:
-            match = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*%', clean_line)
-            if match:
-                try:
-                    pct_val = float(match.group(1))
-                except Exception:
-                    pct_val = 0.0
-                spd_match = re.search(r'at\s+([0-9.]+\s*[a-zA-Z]+/s)', clean_line)
-                eta_match = re.search(r'ETA\s+([0-9:]+)', clean_line)
-                tot_match = re.search(r'of\s+~?([0-9.]+\s*[a-zA-Z]+)', clean_line)
-                progress_callback({
-                    "percent": pct_val,
-                    "downloaded": f"{pct_val:.1f}%",
-                    "total": tot_match.group(1) if tot_match else "",
-                    "speed": spd_match.group(1) if spd_match else "",
-                    "eta": eta_match.group(1) if eta_match else ""
-                })
-    process.stdout.close()
-    returncode = process.wait()
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+        for line in iter(process.stdout.readline, ''):
+            raw_line = line.strip()
+            if not raw_line:
+                continue
+            clean_line = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw_line).strip()
 
-    if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
-        logger.info(f"Full raw video downloaded successfully ({os.path.getsize(output_path)} bytes)")
-        return str(output_path)
+            if clean_line.startswith("download:") and progress_callback:
+                raw_data = clean_line[len("download:"):].strip()
+                parts = raw_data.split("|")
+                if len(parts) >= 5:
+                    pct_str, dl_str, tot_str, spd_str, eta_str = parts[0], parts[1], parts[2], parts[3], parts[4]
+                    try:
+                        clean_pct = re.sub(r'[^0-9.]', '', pct_str)
+                        pct_val = float(clean_pct) if clean_pct else 0.0
+                    except Exception:
+                        pct_val = 0.0
+                    progress_callback({
+                        "percent": pct_val,
+                        "downloaded": dl_str.strip() if dl_str and dl_str != "NA" else f"{pct_val:.1f}%",
+                        "total": tot_str.strip() if tot_str and tot_str != "NA" else "",
+                        "speed": spd_str.strip() if spd_str and spd_str != "NA" else "",
+                        "eta": eta_str.strip() if eta_str and eta_str != "NA" else ""
+                    })
+            elif "[download]" in clean_line and progress_callback:
+                match = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*%', clean_line)
+                if match:
+                    try:
+                        pct_val = float(match.group(1))
+                    except Exception:
+                        pct_val = 0.0
+                    spd_match = re.search(r'at\s+([0-9.]+\s*[a-zA-Z]+/s)', clean_line)
+                    eta_match = re.search(r'ETA\s+([0-9:]+)', clean_line)
+                    tot_match = re.search(r'of\s+~?([0-9.]+\s*[a-zA-Z]+)', clean_line)
+                    progress_callback({
+                        "percent": pct_val,
+                        "downloaded": f"{pct_val:.1f}%",
+                        "total": tot_match.group(1) if tot_match else "",
+                        "speed": spd_match.group(1) if spd_match else "",
+                        "eta": eta_match.group(1) if eta_match else ""
+                    })
+        process.stdout.close()
+        returncode = process.wait()
 
-    raise RuntimeError(f"Failed to download raw video. Process exited with code: {returncode}")
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 10000:
+            logger.info(f"Full raw video downloaded successfully ({mode_label}, {os.path.getsize(output_path)} bytes)")
+            return str(output_path)
+
+        if use_cookies:
+            logger.warning(f"Full raw video download with cookies exited with code {returncode}. Retrying in guest mode...")
+
+    raise RuntimeError("Failed to download raw video. Please check your cookies or network connection.")
 
 
 def clean_caption_text(text: str) -> str:
@@ -685,7 +727,8 @@ def render_title_overlay_png(
     title_y_percent: Optional[float] = None,
     canvas_w: int = 1080,
     canvas_h: int = 1920,
-    title_font_size_preset: Optional[str] = None
+    title_font_size_preset: Optional[str] = None,
+    streamer_preset: Optional[str] = "none"
 ) -> Optional[str]:
     """
     Renders the title with full-color emojis and bold styled typography into a transparent
@@ -747,39 +790,51 @@ def render_title_overlay_png(
         emoji_font = get_emoji_font(int(title_font_size * 0.90))
 
     # Content boundaries for aspect ratios (Canvas is 1080x1920)
-    if target_aspect_ratio == "1:1":
-        content_top = 420
-        content_bot = 1500
-    elif target_aspect_ratio == "4:3":
-        content_top = 555
-        content_bot = 1365
-    elif target_aspect_ratio == "16:9":
-        content_top = 656
-        content_bot = 1264
+    if streamer_preset == "split_top_cam":
+        if target_aspect_ratio == "16:9":
+            content_top = 352
+            content_bot = 1568
+        elif target_aspect_ratio == "4:3":
+            content_top = 150
+            content_bot = 1770
+        else:  # 1:1 and 9:16
+            content_top = 0
+            content_bot = 1920
     else:
-        content_top = 0
-        content_bot = 1920
+        if target_aspect_ratio == "1:1":
+            content_top = 420
+            content_bot = 1500
+        elif target_aspect_ratio == "4:3":
+            content_top = 555
+            content_bot = 1365
+        elif target_aspect_ratio == "16:9":
+            content_top = 656
+            content_bot = 1264
+        else:  # 9:16
+            content_top = 0
+            content_bot = 1920
 
     line_step = int(title_font_size * 0.86)
     est_title_h = int(title_line_count * line_step)
 
-    # Title Positioning: identical to ASS calculations
-    if target_aspect_ratio != "9:16":
-        default_title_y = max(20, content_top - est_title_h - 15)
-        if title_y_percent is not None:
-            title_y = int(1920 * (title_y_percent / 100.0))
-        else:
-            title_y = default_title_y
-        max_safe_title_y = max(15, content_top - est_title_h - 5)
-        title_y = min(title_y, max_safe_title_y)
+    # Title Positioning (100% WYSIWYG matching framing preview):
+    # Preview renders at top: `${title_y_percent}%` on 569px height (which is 1080x1920 canvas).
+    # When title_y_percent is provided, directly map to canvas pixels: 1920 * (title_y_percent / 100.0).
+    if title_y_percent is not None:
+        effective_title_y_pct = float(title_y_percent)
     else:
-        if title_line_count >= 3 and (title_y_percent is None or title_y_percent == 14.0):
-            effective_title_y_pct = 10.5
-        elif title_line_count == 2 and (title_y_percent is None or title_y_percent == 14.0):
-            effective_title_y_pct = 13.5
-        else:
-            effective_title_y_pct = title_y_percent if title_y_percent is not None else 13.5
-        title_y = max(20, min(1800, int(1920 * (effective_title_y_pct / 100.0))))
+        if streamer_preset == "split_top_cam":
+            effective_title_y_pct = 3.5 if title_line_count >= 3 else 4.5
+        elif target_aspect_ratio == "1:1":
+            effective_title_y_pct = 11.5 if title_line_count >= 3 else (13.5 if title_line_count == 2 else 17.0)
+        elif target_aspect_ratio == "4:3":
+            effective_title_y_pct = 17.3 if title_line_count >= 3 else (19.3 if title_line_count == 2 else 23.6)
+        elif target_aspect_ratio == "16:9":
+            effective_title_y_pct = 22.6 if title_line_count >= 3 else (24.5 if title_line_count == 2 else 28.8)
+        else:  # 9:16
+            effective_title_y_pct = 12.0 if title_line_count >= 3 else (14.5 if title_line_count == 2 else 17.0)
+
+    title_y = max(10, min(1800, int(round(1920 * (effective_title_y_pct / 100.0)))))
 
     # Create transparent canvas
     img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
@@ -868,7 +923,8 @@ def generate_ass_file(
     subtitle_position_mode: str = "bottom",
     subtitle_center_y_percent: float = 50.0,
     skip_title: bool = False,
-    title_font_size_preset: Optional[str] = None
+    title_font_size_preset: Optional[str] = None,
+    streamer_preset: Optional[str] = "none"
 ) -> str:
     """
     Generates an Advanced SubStation Alpha (.ass) subtitle and title file with karaoke / word-level animation.
@@ -913,18 +969,29 @@ def generate_ass_file(
         title_font_size = 82 if title_line_count >= 3 else 94
 
     # 3. Content boundaries for aspect ratios (Canvas is 1080x1920)
-    if target_aspect_ratio == "1:1":
-        content_top = 420
-        content_bot = 1500
-    elif target_aspect_ratio == "4:3":
-        content_top = 555
-        content_bot = 1365
-    elif target_aspect_ratio == "16:9":
-        content_top = 656
-        content_bot = 1264
+    if streamer_preset == "split_top_cam":
+        if target_aspect_ratio == "16:9":
+            content_top = 352
+            content_bot = 1568
+        elif target_aspect_ratio == "4:3":
+            content_top = 150
+            content_bot = 1770
+        else:  # 1:1 and 9:16
+            content_top = 0
+            content_bot = 1920
     else:
-        content_top = 0
-        content_bot = 1920
+        if target_aspect_ratio == "1:1":
+            content_top = 420
+            content_bot = 1500
+        elif target_aspect_ratio == "4:3":
+            content_top = 555
+            content_bot = 1365
+        elif target_aspect_ratio == "16:9":
+            content_top = 656
+            content_bot = 1264
+        else:  # 9:16
+            content_top = 0
+            content_bot = 1920
 
     # Tight line height step (0.86x) for close, compact multi-line title layout
     line_step = int(title_font_size * 0.86)
@@ -932,48 +999,46 @@ def generate_ass_file(
     est_sub_h = int(sub_font_size * 1.08)
     sub_align = 5 if subtitle_position_mode == "center" else 2
 
-    # Title Positioning: keep it SNUG and CLOSE to the top of the video content
-    if target_aspect_ratio != "9:16":
-        # Snug title default: title bottom sits closer to content_top
-        default_title_y = max(20, content_top - est_title_h - 15)
-        if title_y_percent is not None:
-            title_y = int(1920 * (title_y_percent / 100.0))
-        else:
-            title_y = default_title_y
+    # Title Positioning (100% WYSIWYG matching framing preview):
+    # Preview renders at top: `${title_y_percent}%` on 569px height (which is 1080x1920 canvas).
+    # When title_y_percent is provided, directly map to canvas pixels: 1920 * (title_y_percent / 100.0).
+    if title_y_percent is not None:
+        effective_title_y_pct = float(title_y_percent)
+    else:
+        if streamer_preset == "split_top_cam":
+            effective_title_y_pct = 3.5 if title_line_count >= 3 else 4.5
+        elif target_aspect_ratio == "1:1":
+            effective_title_y_pct = 11.5 if title_line_count >= 3 else (13.5 if title_line_count == 2 else 17.0)
+        elif target_aspect_ratio == "4:3":
+            effective_title_y_pct = 17.3 if title_line_count >= 3 else (19.3 if title_line_count == 2 else 23.6)
+        elif target_aspect_ratio == "16:9":
+            effective_title_y_pct = 22.6 if title_line_count >= 3 else (24.5 if title_line_count == 2 else 28.8)
+        else:  # 9:16
+            effective_title_y_pct = 12.0 if title_line_count >= 3 else (14.5 if title_line_count == 2 else 17.0)
 
-        # Hard boundary: title bottom must stay at least 5px clear above content_top
-        max_safe_title_y = max(15, content_top - est_title_h - 5)
-        title_y = min(title_y, max_safe_title_y)
+    title_y = max(10, min(1800, int(round(1920 * (effective_title_y_pct / 100.0)))))
 
-        # Subtitle Positioning:
-        if subtitle_position_mode == "center":
-            sub_y = int(1920 * (subtitle_center_y_percent / 100.0))
-            sub_y = max(content_top + 40, min(content_bot - 40, sub_y))
+    # Subtitle Positioning:
+    if subtitle_position_mode == "center":
+        sub_y = int(round(1920 * (subtitle_center_y_percent / 100.0)))
+        sub_y = max(content_top + 40, min(content_bot - 40, sub_y))
+    else:
+        # Bottom subtitle
+        if subtitle_y_percent is not None:
+            sub_y = int(round(1920 * (1.0 - (float(subtitle_y_percent) / 100.0))))
         else:
-            # Snug bottom default: subtitle sits closer below content_bot
-            default_sub_y = content_bot + est_sub_h + 12
-            if subtitle_y_percent is not None:
-                sub_y = int(1920 * (1.0 - (subtitle_y_percent / 100.0)))
+            if streamer_preset == "split_top_cam":
+                default_sub_pct = 18.0 if (target_aspect_ratio in ["9:16", "1:1"]) else (10.0 if target_aspect_ratio == "4:3" else 18.0)
+                sub_y = int(round(1920 * (1.0 - (default_sub_pct / 100.0))))
             else:
+                default_sub_y = content_bot + est_sub_h + 12
                 sub_y = default_sub_y
+
+        if streamer_preset == "split_top_cam" or target_aspect_ratio == "9:16":
+            sub_y = max(60, min(1880, sub_y))
+        else:
             min_safe_sub_y = content_bot + est_sub_h + 8
             sub_y = max(sub_y, min_safe_sub_y)
-    else:
-        # 9:16 Fullscreen - title moved down closer to video center
-        if title_line_count >= 3 and (title_y_percent is None or title_y_percent == 14.0):
-            effective_title_y_pct = 10.5
-        elif title_line_count == 2 and (title_y_percent is None or title_y_percent == 14.0):
-            effective_title_y_pct = 13.5
-        else:
-            effective_title_y_pct = title_y_percent if title_y_percent is not None else 13.5
-        title_y = max(20, min(1800, int(1920 * (effective_title_y_pct / 100.0))))
-
-        if subtitle_position_mode == "center":
-            sub_y = max(60, min(1860, int(1920 * (subtitle_center_y_percent / 100.0))))
-        else:
-            # Bottom subtitle moved middle a bit (closer to center, ~21% from bottom)
-            effective_sub_y_pct = subtitle_y_percent if subtitle_y_percent is not None else 21.0
-            sub_y = max(60, min(1880, int(1920 * (1.0 - (effective_sub_y_pct / 100.0)))))
 
     # Preset color schemes (ASS uses &HAABBGGRR in hex)
     if style_preset == "viral_pop":
@@ -1371,7 +1436,8 @@ def build_ffmpeg_filtergraph(
     title_text: Optional[str] = None,
     title_position: str = "auto",
     ass_subtitles_path: Optional[str] = None,
-    face_box: Optional[Dict[str, Any]] = None
+    face_box: Optional[Dict[str, Any]] = None,
+    title_y_percent: Optional[float] = None
 ) -> Tuple[str, str]:
     """
     Constructs the FFmpeg -filter_complex chain with proper aspect ratio center-cropping.
@@ -1615,7 +1681,12 @@ def build_ffmpeg_filtergraph(
     elif title_text and title_position != "none":
         # Fallback drawtext if no ASS was generated
         clean_title = title_text.replace("'", "").replace(":", "-").replace('"', "").strip()
-        y_pos = 345 if aspect_ratio == "1:1" else (480 if aspect_ratio in ["4:3", "9:16"] else 581)
+        if title_y_percent is not None:
+            y_pos = int(round(1920 * (float(title_y_percent) / 100.0)))
+        elif streamer_preset == "split_top_cam":
+            y_pos = int(round(1920 * 0.045))
+        else:
+            y_pos = 345 if aspect_ratio == "1:1" else (480 if aspect_ratio in ["4:3", "9:16"] else 581)
         box_style = "box=0"
         title_filter = (
             f"{current_v}drawtext=text='{clean_title}':fontsize=60:fontcolor=white:"
@@ -1680,7 +1751,8 @@ def render_clip_to_mp4(
     # Raw voice / original audio boost (0.0 to 2.0)
     original_audio_volume: float = 1.0,
     # Hardware acceleration selection ('auto', 'nvenc', 'amf', 'qsv', 'cpu')
-    hardware_accel: Optional[str] = "auto"
+    hardware_accel: Optional[str] = "auto",
+    title_y_percent: Optional[float] = None
 ) -> str:
     """
     Renders the final 1080x1920 short-form video with layout, aspect ratio, titles, subtitles,
@@ -1705,7 +1777,8 @@ def render_clip_to_mp4(
         title_text=title_text if not (title_overlay_path and os.path.exists(title_overlay_path)) else None,
         title_position=title_position,
         ass_subtitles_path=ass_subtitles_path,
-        face_box=face_box
+        face_box=face_box,
+        title_y_percent=title_y_percent
     )
 
     filter_chains = [filter_complex]
