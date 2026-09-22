@@ -4,72 +4,104 @@
 
 ---
 
-## ⚡ Quick Start
+## ⚡ Quick Start & Setup
 
-### 🪟 Windows Users: 1-Click Automated Setup (Easiest)
-If you are on Windows, simply double-click **[`setup_and_run.bat`](setup_and_run.bat)** (or **[`run.bat`](run.bat)**).
-The script will automatically:
-1. Check and auto-install all prerequisites (**Git**, **Node.js LTS**, **Python 3.11**, **FFmpeg**, and **yt-dlp**) via `winget`.
-2. Clone the repository (if the script is run in an empty folder; if it already exists, it skips this step).
-3. Set up an isolated Python virtual environment (`venv`) and install all frontend & backend dependencies.
-4. Launch the application and open **`http://localhost:5173`** in your web browser!
+Follow these steps to set up and run Cheat Clip PRO locally on **Windows**, **macOS**, or **Linux**.
 
-> 💡 **Tip:** Subsequent launches skip dependency checks and start the app in ~1 second!
+### Step 1: Prerequisites
 
----
+Make sure you have the following installed:
 
-### 🛠️ Manual Setup (All Platforms)
-
-#### Step 1: Requirements
-1. **[Git](https://git-scm.com/)** — If you don't have Git... how did you even get this project? Download ZIP gang? 📦 No judgment, but grab it so you can get updates (`winget install Git.Git` on Windows, `brew install git` on Mac, or from [git-scm.com](https://git-scm.com/)).
+1. **[Git](https://git-scm.com/)**
+   * **Windows:** `winget install Git.Git` or download from [git-scm.com](https://git-scm.com/)
+   * **macOS:** `brew install git`
+   * **Linux:** `sudo apt install git`
 2. **[Node.js](https://nodejs.org/)** (v18 or newer)
-3. **Python** (v3.10 or newer) — Install from [python.org](https://www.python.org/downloads/) or directly from the [Microsoft Store (Windows)](https://apps.microsoft.com/detail/9ncvdn91xzqp)
-4. **FFmpeg & yt-dlp** (Required to download and render videos)
+   * Download from [nodejs.org](https://nodejs.org/) or install via your package manager.
+3. **[Python](https://www.python.org/)** (v3.10 or newer)
+   * **Windows:** Install from [python.org](https://www.python.org/downloads/) (make sure to check *"Add Python to PATH"* during setup) or from Microsoft Store.
+   * **macOS:** `brew install python`
+   * **Linux:** `sudo apt install python3 python3-pip python3-venv`
+4. **FFmpeg & yt-dlp** (Required to download, slice, and render clips)
    * **Windows (PowerShell):**
      ```powershell
      winget install Gyan.FFmpeg
      winget install yt-dlp.yt-dlp
      ```
      *(Close and reopen your terminal after installing so Windows recognizes them)*
-   * **Mac (Terminal):**
+   * **macOS (Terminal):**
      ```bash
      brew install ffmpeg yt-dlp
      ```
-     *(If you don't have Homebrew installed on Mac, install it first from [brew.sh](https://brew.sh))*
+   * **Linux:**
+     ```bash
+     sudo apt update && sudo apt install ffmpeg
+     pip install yt-dlp
+     ```
+
+---
 
 ### Step 2: Clone the Repository
-Open your terminal and run:
+
+Open your terminal and clone the repository:
+
 ```bash
 git clone https://github.com/galihjuansaputra/cheat-clip-pro.git
 cd cheat-clip-pro
 ```
 
+---
+
 ### Step 3: Install Dependencies
-Inside the project folder, run:
+
+#### 1. Frontend Dependencies
 ```bash
 npm install
-python -m pip install -r backend/requirements.txt
 ```
-*(On Mac, use `python3 -m pip install -r backend/requirements.txt`)*
+
+#### 2. Backend Dependencies
+We recommend setting up a Python virtual environment:
+
+* **Windows:**
+  ```powershell
+  python -m venv venv
+  venv\Scripts\activate
+  pip install -r backend/requirements.txt
+  ```
+
+* **macOS / Linux:**
+  ```bash
+  python3 -m venv venv
+  source venv/bin/activate
+  pip install -r backend/requirements.txt
+  ```
+
+---
 
 ### Step 4: Run the App
+
+Launch both the frontend and backend servers concurrently:
+
 ```bash
 npm run dev
 ```
-Open **`http://localhost:5173`** in your web browser!
+
+* **Web App:** [`http://localhost:5173`](http://localhost:5173)
+* **Backend API:** [`http://localhost:8000`](http://localhost:8000)
+* **API Documentation:** [`http://localhost:8000/docs`](http://localhost:8000/docs)
 
 ---
 
 ## 🔄 Updating to the Latest Version
 
-To update your copy of Cheat Clip PRO with the latest features and fixes, open your terminal inside the `cheat-clip-pro` folder and run:
+To update Cheat Clip PRO to the latest release:
 
 ```bash
 git pull
 npm install
-python -m pip install -r backend/requirements.txt
+pip install -r backend/requirements.txt
 ```
-*(On Mac, use `python3 -m pip install -r backend/requirements.txt`)*
+*(Make sure your virtual environment is activated if you created one)*
 
 ---
 
