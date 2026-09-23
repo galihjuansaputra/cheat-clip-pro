@@ -3428,4 +3428,205 @@ async def clear_temp_folder():
     }
 
 
+# ----------------------------------------------------------------
+# System Version, Update, and Auto-Restart Endpoints (Option B)
+# ----------------------------------------------------------------
+
+def run_git_command(args: List[str], cwd: Optional[Path] = None, timeout: int = 15) -> Tuple[int, str, str]:
+    """Runs a git command safely and returns (returncode, stdout, stderr)."""
+    from pathlib import Path
+    target_cwd = cwd or Path(_base_dir).parent
+    try:
+        proc = subprocess.run(
+            ["git"] + args,
+            cwd=str(target_cwd),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=timeout
+        )
+        return proc.returncode, proc.stdout.strip(), proc.stderr.strip()
+    except Exception as e:
+        return -1, "", str(e)
+
+def get_current_git_info() -> dict:
+    """Retrieves current commit, branch, and remote URL information."""
+    from pathlib import Path
+    root_dir = Path(_base_dir).parent
+    rc, commit_info, _ = run_git_command(["log", "-1", "--pretty=format:%h|%H|%s|%cd", "--date=short"], cwd=root_dir)
+    rc_branch, branch, _ = run_git_command(["branch", "--show-current"], cwd=root_dir)
+    rc_remote, remote_url, _ = run_git_command(["remote", "get-url", "origin"], cwd=root_dir)
+
+    commit_hash = "unknown"
+    commit_full = ""
+    commit_msg = "Unknown commit"
+    commit_date = ""
+    if rc == 0 and commit_info:
+        parts = commit_info.split("|")
+        if len(parts) >= 4:
+            commit_hash = parts[0]
+            commit_full = parts[1]
+            commit_msg = parts[2]
+            commit_date = parts[3]
+
+    return {
+        "current_commit": commit_hash,
+        "current_commit_full": commit_full,
+        "commit_message": commit_msg,
+        "commit_date": commit_date,
+        "branch": branch if rc_branch == 0 and branch else "master",
+        "remote_url": remote_url if rc_remote == 0 and remote_url else "https://github.com/galihjuansaputra/cheat-clip-pro.git"
+    }
+
+def trigger_detached_restart(delay: float = 2.5):
+    """Launches backend/restart_runner.py in a fully detached background process."""
+    from pathlib import Path
+    root_dir = Path(_base_dir).parent
+    runner_script = root_dir / "backend" / "restart_runner.py"
+    
+    flags = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS) if os.name == 'nt' else 0
+    subprocess.Popen(
+        [sys.executable, str(runner_script), "--delay", str(delay), "--cwd", str(root_dir)],
+        cwd=str(root_dir),
+        creationflags=flags,
+        start_new_session=True if os.name != 'nt' else False,
+        close_fds=True
+    )
+    logger.info(f"Detached restart runner spawned with delay={delay}s")
+
+@app.get("/api/system/version")
+def api_system_version():
+    """Returns local git version information."""
+    return get_current_git_info()
+
+@app.get("/api/system/check-update")
+def api_check_update():
+    """Fetches origin and checks if updates are available."""
+    from pathlib import Path
+    root_dir = Path(_base_dir).parent
+    info = get_current_git_info()
+    branch = info.get("branch", "master") or "master"
+
+    # Fetch origin
+    rc_fetch, _, err_fetch = run_git_command(["fetch", "origin", branch], cwd=root_dir, timeout=20)
+    if rc_fetch != 0:
+        return {
+            **info,
+            "update_available": False,
+            "behind_count": 0,
+            "changelog": [],
+            "error": f"Failed to fetch updates from remote: {err_fetch or 'Network or remote error'}"
+        }
+
+    # Count commits behind
+    rc_count, count_str, _ = run_git_command(["rev-list", "--count", "HEAD..FETCH_HEAD"], cwd=root_dir)
+    behind_count = int(count_str) if rc_count == 0 and count_str.isdigit() else 0
+
+    # Get changelog of new commits
+    changelog = []
+    if behind_count > 0:
+        rc_log, log_str, _ = run_git_command(["log", "HEAD..FETCH_HEAD", "--pretty=format:%h|%s|%cd", "--date=short"], cwd=root_dir)
+        if rc_log == 0 and log_str:
+            for line in log_str.splitlines():
+                p = line.strip().split("|")
+                if len(p) >= 3:
+                    changelog.append({"hash": p[0], "message": p[1], "date": p[2]})
+
+    rc_remote_commit, remote_commit, _ = run_git_command(["rev-parse", "--short", "FETCH_HEAD"], cwd=root_dir)
+
+    return {
+        **info,
+        "update_available": behind_count > 0,
+        "behind_count": behind_count,
+        "remote_commit": remote_commit if rc_remote_commit == 0 else info["current_commit"],
+        "changelog": changelog
+    }
+
+@app.post("/api/system/update")
+async def api_perform_update():
+    """Pulls latest code, syncs dependencies if modified, and triggers background restart."""
+    from pathlib import Path
+    root_dir = Path(_base_dir).parent
+    info = get_current_git_info()
+    branch = info.get("branch", "master") or "master"
+    old_head = info.get("current_commit_full", "HEAD")
+
+    # 1. Fetch latest
+    rc_fetch, _, err_fetch = run_git_command(["fetch", "origin", branch], cwd=root_dir, timeout=25)
+    if rc_fetch != 0:
+        raise HTTPException(status_code=500, detail=f"Failed to fetch updates: {err_fetch}")
+
+    # 2. Check if working tree has tracked changes
+    rc_status, status_out, _ = run_git_command(["status", "--porcelain"], cwd=root_dir)
+    has_local_changes = False
+    if rc_status == 0 and status_out:
+        for line in status_out.splitlines():
+            if not line.startswith("??"):
+                has_local_changes = True
+                break
+
+    if has_local_changes:
+        logger.info("Local changes detected. Stashing before update...")
+        run_git_command(["stash", "save", "Auto-stash before Cheat Clip PRO update"], cwd=root_dir)
+
+    # 3. Pull latest changes
+    rc_pull, pull_out, err_pull = run_git_command(["pull", "origin", branch], cwd=root_dir, timeout=40)
+    if rc_pull != 0:
+        if has_local_changes:
+            run_git_command(["stash", "pop"], cwd=root_dir)
+        raise HTTPException(status_code=500, detail=f"Git pull failed: {err_pull or pull_out}")
+
+    if has_local_changes:
+        logger.info("Reapplying stashed local changes...")
+        run_git_command(["stash", "pop"], cwd=root_dir)
+
+    # 4. Check what files changed between old_head and new HEAD
+    rc_diff, diff_files, _ = run_git_command(["diff", f"{old_head}..HEAD", "--name-only"], cwd=root_dir)
+    changed_files = diff_files.splitlines() if rc_diff == 0 and diff_files else []
+
+    updated_deps = []
+    # If package.json changed, run npm install
+    if "package.json" in changed_files:
+        logger.info("package.json changed. Running npm install...")
+        try:
+            cmd = "npm.cmd install" if os.name == "nt" else "npm install"
+            subprocess.run(cmd, shell=True, cwd=str(root_dir), timeout=120)
+            updated_deps.append("Node modules (npm install)")
+        except Exception as e:
+            logger.warning(f"npm install warning: {e}")
+
+    # If requirements.txt changed, run pip install
+    if any("requirements.txt" in f for f in changed_files):
+        logger.info("requirements.txt changed. Running pip install...")
+        try:
+            pip_cmd = f'"{sys.executable}" -m pip install -r backend/requirements.txt'
+            subprocess.run(pip_cmd, shell=True, cwd=str(root_dir), timeout=180)
+            updated_deps.append("Python dependencies (pip install)")
+        except Exception as e:
+            logger.warning(f"pip install warning: {e}")
+
+    # 5. Trigger detached restart runner
+    trigger_detached_restart(delay=2.5)
+
+    new_info = get_current_git_info()
+    return {
+        "success": True,
+        "status": "restarting",
+        "previous_commit": info["current_commit"],
+        "new_commit": new_info["current_commit"],
+        "updated_deps": updated_deps,
+        "message": "Cheat Clip PRO has been updated successfully. Server is restarting in background..."
+    }
+
+@app.post("/api/system/restart")
+async def api_restart_app():
+    """Triggers an immediate background restart without pulling code."""
+    trigger_detached_restart(delay=2.5)
+    return {
+        "success": True,
+        "status": "restarting",
+        "message": "Cheat Clip PRO is restarting..."
+    }
+
+
 

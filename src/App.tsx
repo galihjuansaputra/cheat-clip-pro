@@ -4,6 +4,7 @@ import { LanguageSwitcher } from './components/LanguageSwitcher';
 import { ClipStudioSection } from './components/ClipStudioSection';
 import { CookiesModal } from './components/CookiesModal';
 import { ClipTrimmerModal } from './components/ClipTrimmerModal';
+import { AppUpdateModal } from './components/AppUpdateModal';
 import { useLanguage } from './locales';
 import type { AnalyzeResponse, ViralClip, RenderSettings, BatchRenderProgress } from './types';
 
@@ -22,6 +23,7 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('cheat_clip_gemini_api_key') || '');
   const [showApiKey, setShowApiKey] = useState(false);
   const [isCookiesModalOpen, setIsCookiesModalOpen] = useState(false);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [hasCookies, setHasCookies] = useState(false);
   const [isDownloadingRaw, setIsDownloadingRaw] = useState(false);
   const [rawDownloadProgress, setRawDownloadProgress] = useState<{
@@ -1765,6 +1767,28 @@ Transcript:
             title={t.header.clearTempTooltip}
           >
             <span>🧹 {isClearingGlobalTemp ? t.header.clearingTempBtn : t.header.clearTempBtn}</span>
+          </button>
+          <button
+            type="button"
+            className="cookie-header-btn"
+            onClick={() => setIsUpdateModalOpen(true)}
+            style={{
+              padding: '0.45rem 0.85rem',
+              fontSize: '0.8rem',
+              fontWeight: 600,
+              borderRadius: '8px',
+              background: 'rgba(255, 255, 255, 0.05)',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+              color: 'var(--text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.4rem',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease'
+            }}
+            title={t.header.updateBtnTooltip}
+          >
+            <span>🔄 {t.header.updateBtn}</span>
           </button>
           <LanguageSwitcher />
           <a
@@ -3660,6 +3684,12 @@ Transcript:
         isOpen={isCookiesModalOpen}
         onClose={() => setIsCookiesModalOpen(false)}
         onCookieStatusChange={setHasCookies}
+      />
+
+      {/* App Update & Restart Modal */}
+      <AppUpdateModal
+        isOpen={isUpdateModalOpen}
+        onClose={() => setIsUpdateModalOpen(false)}
       />
 
       {/* Clip Trimmer & Context Editor Modal */}
