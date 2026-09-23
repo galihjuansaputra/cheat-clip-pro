@@ -119,18 +119,18 @@ class ViralClip(BaseModel):
     hashtag_suggestion: str = Field(default="", description="Relevant hashtags suggestion (e.g. #hashtag1 #hashtag2)")
 
 class ViralClipGemini(BaseModel):
-    title: str = Field(description="Catchy clip title, max 8 words. STRICT RULE: NEVER use first-person pronouns ('I', 'me', 'my', 'myself', 'aku', 'saya'). Attribute to the person speaking by name, host/guest title, or use third-person objective framing so it does not look like the user's opinion.")
+    title: str = Field(description="Catchy clip title, max 8 words, in the EXACT SAME LANGUAGE as the video transcript (STRICT ZERO-TRANSLATION RULE: English is English, Indonesian is Indonesian, Spanish is Spanish). NEVER use first-person pronouns ('I', 'me', 'my', 'myself', 'aku', 'saya'). Attribute to the person speaking by name, host/guest title, or use third-person objective framing so it does not look like the user's opinion.")
     start_time: float = Field(description="Clip start in seconds, aligned to a sentence boundary")
     end_time: float = Field(description="Clip end in seconds, aligned to a sentence boundary")
     hook_time: float = Field(description="Absolute timestamp in seconds from video start where the potential hook occurs inside this clip range (must be >= start_time and <= end_time)")
     virality_score: int = Field(description="Virality score 1-100")
-    key_quotes: List[str] = Field(description="1-2 key quotes from the clip")
-    title_suggestion: str = Field(default="", description="Catchy alternative title suggestion. STRICT RULE: NEVER use first-person ('I', 'me', 'my', 'saya', 'aku'). Attribute to the speaker/host/guest by name or topic.")
-    caption_suggestion: str = Field(default="", description="Engaging social media caption suggestion attributing insights or story to the speaker.")
-    hashtag_suggestion: str = Field(default="", description="Relevant hashtags suggestion (e.g. #hashtag1 #hashtag2)")
+    key_quotes: List[str] = Field(description="1-2 verbatim quotes directly spoken in the clip, in the original language of the video without translation")
+    title_suggestion: str = Field(default="", description="Catchy alternative title suggestion in the EXACT SAME LANGUAGE as the video transcript (DO NOT translate). STRICT RULE: NEVER use first-person ('I', 'me', 'my', 'saya', 'aku'). Attribute to the speaker/host/guest by name or topic.")
+    caption_suggestion: str = Field(default="", description="Engaging social media caption suggestion written in the EXACT SAME LANGUAGE as the video transcript (DO NOT translate to any other language), attributing insights or story to the speaker.")
+    hashtag_suggestion: str = Field(default="", description="Relevant hashtags suggestion in the SAME LANGUAGE as the video transcript (e.g. #hashtag1 #hashtag2)")
 
 class VideoAnalysis(BaseModel):
-    summary: str = Field(description="1-2 sentence video summary, followed by 2-4 general hashtags (e.g. #podcast #marriage #success)")
+    summary: str = Field(description="1-2 sentence video summary in the EXACT SAME LANGUAGE as the video transcript (STRICT ZERO-TRANSLATION RULE: English stays English, Indonesian stays Indonesian, Spanish stays Spanish), followed by 2-4 relevant hashtags")
     clips: List[ViralClipGemini] = Field(description="List of viral clip candidates, sorted by virality_score desc")
 
 # ----------------------------------------------------------------
@@ -1163,17 +1163,156 @@ def lowercase_hashtags_in_string(text: str) -> str:
         return text
     return re.sub(r'#\w+', lambda m: m.group(0).lower(), text)
 
-def sanitize_first_person_title(title: str, speaker_or_channel: str = "") -> str:
+LANGUAGE_NAMES = {
+    'id': 'Indonesian (Bahasa Indonesia)',
+    'en': 'English',
+    'es': 'Spanish (Español)',
+    'pt': 'Portuguese (Português)',
+    'fr': 'French (Français)',
+    'de': 'German (Deutsch)',
+    'ja': 'Japanese (日本語)',
+    'ko': 'Korean (한국어)',
+    'zh': 'Chinese (中文)',
+    'ar': 'Arabic (العربية)',
+    'ru': 'Russian (Русский)',
+}
+
+ID_STOPWORDS = {
+    'yang', 'dan', 'di', 'ini', 'itu', 'dengan', 'untuk', 'tidak', 'dari', 'dalam',
+    'akan', 'pada', 'juga', 'ke', 'karena', 'bisa', 'ada', 'mereka', 'sudah', 'kita',
+    'saya', 'kamu', 'orang', 'jadi', 'lagi', 'kalo', 'kalau', 'ya', 'banget', 'bukan',
+    'tapi', 'sama', 'tau', 'tahu', 'gimana', 'kenapa', 'seperti', 'apa', 'nah', 'udah',
+    'nih', 'dong', 'kan', 'lah', 'bang', 'mas', 'mbak', 'kak', 'nggak', 'gak', 'aja',
+    'bener', 'gitu', 'adalah', 'oleh', 'secara', 'tersebut', 'pun', 'kok', 'deh', 'sih',
+    'gue', 'lu', 'lo', 'luar', 'biasa', 'hanya', 'sangat', 'bagi', 'antara', 'tentang',
+    'banyak', 'kurang', 'harus', 'mau', 'maupun', 'saat', 'ketika', 'terus', 'pasti',
+    'masih', 'punya', 'makanya', 'ngomong', 'bikin'
+}
+
+EN_STOPWORDS = {
+    'the', 'and', 'to', 'of', 'a', 'in', 'that', 'is', 'it', 'you', 'for', 'on',
+    'are', 'as', 'with', 'they', 'at', 'be', 'this', 'have', 'from', 'or', 'one',
+    'had', 'by', 'but', 'not', 'what', 'all', 'were', 'we', 'when', 'your', 'can',
+    'there', 'an', 'which', 'she', 'do', 'how', 'their', 'if', 'will', 'up', 'about',
+    'out', 'so', 'would', 'like', 'just', 'know', 'people', 'think', 'going', 'been',
+    'them', 'some', 'could', 'him', 'into', 'other', 'than', 'then', 'now', 'look',
+    'only', 'come', 'its', 'over', 'also', 'back', 'after', 'use', 'two', 'our',
+    'work', 'first', 'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these',
+    'give', 'day', 'most', 'us', 'time', 'really', 'something', 'good', 'make'
+}
+
+ES_STOPWORDS = {
+    'de', 'la', 'que', 'el', 'en', 'y', 'a', 'los', 'del', 'se', 'las', 'por',
+    'un', 'para', 'con', 'no', 'una', 'su', 'al', 'lo', 'como', 'más', 'pero',
+    'sus', 'le', 'ya', 'o', 'este', 'sí', 'porque', 'esta', 'son', 'entre',
+    'está', 'cuando', 'muy', 'sin', 'sobre', 'ser', 'tiene', 'también', 'me',
+    'hasta', 'hay', 'donde', 'quien', 'desde', 'todo', 'nos', 'durante', 'todos',
+    'uno', 'les', 'ni', 'contra', 'otros', 'ese', 'eso', 'ante', 'ellos', 'esto'
+}
+
+PT_STOPWORDS = {
+    'de', 'a', 'o', 'que', 'e', 'do', 'da', 'em', 'um', 'para', 'é', 'com',
+    'não', 'uma', 'os', 'no', 'se', 'na', 'por', 'mais', 'as', 'dos', 'como',
+    'mas', 'foi', 'ao', 'ele', 'das', 'tem', 'à', 'seu', 'sua', 'ou', 'ser',
+    'quando', 'muito', 'há', 'nos', 'já', 'está', 'eu', 'também', 'só', 'pelo',
+    'pela', 'você', 'isso', 'ela', 'entre', 'depois'
+}
+
+FR_STOPWORDS = {
+    'de', 'la', 'le', 'et', 'les', 'des', 'en', 'un', 'du', 'une', 'que', 'est',
+    'pour', 'qui', 'dans', 'a', 'par', 'plus', 'pas', 'au', 'sur', 'ne', 'se',
+    'ce', 'il', 'sont', 'avec', 'son', 'cette', 'aux', 'ses', 'mais', 'ou',
+    'ont', 'tout', 'comme', 'nous', 'sa', 'vous'
+}
+
+DE_STOPWORDS = {
+    'der', 'die', 'und', 'in', 'den', 'von', 'zu', 'das', 'mit', 'sich', 'des',
+    'auf', 'für', 'ist', 'im', 'dem', 'nicht', 'ein', 'eine', 'als', 'auch',
+    'es', 'an', 'werden', 'aus', 'er', 'hat', 'dass', 'sie', 'nach', 'wird',
+    'bei', 'einer', 'um', 'am', 'sind', 'noch', 'wie', 'einem', 'über'
+}
+
+def detect_transcript_language(transcript_lines: List[dict], title: str = "") -> dict:
+    """
+    Detects the primary spoken language of the video transcript using character script inspection
+    and stopword analysis across Indonesian, English, Spanish, Portuguese, French, German, and others.
+    Returns dict: {'code': 'id', 'name': 'Indonesian (Bahasa Indonesia)', 'confidence': float}
+    """
+    if not transcript_lines and not title:
+        return {'code': 'en', 'name': 'English', 'confidence': 0.5}
+
+    sample_texts = [title] if title else []
+    for line in (transcript_lines[:150] if transcript_lines else []):
+        t = line.get("text", "")
+        if t:
+            sample_texts.append(t)
+    
+    full_sample = " ".join(sample_texts).strip()
+    if not full_sample:
+        return {'code': 'en', 'name': 'English', 'confidence': 0.5}
+
+    # 1. Non-Latin script checks
+    if re.search(r'[\u3040-\u309F\u30A0-\u30FF]', full_sample):
+        return {'code': 'ja', 'name': LANGUAGE_NAMES['ja'], 'confidence': 0.98}
+    if re.search(r'[\uAC00-\uD7AF\u1100-\u11FF]', full_sample):
+        return {'code': 'ko', 'name': LANGUAGE_NAMES['ko'], 'confidence': 0.98}
+    if re.search(r'[\u4E00-\u9FFF]', full_sample):
+        return {'code': 'zh', 'name': LANGUAGE_NAMES['zh'], 'confidence': 0.95}
+    if re.search(r'[\u0600-\u06FF]', full_sample):
+        return {'code': 'ar', 'name': LANGUAGE_NAMES['ar'], 'confidence': 0.98}
+    if re.search(r'[\u0400-\u04FF]', full_sample):
+        return {'code': 'ru', 'name': LANGUAGE_NAMES['ru'], 'confidence': 0.98}
+
+    # 2. Latin word tokenization
+    tokens = re.findall(r'\b[a-zA-Z\u00C0-\u024F\u1E00-\u1EFF]+\b', full_sample.lower())
+    if not tokens:
+        return {'code': 'en', 'name': 'English', 'confidence': 0.5}
+
+    counts = {
+        'id': sum(1 for w in tokens if w in ID_STOPWORDS),
+        'en': sum(1 for w in tokens if w in EN_STOPWORDS),
+        'es': sum(1 for w in tokens if w in ES_STOPWORDS),
+        'pt': sum(1 for w in tokens if w in PT_STOPWORDS),
+        'fr': sum(1 for w in tokens if w in FR_STOPWORDS),
+        'de': sum(1 for w in tokens if w in DE_STOPWORDS),
+    }
+
+    best_lang, best_score = max(counts.items(), key=lambda item: item[1])
+    total_matches = sum(counts.values())
+    confidence = round(best_score / total_matches, 2) if total_matches > 0 else 0.5
+
+    # If match count is very small, cross-check with title words
+    if best_score < 2:
+        title_tokens = set(re.findall(r'\b[a-zA-Z]+\b', title.lower()))
+        if title_tokens.intersection(ID_STOPWORDS):
+            return {'code': 'id', 'name': LANGUAGE_NAMES['id'], 'confidence': 0.75}
+        if title_tokens.intersection(ES_STOPWORDS):
+            return {'code': 'es', 'name': LANGUAGE_NAMES['es'], 'confidence': 0.75}
+        return {'code': 'en', 'name': 'English', 'confidence': 0.5}
+
+    return {
+        'code': best_lang,
+        'name': LANGUAGE_NAMES.get(best_lang, best_lang.upper()),
+        'confidence': confidence
+    }
+
+def sanitize_first_person_title(title: str, speaker_or_channel: str = "", lang: str = "en") -> str:
     """
     Sanitizes accidental first-person perspective ('I', 'Me', 'My', 'Saya', 'Aku', 'Gue')
     from generated clip titles and title suggestions, replacing them with speaker or channel attribution,
     or objective framing so titles never appear as the user's personal opinion.
+    Preserves the target language (Indonesian, English, Spanish, etc.).
     """
     if not title:
         return title
     t = title.strip()
     speaker = speaker_or_channel.strip() if speaker_or_channel else ""
-    subject = speaker if speaker else "The Speaker"
+    if lang == "id":
+        subject = speaker if speaker else "Host"
+    elif lang == "es":
+        subject = speaker if speaker else "El Presentador"
+    else:
+        subject = speaker if speaker else "The Speaker"
 
     # 1. English Why / How / What / When / Where
     t = re.sub(r"^why\s+i\s+think\b", f"{subject} Explains Why", t, flags=re.IGNORECASE)
@@ -1750,7 +1889,12 @@ async def analyze_video(request: AnalyzeRequest):
         else:
             clip_range = "15-60" if is_long_video else "10-30"
 
-        # ── Step 4: Build prompt ─────────────────────────────────────────────
+        # ── Step 4: Build prompt & Detect Language ─────────────────────────────
+        detected_lang = detect_transcript_language(enriched_transcript, title)
+        lang_code = detected_lang.get('code', 'en')
+        lang_name = detected_lang.get('name', 'English')
+        logger.info(f"Detected video language: {lang_name} ({lang_code}) - confidence {detected_lang.get('confidence', 0.0)}")
+
         transcript_dump = []
         for line in enriched_transcript:
             eng = f"|{line['engagement']:.2f}" if heatmap and line['engagement'] > 0 else ""
@@ -1770,7 +1914,12 @@ async def analyze_video(request: AnalyzeRequest):
         )
         focus_instruction = ""
         if request.custom_prompt and request.custom_prompt.strip():
-            focus_instruction = f"CRITICAL FOCUS: The user specifically wants you to find clips matching the following query/theme: \"{request.custom_prompt.strip()}\". Prioritize and tailor your selection of viral clips to fit this request, while still ensuring they make good standalone clips.\n\n"
+            focus_instruction = (
+                f"CRITICAL USER SEARCH FOCUS:\n"
+                f"The user specifically wants you to find clips matching the following query/theme: \"{request.custom_prompt.strip()}\".\n"
+                f"Prioritize and tailor your selection of viral clips to fit this request, while still ensuring they make good standalone clips.\n"
+                f"IMPORTANT: Regardless of the language this query was typed in, your generated titles, summaries, quotes, and captions MUST REMAIN IN THE VIDEO'S SPOKEN LANGUAGE ({lang_name}). DO NOT translate the video's content to match the language of the search query.\n\n"
+            )
 
         channel_context = f"- Channel / Host / Creator: {channel}\n" if channel else ""
 
@@ -1781,17 +1930,34 @@ async def analyze_video(request: AnalyzeRequest):
             f"- Video Title: {title}\n"
             f"{channel_context}"
             f"- Video Duration: {int(start_bound)}s to {int(end_bound)}s (Total: {int(duration)}s) | Target clip length: {dur_range}\n"
-            f"- Heatmap: {heatmap_note}\n\n"
+            f"- Heatmap: {heatmap_note}\n"
+            f"- DETECTED VIDEO SPOKEN LANGUAGE: {lang_name} (Code: '{lang_code}')\n\n"
+            f"================================================================================\n"
+            f"CRITICAL ZERO-TRANSLATION & LANGUAGE FIDELITY RULE (MANDATORY):\n"
+            f"================================================================================\n"
+            f"1. NEVER TRANSLATE THE CONTENT INTO ANOTHER LANGUAGE!\n"
+            f"   - If the input video is in English -> ALL generated recommendations, titles, title suggestions, summaries, captions, hashtags, and quotes MUST BE 100% IN ENGLISH. Do NOT translate to Indonesian, Spanish, or any other language!\n"
+            f"   - If the input video is in Indonesian (Bahasa Indonesia) -> ALL generated recommendations, titles, title suggestions, summaries, captions, hashtags, and quotes MUST BE 100% IN INDONESIAN. Do NOT translate to English, Spanish, or any other language!\n"
+            f"   - If the input video is in Spanish (Español) -> ALL generated output MUST BE 100% IN SPANISH. Do NOT translate to English or any other language!\n"
+            f"   - General Rule: English is English, Indonesia is Indonesia, Spain is Spain. Every clip recommendation must strictly stay in the exact language used in that video.\n"
+            f"2. DO NOT translate because there is NO NEED to translate. The clips and social metadata must naturally match the speaker's spoken words so viewers hear and read the exact same language.\n"
+            f"3. Strict field requirements in the video's original language ({lang_name}):\n"
+            f"   - `summary`: In the original video language ({lang_name}).\n"
+            f"   - `title`: Catchy title in the original video language ({lang_name}), max 8 words.\n"
+            f"   - `title_suggestion`: Alternative title in the original video language ({lang_name}).\n"
+            f"   - `caption_suggestion`: Engaging social caption in the original video language ({lang_name}).\n"
+            f"   - `hashtag_suggestion`: Relevant hashtags in the original video language ({lang_name}).\n"
+            f"   - `key_quotes`: MUST be verbatim spoken quotes directly from the transcript in the original language.\n"
+            f"================================================================================\n\n"
             f"{focus_instruction}"
             f"CRITICAL TITLE & ATTRIBUTION RULES (NO FIRST-PERSON 'I' OR 'ME'):\n"
             f"1. NEVER write clip titles or title suggestions using first-person pronouns ('I', 'me', 'my', 'mine', 'myself', or equivalents in other languages such as 'saya', 'aku', 'gue')!\n"
-            f"2. The user posting or curating these clips is a third-party editor, NOT the person speaking in the video. Titles must NEVER make it look like the clip is expressing the user's personal opinion, story, or reaction (e.g. NEVER write 'Why I think this is bad', 'How I made $100K', 'My biggest mistake', or 'I was shocked').\n"
+            f"2. The user posting or curating these clips is a third-party editor, NOT the person speaking in the video. Titles must NEVER make it look like the clip is expressing the user's personal opinion, story, or reaction (e.g. NEVER write 'Why I think this is bad', 'How I made $100K', 'My biggest mistake', or 'I was shocked' / in Indonesian: NEVER 'Kenapa saya...', 'Cara aku...', 'Opini gue...').\n"
             f"3. ALWAYS attribute statements to the context of the video and the actual person speaking:\n"
-            f"   - Use the actual name of the speaker, host, or guest from the video title, channel name ({channel or 'Host'}), or transcript dialogue (e.g. '{channel or 'Speaker'} Explains...', 'Why {channel or 'Host'} Shocked Fans', '[Name] Reveals The Truth').\n"
-            f"   - If the speaker's name is not explicitly stated, use their role or descriptive title (e.g. 'Host Reacts...', 'CEO Reveals...', 'Expert Explains...', 'Guest Breaks Down...').\n"
-            f"   - Or use objective, curiosity-driven framing (e.g. 'The Real Truth About...', 'How To Master...', 'Why Most People Fail At...', 'The Harsh Reality of...').\n"
-            f"4. Keep titles snappy, viral, engaging, and under 8 words.\n"
-            f"5. Match output language to transcript language.\n\n"
+            f"   - Use the actual name of the speaker, host, or guest from the video title, channel name ({channel or 'Host'}), or transcript dialogue (e.g. '{channel or 'Speaker'} Explains...', 'Why {channel or 'Host'} Shocked Fans', '[Name] Reveals The Truth' / in Indonesian: '{channel or 'Host'} Menjelaskan...', 'Alasan {channel or 'Host'} Mengungkapkan...').\n"
+            f"   - If the speaker's name is not explicitly stated, use their role or descriptive title (e.g. 'Host Reacts...', 'CEO Reveals...', 'Expert Explains...', 'Guest Breaks Down...' / in Indonesian: 'Host Menjelaskan...', 'Pakar Membongkar...').\n"
+            f"   - Or use objective, curiosity-driven framing (e.g. 'The Real Truth About...', 'How To Master...', 'Why Most People Fail At...', 'The Harsh Reality of...' / in Indonesian: 'Fakta Sebenarnya Tentang...', 'Cara Menguasai...').\n"
+            f"4. Keep titles snappy, viral, engaging, and under 8 words.\n\n"
             f"Transcript (start|end[|interest] text):\n---\n{transcript_text}\n---\n\n"
             f"Rules: use exact seconds from transcript; clips must start/end at sentence boundaries; do not overlap.\n"
             f"Return {clip_range} clips sorted by virality_score desc."
@@ -1806,10 +1972,10 @@ async def analyze_video(request: AnalyzeRequest):
             "step": 4,
             "step_progress": 10,
             "overall_progress": 72,
-            "stage": "Context Assembly",
-            "detail": f"Aligning {len(transcript_dump)} dialogue segments with engagement data for {requested_model}...",
+            "stage": "Language & Context Assembly",
+            "detail": f"Source language: {lang_name} ({lang_code}). Aligning {len(transcript_dump)} dialogue segments for {requested_model}...",
             "model": requested_model,
-            "message": f"Assembling prompt and engagement context for {requested_model}..."
+            "message": f"Verified language: {lang_name}. Zero-translation rule enforced for {requested_model}."
         })
 
         # ── Step 4: Gemini API call with dynamic Flash fallback models and retry ───────────
@@ -1935,13 +2101,13 @@ async def analyze_video(request: AnalyzeRequest):
                             "summary": getattr(parsed, 'summary', ''),
                             "clips": [
                                 {
-                                    "title": sanitize_first_person_title(getattr(c, 'title', ''), channel),
+                                    "title": sanitize_first_person_title(getattr(c, 'title', ''), channel, lang=lang_code),
                                     "start_time": getattr(c, 'start_time', 0.0),
                                     "end_time": getattr(c, 'end_time', 0.0),
                                     "hook_time": getattr(c, 'hook_time', None),
                                     "virality_score": getattr(c, 'virality_score', 0),
                                     "key_quotes": getattr(c, 'key_quotes', []),
-                                    "title_suggestion": sanitize_first_person_title(getattr(c, 'title_suggestion', ''), channel),
+                                    "title_suggestion": sanitize_first_person_title(getattr(c, 'title_suggestion', ''), channel, lang=lang_code),
                                     "caption_suggestion": getattr(c, 'caption_suggestion', ''),
                                     "hashtag_suggestion": getattr(c, 'hashtag_suggestion', ''),
                                 }
@@ -2074,20 +2240,50 @@ async def analyze_video(request: AnalyzeRequest):
                 seg_lines = [l['text'] for l in enriched_transcript if max(l['start'], st) < min(l['end'], et)]
                 seg_text = " ".join(seg_lines).strip()
                 preview = seg_text[:60] + "..." if len(seg_text) > 60 else seg_text or f"Viral Highlight #{i+1}"
-                fallback_clips_list.append({
-                    "title": f"Key Highlight #{i+1}",
-                    "start_time": st,
-                    "end_time": et,
-                    "hook_time": st,
-                    "virality_score": max(70, int(95 - i * 5)),
-                    "key_quotes": [seg_text[:80]] if seg_text else [],
-                    "title_suggestion": f"Must Watch Moment #{i+1}",
-                    "caption_suggestion": f"Key highlight from video: {preview} #viral #trending",
-                    "hashtag_suggestion": "#viral #shorts #trending"
-                })
+                if lang_code == 'id':
+                    fallback_clips_list.append({
+                        "title": f"Momen Menarik #{i+1}",
+                        "start_time": st,
+                        "end_time": et,
+                        "hook_time": st,
+                        "virality_score": max(70, int(95 - i * 5)),
+                        "key_quotes": [seg_text[:80]] if seg_text else [],
+                        "title_suggestion": f"Cuplikan Pilihan #{i+1}",
+                        "caption_suggestion": f"Momen terbaik dari video: {preview} #viral #trending",
+                        "hashtag_suggestion": "#viral #shorts #trending"
+                    })
+                elif lang_code == 'es':
+                    fallback_clips_list.append({
+                        "title": f"Momento Destacado #{i+1}",
+                        "start_time": st,
+                        "end_time": et,
+                        "hook_time": st,
+                        "virality_score": max(70, int(95 - i * 5)),
+                        "key_quotes": [seg_text[:80]] if seg_text else [],
+                        "title_suggestion": f"Momento Imperdible #{i+1}",
+                        "caption_suggestion": f"Momento clave del video: {preview} #viral #trending",
+                        "hashtag_suggestion": "#viral #shorts #trending"
+                    })
+                else:
+                    fallback_clips_list.append({
+                        "title": f"Key Highlight #{i+1}",
+                        "start_time": st,
+                        "end_time": et,
+                        "hook_time": st,
+                        "virality_score": max(70, int(95 - i * 5)),
+                        "key_quotes": [seg_text[:80]] if seg_text else [],
+                        "title_suggestion": f"Must Watch Moment #{i+1}",
+                        "caption_suggestion": f"Key highlight from video: {preview} #viral #trending",
+                        "hashtag_suggestion": "#viral #shorts #trending"
+                    })
             analysis_data['clips'] = fallback_clips_list
             if not analysis_data.get('summary'):
-                analysis_data['summary'] = f"Analysis of \"{title}\" identifying {len(fallback_clips_list)} key segments. #viral #highlights"
+                if lang_code == 'id':
+                    analysis_data['summary'] = f"Analisis video \"{title}\" menemukan {len(fallback_clips_list)} segmen cuplikan pilihan. #viral #highlights"
+                elif lang_code == 'es':
+                    analysis_data['summary'] = f"Análisis de \"{title}\" identificando {len(fallback_clips_list)} segmentos clave. #viral #highlights"
+                else:
+                    analysis_data['summary'] = f"Analysis of \"{title}\" identifying {len(fallback_clips_list)} key segments. #viral #highlights"
 
         clip_count = len(analysis_data.get('clips', []))
         yield _sse({
@@ -2095,12 +2291,11 @@ async def analyze_video(request: AnalyzeRequest):
             "step_progress": 98,
             "overall_progress": 98,
             "stage": "Clip Verification & Alignment",
-            "detail": f"Verified {clip_count} clip segments with precise video timestamps and key quotes.",
+            "detail": f"Verified {clip_count} clip segments with precise video timestamps and key quotes in {lang_name}.",
             "model": successful_model or requested_model,
-            "message": f"Found {clip_count} viral clip candidates with {successful_model or requested_model} — reconstructing transcripts..."
+            "message": f"Found {clip_count} viral clip candidates ({lang_name}) with {successful_model or requested_model} — reconstructing transcripts..."
         })
-        logger.info(f"Gemini analysis complete with {successful_model or requested_model}. Found {clip_count} clips.")
-        logger.info(f"Gemini analysis complete with {successful_model or requested_model}. Found {clip_count} clips.")
+        logger.info(f"Gemini analysis complete with {successful_model or requested_model}. Found {clip_count} clips in {lang_name}.")
 
         # Reconstruct clip transcripts from enriched_transcript
         final_clips = []
@@ -2122,14 +2317,14 @@ async def analyze_video(request: AnalyzeRequest):
             hashtag_sug = lowercase_hashtags_in_string(raw_clip.get('hashtag_suggestion', ''))
             
             final_clips.append(ViralClip(
-                title=sanitize_first_person_title(raw_clip.get('title', ''), channel),
+                title=sanitize_first_person_title(raw_clip.get('title', ''), channel, lang=lang_code),
                 start_time=start,
                 end_time=end,
                 hook_time=hook,
                 virality_score=raw_clip.get('virality_score', 0),
                 key_quotes=raw_clip.get('key_quotes') or [],
                 transcript=" ".join(clip_lines),
-                title_suggestion=sanitize_first_person_title(raw_clip.get('title_suggestion', ''), channel),
+                title_suggestion=sanitize_first_person_title(raw_clip.get('title_suggestion', ''), channel, lang=lang_code),
                 caption_suggestion=caption_sug,
                 hashtag_suggestion=hashtag_sug
             ))
