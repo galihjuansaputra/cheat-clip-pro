@@ -29,6 +29,7 @@ import zipfile
 import subprocess
 import shutil
 import html
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote, urlsplit
 from typing import List, Optional, Dict, Any, Tuple, Callable
@@ -3434,7 +3435,6 @@ async def clear_temp_folder():
 
 def run_git_command(args: List[str], cwd: Optional[Path] = None, timeout: int = 15) -> Tuple[int, str, str]:
     """Runs a git command safely and returns (returncode, stdout, stderr)."""
-    from pathlib import Path
     target_cwd = cwd or Path(_base_dir).parent
     try:
         proc = subprocess.run(
@@ -3451,7 +3451,6 @@ def run_git_command(args: List[str], cwd: Optional[Path] = None, timeout: int = 
 
 def get_current_git_info() -> dict:
     """Retrieves current commit, branch, and remote URL information."""
-    from pathlib import Path
     root_dir = Path(_base_dir).parent
     rc, commit_info, _ = run_git_command(["log", "-1", "--pretty=format:%h|%H|%s|%cd", "--date=short"], cwd=root_dir)
     rc_branch, branch, _ = run_git_command(["branch", "--show-current"], cwd=root_dir)
@@ -3480,7 +3479,6 @@ def get_current_git_info() -> dict:
 
 def trigger_detached_restart(delay: float = 2.5):
     """Launches backend/restart_runner.py in a fully detached background process."""
-    from pathlib import Path
     root_dir = Path(_base_dir).parent
     runner_script = root_dir / "backend" / "restart_runner.py"
     
@@ -3502,7 +3500,6 @@ def api_system_version():
 @app.get("/api/system/check-update")
 def api_check_update():
     """Fetches origin and checks if updates are available."""
-    from pathlib import Path
     root_dir = Path(_base_dir).parent
     info = get_current_git_info()
     branch = info.get("branch", "master") or "master"
@@ -3545,7 +3542,6 @@ def api_check_update():
 @app.post("/api/system/update")
 async def api_perform_update():
     """Pulls latest code, syncs dependencies if modified, and triggers background restart."""
-    from pathlib import Path
     root_dir = Path(_base_dir).parent
     info = get_current_git_info()
     branch = info.get("branch", "master") or "master"
