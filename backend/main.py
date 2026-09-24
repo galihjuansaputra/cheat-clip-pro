@@ -63,7 +63,8 @@ try:
         ACTIVE_ENCODER_NAME,
         ACTIVE_ENCODER_ARGS,
         has_emoji,
-        render_title_overlay_png
+        render_title_overlay_png,
+        is_valid_mp4
     )
 except ImportError:
     from video_engine import (
@@ -83,7 +84,8 @@ except ImportError:
         ACTIVE_ENCODER_NAME,
         ACTIVE_ENCODER_ARGS,
         has_emoji,
-        render_title_overlay_png
+        render_title_overlay_png,
+        is_valid_mp4
     )
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -2436,187 +2438,222 @@ class RenderBatchRequest(BaseModel):
 
 
 RENDER_BATCHES: Dict[str, Dict[str, Any]] = {}
+BATCH_REQUESTS: Dict[str, RenderBatchRequest] = {}
 
 
-async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
+class RetryBatchRequest(BaseModel):
+    clip_indices: Optional[List[int]] = None
+
+
+async def render_single_batch_clip(
+    batch_id: str,
+    idx: int,
+    clip: Dict[str, Any],
+    settings: RenderSettingsModel,
+    target_url: str,
+    transcript: Optional[List[Dict[str, Any]]] = None,
+    total_clips: int = 1
+):
     batch = RENDER_BATCHES.get(batch_id)
     if not batch:
         return
 
-    clips = request.clips
-    settings = request.settings
+    clip_status = batch["clips"][idx]
+    clip_status["status"] = "downloading"
+    clip_status["progress_percent"] = 15
+    clip_status["error_message"] = None
+    clip_status["error"] = None
 
-    # Normalize video URL for history or direct URL
-    target_url = (request.video_url or "").strip()
-    if not target_url.startswith("http"):
-        target_url = f"https://www.youtube.com/watch?v={request.video_id or target_url}"
+    raw_path = None
+    ass_path = None
+    title_overlay_path = None
 
-    for idx, clip in enumerate(clips):
-        clip_status = batch["clips"][idx]
-        clip_status["status"] = "downloading"
-        clip_status["progress_percent"] = 15
+    try:
+        # 1. Download
+        start_t = float(clip.get("start_time", 0.0))
+        end_t = float(clip.get("end_time", start_t + 30.0))
+        seg_filename = f"{batch_id}_clip_{idx}_raw.mp4"
 
-        try:
-            # 1. Download
-            start_t = float(clip.get("start_time", 0.0))
-            end_t = float(clip.get("end_time", start_t + 30.0))
-            seg_filename = f"{batch_id}_clip_{idx}_raw.mp4"
+        raw_path = await asyncio.to_thread(
+            download_clip_segment,
+            target_url,
+            start_t,
+            end_t,
+            seg_filename
+        )
 
-            raw_path = await asyncio.to_thread(
-                download_clip_segment,
-                target_url,
-                start_t,
-                end_t,
-                seg_filename
+        if not raw_path or not os.path.exists(raw_path) or not is_valid_mp4(raw_path):
+            raise RuntimeError(
+                "Source video segment is incomplete or corrupted ('moov atom not found'). "
+                "Network lag interrupted the download. Please retry rendering this clip."
             )
 
-            # 2. Transcribe & Generate Subtitles / Title (.ass)
-            clip_status["status"] = "transcribing"
-            clip_status["progress_percent"] = 40
+        # 2. Transcribe & Generate Subtitles / Title (.ass)
+        clip_status["status"] = "transcribing"
+        clip_status["progress_percent"] = 40
 
-            display_title = None
-            base_title = (
-                clip.get("custom_title")
-                or clip.get("title_suggestion")
-                or clip.get("title")
-                or f"Clip {idx+1}"
-            ).strip()
+        display_title = None
+        base_title = (
+            clip.get("custom_title")
+            or clip.get("title_suggestion")
+            or clip.get("title")
+            or f"Clip {idx+1}"
+        ).strip()
 
-            if settings.title_position != "none":
-                pfx = settings.title_prefix or ""
-                sfx = settings.title_suffix or ""
-                if pfx or sfx:
-                    display_title = f"{pfx}{base_title}{sfx}".strip()
-                elif len(clips) == 1 and settings.title_text and settings.title_text.strip() and not (clip.get("custom_title") or clip.get("title_suggestion")):
-                    display_title = settings.title_text.strip()
-                else:
-                    display_title = base_title
+        if settings.title_position != "none":
+            pfx = settings.title_prefix or ""
+            sfx = settings.title_suffix or ""
+            if pfx or sfx:
+                display_title = f"{pfx}{base_title}{sfx}".strip()
+            elif total_clips == 1 and settings.title_text and settings.title_text.strip() and not (clip.get("custom_title") or clip.get("title_suggestion")):
+                display_title = settings.title_text.strip()
+            else:
+                display_title = base_title
 
-            # Ensure clip status reflects this clip's unique title and base_title
-            clip_status["title"] = display_title or base_title
-            clip_status["base_title"] = base_title
+        clip_status["title"] = display_title or base_title
+        clip_status["base_title"] = base_title
 
-            ass_path = None
-            title_overlay_path = None
-            skip_ass_title = False
-            duration_sec = max(1.0, end_t - start_t)
+        skip_ass_title = False
+        duration_sec = max(1.0, end_t - start_t)
 
-            # Check if title has emoji -> render transparent color emoji PNG overlay
-            if display_title and settings.title_position != "none" and has_emoji(display_title):
-                title_png_filename = f"{batch_id}_clip_{idx}_title.png"
-                title_png_path = str(TEMP_DIR / title_png_filename)
-                try:
-                    rendered_overlay = await asyncio.to_thread(
-                        render_title_overlay_png,
-                        title_text=display_title,
-                        output_png_path=title_png_path,
-                        font_name=settings.caption_font or "Montserrat",
-                        target_aspect_ratio=settings.aspect_ratio or "9:16",
-                        font_size_preset=settings.font_size or "medium",
-                        text_case=settings.text_case or "uppercase",
-                        title_position=settings.title_position or "auto",
-                        title_y_percent=settings.title_y_percent,
-                        title_font_size_preset=settings.title_font_size or settings.font_size or "medium",
-                        streamer_preset=settings.streamer_preset or "none"
-                    )
-                    if rendered_overlay and os.path.exists(rendered_overlay):
-                        title_overlay_path = rendered_overlay
-                        skip_ass_title = True
-                        logger.info(f"Rendered full-color emoji title overlay: {title_overlay_path}")
-                except Exception as ex:
-                    logger.warning(f"Could not render color emoji title overlay: {ex}")
-                    skip_ass_title = False
-
-            if settings.caption_style != "none" or (display_title and settings.title_position != "none" and not skip_ass_title):
-                words = []
-                if settings.caption_style != "none":
-                    words = await asyncio.to_thread(
-                        transcribe_clip_words,
-                        raw_path,
-                        request.transcript,
-                        start_t,
-                        end_t
-                    )
-                ass_filename = f"{batch_id}_clip_{idx}.ass"
-                ass_path = str(TEMP_DIR / ass_filename)
-                await asyncio.to_thread(
-                    generate_ass_file,
-                    words=words,
-                    style_preset=settings.caption_style,
-                    font_name=settings.caption_font,
-                    output_ass_path=ass_path,
-                    target_aspect_ratio=settings.aspect_ratio,
-                    font_size_preset=settings.font_size,
-                    text_case=settings.text_case,
-                    title_text=display_title if not skip_ass_title else None,
-                    title_position=settings.title_position,
-                    title_duration=settings.title_duration if settings.title_duration else "entire",
-                    duration_seconds=duration_sec,
+        # Check if title has emoji -> render transparent color emoji PNG overlay
+        if display_title and settings.title_position != "none" and has_emoji(display_title):
+            title_png_filename = f"{batch_id}_clip_{idx}_title.png"
+            title_png_path = str(TEMP_DIR / title_png_filename)
+            try:
+                rendered_overlay = await asyncio.to_thread(
+                    render_title_overlay_png,
+                    title_text=display_title,
+                    output_png_path=title_png_path,
+                    font_name=settings.caption_font or "Montserrat",
+                    target_aspect_ratio=settings.aspect_ratio or "9:16",
+                    font_size_preset=settings.font_size or "medium",
+                    text_case=settings.text_case or "uppercase",
+                    title_position=settings.title_position or "auto",
                     title_y_percent=settings.title_y_percent,
-                    subtitle_y_percent=settings.subtitle_y_percent,
-                    subtitle_position_mode=settings.subtitle_position_mode if settings.subtitle_position_mode else "bottom",
-                    subtitle_center_y_percent=settings.subtitle_center_y_percent if settings.subtitle_center_y_percent is not None else 50.0,
-                    skip_title=skip_ass_title,
                     title_font_size_preset=settings.title_font_size or settings.font_size or "medium",
                     streamer_preset=settings.streamer_preset or "none"
                 )
+                if rendered_overlay and os.path.exists(rendered_overlay):
+                    title_overlay_path = rendered_overlay
+                    skip_ass_title = True
+                    logger.info(f"Rendered full-color emoji title overlay: {title_overlay_path}")
+            except Exception as ex:
+                logger.warning(f"Could not render color emoji title overlay: {ex}")
+                skip_ass_title = False
 
-            # 3. Render Final Vertical MP4
-            clip_status["status"] = "rendering"
-            clip_status["progress_percent"] = 70
-
-            out_filename = f"clip_{idx+1}_{batch_id}.mp4"
-            out_path = str(EXPORTS_DIR / out_filename)
-
+        if settings.caption_style != "none" or (display_title and settings.title_position != "none" and not skip_ass_title):
+            words = []
+            if settings.caption_style != "none":
+                words = await asyncio.to_thread(
+                    transcribe_clip_words,
+                    raw_path,
+                    transcript,
+                    start_t,
+                    end_t
+                )
+            ass_filename = f"{batch_id}_clip_{idx}.ass"
+            ass_path = str(TEMP_DIR / ass_filename)
             await asyncio.to_thread(
-                render_clip_to_mp4,
-                video_path=raw_path,
-                output_mp4_path=out_path,
-                aspect_ratio=settings.aspect_ratio,
-                background_style=settings.background_style,
-                enable_face_tracking=settings.enable_face_tracking,
-                streamer_preset=settings.streamer_preset,
-                facecam_position=getattr(settings, "facecam_position", "auto") or "auto",
+                generate_ass_file,
+                words=words,
+                style_preset=settings.caption_style,
+                font_name=settings.caption_font,
+                output_ass_path=ass_path,
+                target_aspect_ratio=settings.aspect_ratio,
+                font_size_preset=settings.font_size,
+                text_case=settings.text_case,
                 title_text=display_title if not skip_ass_title else None,
                 title_position=settings.title_position,
-                ass_subtitles_path=ass_path,
-                clip_duration=duration_sec,
-                title_overlay_path=title_overlay_path,
                 title_duration=settings.title_duration if settings.title_duration else "entire",
-                watermark_enabled=bool(settings.watermark_enabled),
-                watermark_type=settings.watermark_type or "image",
-                watermark_image_path=settings.watermark_file_path,
-                watermark_text=settings.watermark_text,
-                watermark_size=float(settings.watermark_size if settings.watermark_size is not None else 20.0),
-                watermark_opacity=float((settings.watermark_opacity if settings.watermark_opacity is not None else 80.0) / 100.0),
-                watermark_x_percent=float(settings.watermark_x if settings.watermark_x is not None else 90.0),
-                watermark_y_percent=float(settings.watermark_y if settings.watermark_y is not None else 8.0),
-                bgm_enabled=bool(settings.bgm_enabled),
-                bgm_path=settings.bgm_file_path,
-                bgm_volume=float((settings.bgm_volume if settings.bgm_volume is not None else 25.0) / 100.0),
-                bgm_start_offset=float(settings.bgm_start_offset or 0.0),
-                hook_sfx_enabled=bool(settings.hook_sfx_enabled),
-                hook_sfx_path=settings.hook_sfx_file_path,
-                hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
-                original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0),
-                hardware_accel=settings.hardware_accel or "auto",
-                title_y_percent=settings.title_y_percent
+                duration_seconds=duration_sec,
+                title_y_percent=settings.title_y_percent,
+                subtitle_y_percent=settings.subtitle_y_percent,
+                subtitle_position_mode=settings.subtitle_position_mode if settings.subtitle_position_mode else "bottom",
+                subtitle_center_y_percent=settings.subtitle_center_y_percent if settings.subtitle_center_y_percent is not None else 50.0,
+                skip_title=skip_ass_title,
+                title_font_size_preset=settings.title_font_size or settings.font_size or "medium",
+                streamer_preset=settings.streamer_preset or "none"
             )
 
-            clip_status["status"] = "completed"
-            clip_status["progress_percent"] = 100
-            clip_status["download_url"] = f"/api/download-rendered/{out_filename}"
-            clip_status["output_path"] = out_path
+        # 3. Render Final Vertical MP4
+        clip_status["status"] = "rendering"
+        clip_status["progress_percent"] = 70
 
-        except Exception as e:
-            logger.error(f"Error rendering clip {idx} in batch {batch_id}: {e}")
-            clip_status["status"] = "error"
-            clip_status["error_message"] = str(e)
-            clip_status["error"] = str(e)
+        out_filename = f"clip_{idx+1}_{batch_id}.mp4"
+        out_path = str(EXPORTS_DIR / out_filename)
 
-        batch["current_clip_index"] = idx + 1
+        await asyncio.to_thread(
+            render_clip_to_mp4,
+            video_path=raw_path,
+            output_mp4_path=out_path,
+            aspect_ratio=settings.aspect_ratio,
+            background_style=settings.background_style,
+            enable_face_tracking=settings.enable_face_tracking,
+            streamer_preset=settings.streamer_preset,
+            facecam_position=getattr(settings, "facecam_position", "auto") or "auto",
+            title_text=display_title if not skip_ass_title else None,
+            title_position=settings.title_position,
+            ass_subtitles_path=ass_path,
+            clip_duration=duration_sec,
+            title_overlay_path=title_overlay_path,
+            title_duration=settings.title_duration if settings.title_duration else "entire",
+            watermark_enabled=bool(settings.watermark_enabled),
+            watermark_type=settings.watermark_type or "image",
+            watermark_image_path=settings.watermark_file_path,
+            watermark_text=settings.watermark_text,
+            watermark_size=float(settings.watermark_size if settings.watermark_size is not None else 20.0),
+            watermark_opacity=float((settings.watermark_opacity if settings.watermark_opacity is not None else 80.0) / 100.0),
+            watermark_x_percent=float(settings.watermark_x if settings.watermark_x is not None else 90.0),
+            watermark_y_percent=float(settings.watermark_y if settings.watermark_y is not None else 8.0),
+            bgm_enabled=bool(settings.bgm_enabled),
+            bgm_path=settings.bgm_file_path,
+            bgm_volume=float((settings.bgm_volume if settings.bgm_volume is not None else 25.0) / 100.0),
+            bgm_start_offset=float(settings.bgm_start_offset or 0.0),
+            hook_sfx_enabled=bool(settings.hook_sfx_enabled),
+            hook_sfx_path=settings.hook_sfx_file_path,
+            hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
+            original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0),
+            hardware_accel=settings.hardware_accel or "auto",
+            title_y_percent=settings.title_y_percent
+        )
 
-    # Generate ZIP bundle for the batch with title-based filenames and duplicate handling
+        if not os.path.exists(out_path) or not is_valid_mp4(out_path):
+            raise RuntimeError("Rendered MP4 file is incomplete or missing. Please retry rendering.")
+
+        clip_status["status"] = "completed"
+        clip_status["progress_percent"] = 100
+        clip_status["download_url"] = f"/api/download-rendered/{out_filename}"
+        clip_status["output_path"] = out_path
+
+    except Exception as e:
+        logger.error(f"Error rendering clip {idx} in batch {batch_id}: {e}")
+        clip_status["status"] = "error"
+        err_msg = str(e)
+        if "moov atom not found" in err_msg.lower():
+            err_msg = "Download interrupted by internet lag ('moov atom not found'). Click Retry to re-download."
+        elif "timed out" in err_msg.lower() or "timeout" in err_msg.lower():
+            err_msg = "Download timed out due to slow/laggy internet connection. Click Retry to try again."
+        clip_status["error_message"] = err_msg
+        clip_status["error"] = err_msg
+
+        # Clean up any partial raw video
+        if raw_path and os.path.exists(raw_path):
+            try:
+                os.unlink(raw_path)
+            except Exception:
+                pass
+
+
+def update_batch_summary_and_zip(batch_id: str, settings: RenderSettingsModel):
+    """
+    Updates the batch ZIP archive and computes overall status and friendly messages.
+    """
+    batch = RENDER_BATCHES.get(batch_id)
+    if not batch:
+        return
+
+    # Generate/update ZIP bundle for the batch with title-based filenames and duplicate handling
     try:
         completed_clips = [c for c in batch["clips"] if c.get("status") == "completed" and c.get("download_url")]
         if completed_clips:
@@ -2625,7 +2662,7 @@ async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
             title_counts: Dict[str, int] = {}
             with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
                 for c in completed_clips:
-                    fname = c["download_url"].split("/")[-1]
+                    fname = c["download_url"].split("?")[0].split("/")[-1]
                     fpath = EXPORTS_DIR / fname
                     if fpath.exists():
                         raw_title = (c.get("base_title") or c.get("title") or "").strip()
@@ -2645,16 +2682,79 @@ async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
 
     # Determine overall status and error messaging
     failed_clips = [c for c in batch["clips"] if c.get("status") == "error"]
-    completed_clips = [c for c in batch["clips"] if c.get("status") == "completed"]
+    running_clips = [c for c in batch["clips"] if c.get("status") in ["downloading", "transcribing", "rendering", "pending"]]
 
-    if len(failed_clips) == len(batch["clips"]):
+    if running_clips:
+        batch["overall_status"] = "running"
+    elif len(failed_clips) == len(batch["clips"]):
         batch["overall_status"] = "error"
-        batch["error_message"] = f"All {len(batch['clips'])} clip(s) failed to render. Please review the error details."
+        batch["error_message"] = f"All {len(batch['clips'])} clip(s) failed. You can click 'Retry' to try again."
     elif len(failed_clips) > 0:
         batch["overall_status"] = "completed"
-        batch["warning_message"] = f"{len(failed_clips)} of {len(batch['clips'])} clips encountered errors."
+        batch["warning_message"] = f"{len(failed_clips)} of {len(batch['clips'])} clips encountered errors. You can retry failed clips anytime."
     else:
         batch["overall_status"] = "completed"
+        batch["warning_message"] = None
+
+
+async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
+    batch = RENDER_BATCHES.get(batch_id)
+    if not batch:
+        return
+
+    clips = request.clips
+    settings = request.settings
+
+    # Normalize video URL for history or direct URL
+    target_url = (request.video_url or "").strip()
+    if not target_url.startswith("http"):
+        target_url = f"https://www.youtube.com/watch?v={request.video_id or target_url}"
+
+    for idx, clip in enumerate(clips):
+        batch["current_clip_index"] = idx
+        await render_single_batch_clip(
+            batch_id=batch_id,
+            idx=idx,
+            clip=clip,
+            settings=settings,
+            target_url=target_url,
+            transcript=request.transcript,
+            total_clips=len(clips)
+        )
+        # Fallback continuation: regardless of whether clip succeeded or failed, proceed to next clip!
+        batch["current_clip_index"] = idx + 1
+
+    update_batch_summary_and_zip(batch_id, settings)
+
+
+async def process_batch_retry(batch_id: str, clip_indices: List[int]):
+    batch = RENDER_BATCHES.get(batch_id)
+    request = BATCH_REQUESTS.get(batch_id)
+    if not batch or not request:
+        logger.error(f"Cannot retry batch {batch_id}: batch or request data not found")
+        return
+
+    batch["overall_status"] = "running"
+    clips = request.clips
+    settings = request.settings
+    target_url = (request.video_url or "").strip()
+    if not target_url.startswith("http"):
+        target_url = f"https://www.youtube.com/watch?v={request.video_id or target_url}"
+
+    for idx in clip_indices:
+        if 0 <= idx < len(clips):
+            batch["current_clip_index"] = idx
+            await render_single_batch_clip(
+                batch_id=batch_id,
+                idx=idx,
+                clip=clips[idx],
+                settings=settings,
+                target_url=target_url,
+                transcript=request.transcript,
+                total_clips=len(clips)
+            )
+
+    update_batch_summary_and_zip(batch_id, settings)
 
 
 @app.post("/api/render-batch")
@@ -2687,9 +2787,56 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
         "clips": clips_status,
         "zip_url": None
     }
+    BATCH_REQUESTS[batch_id] = request
 
     background_tasks.add_task(process_batch_rendering, batch_id, request)
     return {"batch_id": batch_id, "total_clips": len(request.clips)}
+
+
+@app.post("/api/render-batch/{batch_id}/retry")
+async def retry_batch_rendering(
+    batch_id: str,
+    background_tasks: BackgroundTasks,
+    body: Optional[RetryBatchRequest] = None
+):
+    if batch_id not in RENDER_BATCHES:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    batch = RENDER_BATCHES[batch_id]
+    if batch_id not in BATCH_REQUESTS:
+        raise HTTPException(status_code=400, detail="Batch configuration expired. Please start a new render.")
+
+    if batch.get("overall_status") == "running":
+        # Check if any clip is actively running
+        running = any(c.get("status") in ["downloading", "transcribing", "rendering"] for c in batch.get("clips", []))
+        if running:
+            raise HTTPException(status_code=400, detail="Batch is currently rendering. Please wait for the current clip to finish.")
+
+    req = BATCH_REQUESTS[batch_id]
+    indices_to_retry: List[int] = []
+    if body and body.clip_indices:
+        indices_to_retry = [i for i in body.clip_indices if 0 <= i < len(batch["clips"])]
+    else:
+        indices_to_retry = [i for i, c in enumerate(batch["clips"]) if c.get("status") == "error"]
+
+    if not indices_to_retry:
+        raise HTTPException(status_code=400, detail="No failed clips to retry in this batch.")
+
+    for idx in indices_to_retry:
+        batch["clips"][idx]["status"] = "pending"
+        batch["clips"][idx]["progress_percent"] = 0
+        batch["clips"][idx]["error_message"] = None
+        batch["clips"][idx]["error"] = None
+
+    batch["overall_status"] = "running"
+    batch["error_message"] = None
+    batch["warning_message"] = None
+
+    background_tasks.add_task(process_batch_retry, batch_id, indices_to_retry)
+    return {
+        "status": "started",
+        "batch_id": batch_id,
+        "retrying_clips": indices_to_retry
+    }
 
 
 @app.get("/api/render-progress/{batch_id}")
@@ -2698,12 +2845,25 @@ async def get_render_progress(batch_id: str):
         raise HTTPException(status_code=404, detail="Batch not found")
 
     async def stream():
+        last_sent_json = None
+        idle_count = 0
         while True:
             batch = RENDER_BATCHES.get(batch_id)
             if not batch:
                 break
-            yield f"data: {json.dumps(batch)}\n\n"
+            batch_json = json.dumps(batch)
+            if batch_json != last_sent_json:
+                yield f"data: {batch_json}\n\n"
+                last_sent_json = batch_json
+                idle_count = 0
+            else:
+                idle_count += 1
+                # Send SSE keep-alive comment every 5 iterations (~2.5s) to prevent client/proxy timeout during lag
+                if idle_count % 5 == 0:
+                    yield ": keep-alive\n\n"
             if batch.get("overall_status") in ["completed", "error"]:
+                # Yield final state once and break
+                yield f"data: {batch_json}\n\n"
                 break
             await asyncio.sleep(0.5)
 
@@ -3103,7 +3263,7 @@ async def run_raw_clip_download_job(
         local_candidates = list(EXPORTS_DIR.glob(f"*{safe_id}*.mp4")) + list(TEMP_DIR.glob(f"*{safe_id}*.mp4"))
         source_video = None
         for candidate in local_candidates:
-            if candidate.exists() and candidate.stat().st_size > 5 * 1024 * 1024:
+            if candidate.exists() and candidate.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(candidate):
                 # Avoid using a small trimmed clip segment as source
                 if "_clip_" not in candidate.name and candidate.name != seg_filename:
                     source_video = str(candidate)
@@ -3191,7 +3351,7 @@ async def run_raw_clip_download_job(
                     if out_path.exists() and out_path.stat().st_size > 1000:
                         success = True
 
-        if success and out_path.exists() and out_path.stat().st_size > 1000:
+        if success and out_path.exists() and is_valid_mp4(out_path):
             raw_clip_download_jobs[job_id]["status"] = "ready"
             raw_clip_download_jobs[job_id]["progress_percent"] = 100.0
             raw_clip_download_jobs[job_id]["download_url"] = f"/api/download-rendered/{seg_filename}?title={quote(download_title)}"
@@ -3302,7 +3462,7 @@ async def detect_face(
         safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', video_id)
         local_candidates = list(TEMP_DIR.glob(f"*{safe_id}*.mp4")) + list(EXPORTS_DIR.glob(f"*{safe_id}*.mp4"))
         for candidate in local_candidates:
-            if candidate.exists() and candidate.stat().st_size > 10000 and "slice_" not in candidate.name:
+            if candidate.exists() and candidate.stat().st_size > 10000 and "slice_" not in candidate.name and is_valid_mp4(candidate):
                 box = await asyncio.to_thread(
                     detect_speaker_face_box,
                     str(candidate),

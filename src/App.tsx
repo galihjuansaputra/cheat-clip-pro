@@ -177,6 +177,49 @@ export default function App() {
   // Clip Studio & Auto-Clipper states
   const [batchProgress, setBatchProgress] = useState<BatchRenderProgress | null>(null);
   const [isLaunchingRender, setIsLaunchingRender] = useState(false);
+  const batchEventSourceRef = useRef<EventSource | null>(null);
+
+  // Close SSE connection on unmount
+  useEffect(() => {
+    return () => {
+      if (batchEventSourceRef.current) {
+        batchEventSourceRef.current.close();
+        batchEventSourceRef.current = null;
+      }
+    };
+  }, []);
+
+  const listenToBatchProgress = useCallback((batchId: string) => {
+    if (batchEventSourceRef.current) {
+      batchEventSourceRef.current.close();
+      batchEventSourceRef.current = null;
+    }
+    const eventSource = new EventSource(`/api/render-progress/${batchId}`);
+    batchEventSourceRef.current = eventSource;
+
+    eventSource.onmessage = (event) => {
+      try {
+        const progressData: BatchRenderProgress = JSON.parse(event.data);
+        setBatchProgress(progressData);
+        if (progressData.overall_status === 'completed' || progressData.overall_status === 'error') {
+          eventSource.close();
+          if (batchEventSourceRef.current === eventSource) {
+            batchEventSourceRef.current = null;
+          }
+        }
+      } catch (err) {
+        console.error('Failed to parse progress SSE:', err);
+      }
+    };
+
+    eventSource.onerror = (err) => {
+      console.error('SSE connection error:', err);
+      eventSource.close();
+      if (batchEventSourceRef.current === eventSource) {
+        batchEventSourceRef.current = null;
+      }
+    };
+  }, []);
 
   const markedClipsList = useMemo(() => {
     if (!result?.clips) return [];
@@ -273,27 +316,52 @@ export default function App() {
       });
 
       // Listen to SSE progress
-      const eventSource = new EventSource(`/api/render-progress/${batchId}`);
-      eventSource.onmessage = (event) => {
-        try {
-          const progressData: BatchRenderProgress = JSON.parse(event.data);
-          setBatchProgress(progressData);
-          if (progressData.overall_status === 'completed' || progressData.overall_status === 'error') {
-            eventSource.close();
-          }
-        } catch (err) {
-          console.error('Failed to parse progress SSE:', err);
-        }
-      };
-
-      eventSource.onerror = (err) => {
-        console.error('SSE connection error:', err);
-        eventSource.close();
-      };
+      listenToBatchProgress(batchId);
     } catch (err: any) {
       alert(err.message || 'Error launching batch render');
     } finally {
       setIsLaunchingRender(false);
+    }
+  };
+
+  const handleRetryBatchClip = async (clipIndex?: number) => {
+    if (!batchProgress?.batch_id) return;
+    const batchId = batchProgress.batch_id;
+    try {
+      // Optimistically update the UI to show 'pending' / retrying state for selected clip(s)
+      setBatchProgress(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          overall_status: 'running',
+          clips: prev.clips.map(c => {
+            if (clipIndex === undefined || c.clip_index === clipIndex) {
+              if (c.status === 'error' || c.status === 'pending') {
+                return { ...c, status: 'pending', progress_percent: 0, error: undefined };
+              }
+            }
+            return c;
+          })
+        };
+      });
+
+      const resp = await fetch(`/api/render-batch/${batchId}/retry`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          clip_indices: clipIndex !== undefined ? [clipIndex] : undefined,
+        }),
+      });
+
+      if (!resp.ok) {
+        const errJson = await resp.json().catch(() => ({}));
+        throw new Error(errJson.detail || 'Failed to retry rendering');
+      }
+
+      // Reconnect SSE to track retry progress
+      listenToBatchProgress(batchId);
+    } catch (err: any) {
+      alert(err.message || 'Error retrying clip rendering');
     }
   };
 
@@ -3675,7 +3743,14 @@ Transcript:
           isRendering={isLaunchingRender}
           onToggleMarkClip={(clip) => toggleMarkedClip(`${clip.start_time}_${clip.end_time}`)}
           batchProgress={batchProgress}
-          onDismissProgress={() => setBatchProgress(null)}
+          onDismissProgress={() => {
+            if (batchEventSourceRef.current) {
+              batchEventSourceRef.current.close();
+              batchEventSourceRef.current = null;
+            }
+            setBatchProgress(null);
+          }}
+          onRetryClip={handleRetryBatchClip}
         />
       )}
 

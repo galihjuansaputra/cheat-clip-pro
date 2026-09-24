@@ -6,17 +6,20 @@ interface BatchRenderProgressModalProps {
   isOpen: boolean;
   onClose: () => void;
   progress: BatchRenderProgress | null;
+  onRetryClip?: (clipIndex?: number) => void;
 }
 
 export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> = ({
   isOpen,
   onClose,
   progress,
+  onRetryClip,
 }) => {
   const { t } = useLanguage();
   if (!isOpen || !progress) return null;
 
   const isAllDone = progress.overall_status === 'completed' || progress.overall_status === 'error';
+  const isProcessing = progress.overall_status === 'running';
   const completedCount = progress.clips.filter(c => c.status === 'completed').length;
   const overallPercent = Math.round((completedCount / (progress.total_clips || 1)) * 100);
 
@@ -92,9 +95,31 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
                 )}
                 {clip.status === 'error' && (
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '4px', marginTop: '2px' }}>
-                    <span className="status-badge error" title={clip.error_message || clip.error}>
-                      {t.batchProgress.statusFailed}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <span className="status-badge error" title={clip.error_message || clip.error}>
+                        {t.batchProgress.statusFailed}
+                      </span>
+                      {onRetryClip && !isProcessing && (
+                        <button
+                          type="button"
+                          onClick={() => onRetryClip(idx)}
+                          style={{
+                            background: 'rgba(245, 158, 11, 0.18)',
+                            border: '1px solid rgba(245, 158, 11, 0.5)',
+                            borderRadius: '4px',
+                            color: '#fbbf24',
+                            fontSize: '0.68rem',
+                            fontWeight: 700,
+                            padding: '2px 8px',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease',
+                          }}
+                          title="Retry rendering this clip"
+                        >
+                          {t.batchProgress.retryClip || '🔄 Retry'}
+                        </button>
+                      )}
+                    </div>
                     {(clip.error_message || clip.error) && (
                       <span
                         style={{
@@ -127,6 +152,29 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
         <div className="batch-progress-footer">
           {isAllDone ? (
             <div className="batch-footer-actions">
+              {progress.clips.some(c => c.status === 'error') && onRetryClip && (
+                <button
+                  type="button"
+                  onClick={() => onRetryClip()}
+                  style={{
+                    background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                    border: '1px solid rgba(245, 158, 11, 0.7)',
+                    color: '#ffffff',
+                    fontWeight: 700,
+                    fontSize: '0.75rem',
+                    padding: '0.4rem 0.85rem',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    boxShadow: '0 0 10px rgba(245, 158, 11, 0.35)',
+                    transition: 'all 0.2s ease',
+                  }}
+                  title="Retry all failed clips"
+                >
+                  {t.batchProgress.retryAllFailed
+                    ? t.batchProgress.retryAllFailed(progress.clips.filter(c => c.status === 'error').length)
+                    : `🔄 Retry Failed (${progress.clips.filter(c => c.status === 'error').length})`}
+                </button>
+              )}
               {progress.zip_url && (
                 <a
                   href={progress.zip_url}

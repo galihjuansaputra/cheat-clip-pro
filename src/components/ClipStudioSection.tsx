@@ -30,16 +30,20 @@ interface ClipStudioSectionProps {
   onToggleMarkClip?: (clip: ViralClip) => void;
   batchProgress?: BatchRenderProgress | null;
   onDismissProgress?: () => void;
+  onRetryClip?: (clipIndex?: number) => void;
 }
 
 function getFriendlyErrorMessage(rawMsg: string): string {
   if (!rawMsg) return 'Rendering failed unexpectedly.';
   const lower = rawMsg.toLowerCase();
+  if (lower.includes("moov atom not found")) {
+    return 'Download interrupted by internet lag ("moov atom not found"). The video stream was cut off before finishing. Click "🔄 Retry" to re-download.';
+  }
   if (lower.includes("bot verification") || lower.includes("sign in") || lower.includes("confirm you're not a bot")) {
     return 'YouTube requires cookies verification. Click the 🍪 Cookies Manager button in the top navbar to save your YouTube cookies.';
   }
   if (lower.includes("timed out") || lower.includes("timeout")) {
-    return 'Video download timed out. YouTube took too long to stream data. Please try again or check your internet connection.';
+    return 'Video download timed out due to slow/laggy internet connection. Click "🔄 Retry" to try downloading again.';
   }
   if (lower.includes("hardware encoder") || (lower.includes("ffmpeg") && (lower.includes("nvenc") || lower.includes("amf") || lower.includes("qsv")))) {
     return 'GPU hardware encoder failed. Please switch Video Encoder to "Universal CPU (libx264)" in Studio Settings.';
@@ -56,7 +60,7 @@ function getFriendlyErrorMessage(rawMsg: string): string {
   return rawMsg.length > 140 ? rawMsg.slice(0, 140) + '...' : rawMsg;
 }
 
-const ClipRenderErrorBox: React.FC<{ errorMessage: string; t: any }> = ({ errorMessage, t }) => {
+const ClipRenderErrorBox: React.FC<{ errorMessage: string; t: any; onRetry?: () => void }> = ({ errorMessage, t, onRetry }) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = (e: React.MouseEvent) => {
@@ -90,25 +94,50 @@ const ClipRenderErrorBox: React.FC<{ errorMessage: string; t: any }> = ({ errorM
           <span style={{ fontSize: '0.9rem', flexShrink: 0 }}>⚠️</span>
           <span style={{ fontWeight: 600, color: '#fca5a5' }}>{friendly}</span>
         </div>
-        <button
-          type="button"
-          onClick={handleCopy}
-          style={{
-            background: copied ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.08)',
-            border: `1px solid ${copied ? 'rgba(16, 185, 129, 0.4)' : 'rgba(255, 255, 255, 0.15)'}`,
-            borderRadius: '4px',
-            color: copied ? '#34d399' : '#e2e8f0',
-            fontSize: '0.65rem',
-            padding: '2px 7px',
-            cursor: 'pointer',
-            flexShrink: 0,
-            fontWeight: 600,
-            transition: 'all 0.2s ease',
-          }}
-          title="Copy full error details"
-        >
-          {copied ? (t.studio.copiedErrorBtn || '✓ Copied!') : (t.studio.copyErrorBtn || '📋 Copy')}
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexShrink: 0 }}>
+          {onRetry && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRetry();
+              }}
+              style={{
+                background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                border: '1px solid rgba(245, 158, 11, 0.6)',
+                borderRadius: '4px',
+                color: '#ffffff',
+                fontSize: '0.65rem',
+                padding: '2px 8px',
+                cursor: 'pointer',
+                fontWeight: 700,
+                transition: 'all 0.2s ease',
+                boxShadow: '0 0 8px rgba(245, 158, 11, 0.35)',
+              }}
+              title="Retry rendering this clip"
+            >
+              {t.studio.retryClipBtn || '🔄 Retry'}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleCopy}
+            style={{
+              background: copied ? 'rgba(16, 185, 129, 0.2)' : 'rgba(255, 255, 255, 0.08)',
+              border: `1px solid ${copied ? 'rgba(16, 185, 129, 0.4)' : 'rgba(255, 255, 255, 0.15)'}`,
+              borderRadius: '4px',
+              color: copied ? '#34d399' : '#e2e8f0',
+              fontSize: '0.65rem',
+              padding: '2px 7px',
+              cursor: 'pointer',
+              fontWeight: 600,
+              transition: 'all 0.2s ease',
+            }}
+            title="Copy full error details"
+          >
+            {copied ? (t.studio.copiedErrorBtn || '✓ Copied!') : (t.studio.copyErrorBtn || '📋 Copy')}
+          </button>
+        </div>
       </div>
 
       <details style={{ fontSize: '0.67rem', color: '#94a3b8', marginTop: '0.15rem' }}>
@@ -148,6 +177,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   onToggleMarkClip,
   batchProgress,
   onDismissProgress,
+  onRetryClip,
 }) => {
   const { t } = useLanguage();
   // Directly reflect marked clips (supports selecting 0 clips)
@@ -3420,6 +3450,33 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   </div>
 
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                    {batchProgress.clips.some(c => c.status === 'error') && batchProgress.overall_status !== 'running' && onRetryClip && (
+                      <button
+                        type="button"
+                        onClick={() => onRetryClip()}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.35rem',
+                          background: 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)',
+                          border: '1px solid rgba(245, 158, 11, 0.7)',
+                          color: '#ffffff',
+                          fontWeight: 700,
+                          fontSize: '0.72rem',
+                          padding: '0.3rem 0.65rem',
+                          borderRadius: '6px',
+                          cursor: 'pointer',
+                          boxShadow: '0 0 10px rgba(245, 158, 11, 0.35)',
+                          transition: 'all 0.2s ease',
+                        }}
+                        title="Retry all failed clips in this batch"
+                      >
+                        {t.studio.retryAllFailedBtn
+                          ? t.studio.retryAllFailedBtn(batchProgress.clips.filter(c => c.status === 'error').length)
+                          : `🔄 Retry Failed (${batchProgress.clips.filter(c => c.status === 'error').length})`}
+                      </button>
+                    )}
+
                     {(batchProgress.overall_status === 'completed' || batchProgress.clips.some(c => c.status === 'completed')) && (
                       <a
                         href={batchProgress.zip_url || `/api/download-batch-zip/${batchProgress.batch_id}`}
@@ -3471,11 +3528,34 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     fontSize: '0.74rem',
                     display: 'flex',
                     alignItems: 'center',
+                    justifyContent: 'space-between',
                     gap: '0.45rem',
                     fontWeight: 600
                   }}>
-                    <span>❌</span>
-                    <span>{batchProgress.error_message || t.studio.allClipsFailed}</span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                      <span>❌</span>
+                      <span>{batchProgress.error_message || t.studio.allClipsFailed}</span>
+                    </div>
+                    {onRetryClip && (
+                      <button
+                        type="button"
+                        onClick={() => onRetryClip()}
+                        style={{
+                          background: 'linear-gradient(135deg, #f59e0b, #d97706)',
+                          border: '1px solid rgba(245, 158, 11, 0.6)',
+                          color: '#fff',
+                          fontWeight: 700,
+                          fontSize: '0.7rem',
+                          padding: '3px 9px',
+                          borderRadius: '5px',
+                          cursor: 'pointer',
+                          boxShadow: '0 0 8px rgba(245, 158, 11, 0.35)',
+                          flexShrink: 0
+                        }}
+                      >
+                        {t.studio.retryClipBtn || '🔄 Retry'}
+                      </button>
+                    )}
                   </div>
                 )}
 
@@ -3586,26 +3666,52 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                               )
                             )}
                             {isError && (
-                              <span
-                                style={{
-                                  fontSize: '0.68rem',
-                                  fontWeight: 700,
-                                  color: '#f87171',
-                                  background: 'rgba(239, 68, 68, 0.18)',
-                                  padding: '2px 8px',
-                                  borderRadius: '4px',
-                                  border: '1px solid rgba(239, 68, 68, 0.35)',
-                                }}
-                              >
-                                ❌ {t.studio.statusFailedShort}
-                              </span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                                <span
+                                  style={{
+                                    fontSize: '0.68rem',
+                                    fontWeight: 700,
+                                    color: '#f87171',
+                                    background: 'rgba(239, 68, 68, 0.18)',
+                                    padding: '2px 8px',
+                                    borderRadius: '4px',
+                                    border: '1px solid rgba(239, 68, 68, 0.35)',
+                                  }}
+                                >
+                                  ❌ {t.studio.statusFailedShort}
+                                </span>
+                                {onRetryClip && batchProgress.overall_status !== 'running' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => onRetryClip(idx)}
+                                    style={{
+                                      background: 'rgba(245, 158, 11, 0.18)',
+                                      border: '1px solid rgba(245, 158, 11, 0.5)',
+                                      borderRadius: '4px',
+                                      color: '#fbbf24',
+                                      fontSize: '0.68rem',
+                                      fontWeight: 700,
+                                      padding: '2px 8px',
+                                      cursor: 'pointer',
+                                      transition: 'all 0.2s ease',
+                                    }}
+                                    title="Retry rendering this clip"
+                                  >
+                                    {t.studio.retryClipBtn || '🔄 Retry'}
+                                  </button>
+                                )}
+                              </div>
                             )}
                           </div>
                         </div>
 
                         {/* Visible Error Box when clip fails */}
                         {isError && rawError && (
-                          <ClipRenderErrorBox errorMessage={rawError} t={t} />
+                          <ClipRenderErrorBox
+                            errorMessage={rawError}
+                            t={t}
+                            onRetry={onRetryClip && batchProgress.overall_status !== 'running' ? () => onRetryClip(idx) : undefined}
+                          />
                         )}
                       </div>
                     );
