@@ -30,9 +30,12 @@ def get_effective_cookies_path() -> Optional[Path]:
     return None
 
 CASCADE_PATH = BASE_DIR / "haarcascade_frontalface_default.xml"
+CASCADES_DIR = BASE_DIR / "cascades"
+YUNET_MODEL_PATH = CASCADES_DIR / "face_detection_yunet.onnx"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 FONTS_DIR.mkdir(parents=True, exist_ok=True)
+CASCADES_DIR.mkdir(parents=True, exist_ok=True)
 
 def ensure_ffmpeg_in_path():
     """Auto-detect FFmpeg if it was installed via winget, scoop, or local paths but not in PATH."""
@@ -1401,16 +1404,122 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return output_ass_path
 
 
+def detect_image_saliency_center(frame) -> Tuple[float, float]:
+    """
+    Computes visual saliency center of mass for a non-facecam image frame.
+    Finds the primary visual focal point / subject of attention.
+    """
+    try:
+        import cv2
+        import numpy as np
+        small = cv2.resize(frame, (320, 180))
+        saliency = cv2.saliency.StaticSaliencySpectralResidual_create()
+        success, sal_map = saliency.computeSaliency(small)
+        if success and sal_map is not None:
+            thresh = np.percentile(sal_map, 80)
+            filtered = np.where(sal_map >= thresh, sal_map, 0.0)
+            stotal = filtered.sum()
+            if stotal > 1e-4:
+                norm = filtered / stotal
+                y_idx, x_idx = np.indices(norm.shape)
+                sal_cx = float((x_idx * norm).sum()) / 320.0
+                sal_cy = float((y_idx * norm).sum()) / 180.0
+                # Snap to center if close to middle
+                if 0.44 <= sal_cx <= 0.56:
+                    sal_cx = 0.50
+                sal_cx = max(0.26, min(0.74, sal_cx))
+                return sal_cx, sal_cy
+    except Exception as e:
+        logger.debug(f"Image saliency fallback: {e}")
+    return 0.50, 0.35
+
+
+def detect_video_saliency_and_motion_center(sampled_small_frames: List[Any]) -> Tuple[float, float]:
+    """
+    Computes combined visual saliency + inter-frame motion center for non-facecam videos
+    (gameplay, tutorials, product unboxing, sports, animations, nature, etc.).
+    Guarantees the camera tracks actual action/objects and never stares at an empty wall.
+    """
+    if not sampled_small_frames:
+        return 0.50, 0.35
+
+    try:
+        import cv2
+        import numpy as np
+        saliency = cv2.saliency.StaticSaliencySpectralResidual_create()
+        centers = []
+
+        for i in range(len(sampled_small_frames)):
+            small = sampled_small_frames[i]
+            gray = cv2.cvtColor(small, cv2.COLOR_BGR2GRAY)
+
+            # 1. Motion energy if consecutive frame exists
+            motion_weight = 0.0
+            motion_cx, motion_cy = 0.5, 0.5
+            if i > 0:
+                prev_gray = cv2.cvtColor(sampled_small_frames[i - 1], cv2.COLOR_BGR2GRAY)
+                diff = cv2.absdiff(gray, prev_gray)
+                _, m_thresh = cv2.threshold(diff, 20, 255, cv2.THRESH_BINARY)
+                moments = cv2.moments(m_thresh)
+                if moments["m00"] > 50:
+                    motion_cx = (moments["m10"] / moments["m00"]) / 320.0
+                    motion_cy = (moments["m01"] / moments["m00"]) / 180.0
+                    motion_weight = min(2.0, float(moments["m00"]) / 2000.0)
+
+            # 2. Static Visual Saliency
+            success, sal_map = saliency.computeSaliency(small)
+            sal_cx, sal_cy, sal_weight = 0.5, 0.5, 0.0
+            if success and sal_map is not None:
+                thresh = np.percentile(sal_map, 80)
+                filtered = np.where(sal_map >= thresh, sal_map, 0.0)
+                stotal = filtered.sum()
+                if stotal > 1e-4:
+                    norm = filtered / stotal
+                    y_idx, x_idx = np.indices(norm.shape)
+                    sal_cx = float((x_idx * norm).sum()) / 320.0
+                    sal_cy = float((y_idx * norm).sum()) / 180.0
+                    sal_weight = 1.0
+
+            # Fuse motion & visual saliency
+            if motion_weight > 0 and sal_weight > 0:
+                fcx = (sal_cx * 1.0 + motion_cx * motion_weight) / (1.0 + motion_weight)
+                fcy = (sal_cy * 1.0 + motion_cy * motion_weight) / (1.0 + motion_weight)
+                wgt = 1.0 + motion_weight
+            elif motion_weight > 0:
+                fcx, fcy, wgt = motion_cx, motion_cy, motion_weight
+            elif sal_weight > 0:
+                fcx, fcy, wgt = sal_cx, sal_cy, sal_weight
+            else:
+                fcx, fcy, wgt = 0.5, 0.35, 0.1
+
+            centers.append((fcx, fcy, wgt))
+
+        if centers:
+            total_w = sum(c[2] for c in centers)
+            avg_cx = sum(c[0] * c[2] for c in centers) / total_w
+            avg_cy = sum(c[1] * c[2] for c in centers) / total_w
+
+            # Deadzone center snapping
+            if 0.44 <= avg_cx <= 0.56:
+                avg_cx = 0.50
+            # Safe bounds clamp
+            avg_cx = max(0.26, min(0.74, avg_cx))
+            return avg_cx, avg_cy
+    except Exception as e:
+        logger.debug(f"Video saliency fallback: {e}")
+
+    return 0.50, 0.35
+
+
 def detect_speaker_face_box(
     source_path: str,
     facecam_position: str = "auto",
     streamer_preset: str = "none"
 ) -> Dict[str, Any]:
     """
-    Detects speaker face bounding box using OpenCV Haar Cascade Classifier ensemble.
-    Can accept a video file or an image frame.
-    Supports manual facecam position overrides ('bottom_right', 'top_right', 'bottom_left', 'top_left', 'center')
-    or 'auto' smart detection using multi-cascade models (alt2, profile, default) + contrast enhancement + clustering.
+    Detects speaker face or non-facecam salient action/object bounding box.
+    Uses OpenCV YuNet Deep Neural Network + Saliency/Motion Object detection.
+    Prevents false alarms on walls, backgrounds, and empty textures.
     Returns normalized coordinates:
     {
         "found": bool,
@@ -1431,6 +1540,10 @@ def detect_speaker_face_box(
         return {"found": True, "cx": 0.15, "cy": 0.22, "w": 0.22, "h": 0.25}
     elif pos == "center":
         return {"found": True, "cx": 0.50, "cy": 0.35, "w": 0.25, "h": 0.25}
+    elif pos == "left":
+        return {"found": True, "cx": 0.35, "cy": 0.35, "w": 0.25, "h": 0.25}
+    elif pos == "right":
+        return {"found": True, "cx": 0.65, "cy": 0.35, "w": 0.25, "h": 0.25}
 
     is_streamer = streamer_preset in ["split_top_cam", "pip_corner"]
     default_cx = 0.85 if is_streamer else 0.50
@@ -1443,88 +1556,161 @@ def detect_speaker_face_box(
     try:
         import cv2
 
+        # Check if source is image
+        ext = os.path.splitext(source_path)[1].lower()
+        is_image = ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]
+
+        # 1. Initialize YuNet Deep Neural Network detector if model file is available
+        yunet_detector = None
+        target_model = None
+        for cand in [YUNET_MODEL_PATH, BASE_DIR / "face_detection_yunet.onnx", BASE_DIR / "cascades" / "face_detection_yunet.onnx"]:
+            if cand.exists():
+                target_model = cand
+                break
+        if target_model:
+            try:
+                yunet_detector = cv2.FaceDetectorYN.create(
+                    str(target_model),
+                    "",
+                    (320, 320),
+                    0.65,  # score_threshold: strict enough to reject walls and noise
+                    0.3,   # nms_threshold
+                    5000
+                )
+            except Exception as e:
+                logger.warning(f"YuNet initialization failed: {e}")
+                yunet_detector = None
+
+        # 2. Prepare Haar Cascades fallback ensemble
         cascades = []
         cascade_names = [
             "haarcascade_frontalface_alt2.xml",
+            "haarcascade_frontalface_alt.xml",
             "haarcascade_profileface.xml",
+            "haarcascade_upperbody.xml",
             "haarcascade_frontalface_default.xml"
         ]
         opencv_data_dir = getattr(cv2, "data", None)
         haarcascades_dir = getattr(opencv_data_dir, "haarcascades", None) if opencv_data_dir else None
 
         for c_name in cascade_names:
-            p_cv = os.path.join(haarcascades_dir, c_name) if haarcascades_dir else ""
-            if p_cv and os.path.exists(p_cv):
+            candidates = [
+                CASCADES_DIR / c_name,
+                BASE_DIR / c_name,
+                os.path.join(haarcascades_dir, c_name) if haarcascades_dir else ""
+            ]
+            for p in candidates:
+                if p and os.path.exists(str(p)):
+                    try:
+                        c = cv2.CascadeClassifier(str(p))
+                        if not c.empty():
+                            cascades.append(c)
+                            break
+                    except Exception:
+                        pass
+
+        # Helper: detect faces in a single frame
+        def detect_frame_faces(frame) -> List[Dict[str, Any]]:
+            fh, fw = frame.shape[:2]
+            found_faces = []
+
+            # Stage A: Deep Learning YuNet
+            if yunet_detector is not None:
                 try:
-                    c = cv2.CascadeClassifier(p_cv)
-                    if not c.empty():
-                        cascades.append(c)
+                    yunet_detector.setInputSize((fw, fh))
+                    res = yunet_detector.detect(frame)
+                    if res[1] is not None and len(res[1]) > 0:
+                        for f in res[1]:
+                            box = f[0:4]
+                            conf = float(f[-1])
+                            fcx = float(box[0] + box[2] / 2.0) / fw
+                            fcy = float(box[1] + box[3] / 2.0) / fh
+                            bw = float(box[2]) / fw
+                            bh = float(box[3]) / fh
+                            if bw >= 0.025 and bh >= 0.025:
+                                found_faces.append({
+                                    "cx": fcx, "cy": fcy, "w": bw, "h": bh,
+                                    "conf": conf, "source": "yunet"
+                                })
+                        if found_faces:
+                            return found_faces
                 except Exception:
                     pass
-            elif (BASE_DIR / c_name).exists():
-                try:
-                    c = cv2.CascadeClassifier(str(BASE_DIR / c_name))
-                    if not c.empty():
-                        cascades.append(c)
-                except Exception:
-                    pass
 
-        if not cascades and CASCADE_PATH.exists():
-            try:
-                c = cv2.CascadeClassifier(str(CASCADE_PATH))
-                if not c.empty():
-                    cascades.append(c)
-            except Exception:
-                pass
+            # Stage B: Haar Cascade Ensemble with strict false-positive suppression
+            if cascades:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                min_sz = max(48, int(fh * 0.08))  # Minimum 8% of frame height (reject wall specks)
+                for cascade in cascades:
+                    haar_faces = cascade.detectMultiScale(
+                        gray,
+                        scaleFactor=1.1,
+                        minNeighbors=6,
+                        minSize=(min_sz, min_sz)
+                    )
+                    if len(haar_faces) > 0:
+                        for (fx, fy, bw, bh) in haar_faces:
+                            aspect = float(bw) / float(bh)
+                            if 0.65 <= aspect <= 1.35:
+                                fcx = float(fx + bw / 2.0) / fw
+                                fcy = float(fy + bh / 2.0) / fh
+                                found_faces.append({
+                                    "cx": fcx, "cy": fcy,
+                                    "w": float(bw) / fw, "h": float(bh) / fh,
+                                    "conf": 0.70, "source": "haar"
+                                })
+                        if found_faces:
+                            break
 
-        if not cascades:
-            logger.warning("No Haar cascade XML files could be loaded.")
-            return default_res
+            return found_faces
 
-        def detect_in_frame(img):
-            h, w = img.shape[:2]
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            eq = cv2.equalizeHist(gray)
-            frame_faces = []
-            for cascade in cascades:
-                for g in [eq, gray]:
-                    faces = cascade.detectMultiScale(g, scaleFactor=1.1, minNeighbors=3, minSize=(28, 28))
-                    if len(faces) > 0:
-                        for (fx, fy, fw, fh) in faces:
-                            fcx = (fx + fw / 2.0) / w
-                            fcy = (fy + fh / 2.0) / h
-                            frame_faces.append((fcx, fcy, float(fw) / w, float(fh) / h))
-                if frame_faces:
-                    break
-
-            if not frame_faces:
-                return None
-
-            if is_streamer:
-                corner_faces = [f for f in frame_faces if ((f[0] - 0.5)**2 + (f[1] - 0.5)**2) > 0.06]
-                if corner_faces:
-                    return max(corner_faces, key=lambda f: f[2] * f[3])
-
-            return max(frame_faces, key=lambda f: f[2] * f[3])
-
-        # Check if source is an image
-        ext = os.path.splitext(source_path)[1].lower()
-        if ext in [".jpg", ".jpeg", ".png", ".webp", ".bmp"]:
+        # Case 1: Image source
+        if is_image:
             frame = cv2.imread(source_path)
             if frame is None:
                 return default_res
-            best = detect_in_frame(frame)
-            if best:
-                return {
-                    "found": True,
-                    "cx": round(float(best[0]), 3),
-                    "cy": round(float(best[1]), 3),
-                    "w": round(float(best[2]), 3),
-                    "h": round(float(best[3]), 3)
-                }
-            return default_res
+            img_faces = detect_frame_faces(frame)
+            if not img_faces:
+                # Non-facecam image: detect salient focal point
+                if not is_streamer:
+                    sal_cx, sal_cy = detect_image_saliency_center(frame)
+                    logger.info(f"Non-facecam image detected: smart visual saliency centered at ({sal_cx:.3f}, {sal_cy:.3f})")
+                    return {
+                        "found": True,
+                        "type": "salient_object",
+                        "cx": float(round(sal_cx, 3)),
+                        "cy": float(round(sal_cy, 3)),
+                        "w": 0.25,
+                        "h": 0.25
+                    }
+                return default_res
 
-        # Source is a video file
+            if is_streamer:
+                corner_faces = [f for f in img_faces if ((f["cx"] - 0.5)**2 + (f["cy"] - 0.5)**2) > 0.06]
+                chosen = max(corner_faces or img_faces, key=lambda f: f["w"] * f["h"])
+            else:
+                fg_faces = [f for f in img_faces if f["w"] >= 0.06 or abs(f["cx"] - 0.5) <= 0.28]
+                if not fg_faces:
+                    # Tiny corner webcam in image: center on non-facecam main content
+                    sal_cx, sal_cy = detect_image_saliency_center(frame)
+                    return {"found": True, "type": "salient_object", "cx": float(round(sal_cx, 3)), "cy": float(round(sal_cy, 3)), "w": 0.25, "h": 0.25}
+                chosen = max(fg_faces, key=lambda f: (f["w"] * f["h"]) * (1.0 - 0.35 * abs(f["cx"] - 0.5)))
+
+            final_cx = float(chosen["cx"])
+            if not is_streamer:
+                if 0.45 <= final_cx <= 0.55:
+                    final_cx = 0.50
+                final_cx = max(0.24, min(0.76, final_cx))
+
+            return {
+                "found": True,
+                "cx": float(round(final_cx, 3)),
+                "cy": float(round(chosen["cy"], 3)),
+                "w": float(round(chosen["w"], 3)),
+                "h": float(round(chosen["h"], 3))
+            }
+
+        # Case 2: Video source
         cap = cv2.VideoCapture(source_path)
         if not cap.isOpened():
             return default_res
@@ -1534,6 +1720,7 @@ def detect_speaker_face_box(
         step = max(1, total_frames // 25) if total_frames > 25 else max(1, int(fps * 0.75))
 
         detections = []
+        sampled_small_frames = []
         frame_idx = 0
         checked = 0
         while cap.isOpened() and frame_idx < total_frames and checked < 25:
@@ -1543,46 +1730,126 @@ def detect_speaker_face_box(
             checked += 1
             if not ret or frame is None:
                 continue
-
-            best = detect_in_frame(frame)
-            if best:
-                detections.append(best)
+            sampled_small_frames.append(cv2.resize(frame, (320, 180)))
+            f_faces = detect_frame_faces(frame)
+            if f_faces:
+                detections.extend(f_faces)
 
         cap.release()
 
-        if detections:
-            clusters = []
-            for d in detections:
-                matched = False
-                for c in clusters:
-                    dist = ((c['cx'] - d[0])**2 + (c['cy'] - d[1])**2)**0.5
-                    if dist < 0.16:
-                        c['pts'].append(d)
-                        c['cx'] = sum(p[0] for p in c['pts']) / len(c['pts'])
-                        c['cy'] = sum(p[1] for p in c['pts']) / len(c['pts'])
-                        matched = True
-                        break
-                if not matched:
-                    clusters.append({'cx': d[0], 'cy': d[1], 'pts': [d]})
+        # If no face detections, run non-facecam visual saliency & motion object tracking!
+        if not detections:
+            if not is_streamer and sampled_small_frames:
+                sal_cx, sal_cy = detect_video_saliency_and_motion_center(sampled_small_frames)
+                logger.info(f"Non-facecam video detected: smart saliency/motion centered at ({sal_cx:.3f}, {sal_cy:.3f})")
+                return {
+                    "found": True,
+                    "type": "salient_object",
+                    "cx": float(round(sal_cx, 3)),
+                    "cy": float(round(sal_cy, 3)),
+                    "w": 0.25,
+                    "h": 0.25
+                }
+            return default_res
 
-            if is_streamer and len(clusters) > 1:
-                corner_clusters = [c for c in clusters if ((c['cx'] - 0.5)**2 + (c['cy'] - 0.5)**2) > 0.06]
-                best_cluster = max(corner_clusters or clusters, key=lambda c: len(c['pts']))
-            else:
-                best_cluster = max(clusters, key=lambda c: len(c['pts']))
+        # Spatial clustering across sampled frames
+        clusters = []
+        for d in detections:
+            matched = False
+            for c in clusters:
+                dist = ((c["cx"] - d["cx"])**2 + (c["cy"] - d["cy"])**2)**0.5
+                if dist < 0.12:
+                    c["pts"].append(d)
+                    c["cx"] = sum(p["cx"] for p in c["pts"]) / len(c["pts"])
+                    c["cy"] = sum(p["cy"] for p in c["pts"]) / len(c["pts"])
+                    matched = True
+                    break
+            if not matched:
+                clusters.append({"cx": d["cx"], "cy": d["cy"], "pts": [d]})
 
-            avg_w = sum(p[2] for p in best_cluster['pts']) / len(best_cluster['pts'])
-            avg_h = sum(p[3] for p in best_cluster['pts']) / len(best_cluster['pts'])
-            logger.info(f"Enhanced face tracking detected speaker: center=({best_cluster['cx']:.3f}, {best_cluster['cy']:.3f}), size=({avg_w:.3f}x{avg_h:.3f}) across {len(best_cluster['pts'])} frames")
-            return {
-                "found": True,
-                "cx": round(float(best_cluster['cx']), 3),
-                "cy": round(float(best_cluster['cy']), 3),
-                "w": round(float(avg_w), 3),
-                "h": round(float(avg_h), 3)
-            }
+        # Temporal multi-frame persistence gating
+        valid_clusters = [
+            c for c in clusters
+            if len(c["pts"]) >= 2 or (c["pts"][0]["conf"] >= 0.85 and c["pts"][0]["w"] >= 0.08)
+        ]
+        if not valid_clusters:
+            # Low confidence / isolated noise blips -> fallback to saliency/motion
+            if not is_streamer and sampled_small_frames:
+                sal_cx, sal_cy = detect_video_saliency_and_motion_center(sampled_small_frames)
+                logger.info(f"Non-facecam video (weak face noise): smart saliency/motion centered at ({sal_cx:.3f}, {sal_cy:.3f})")
+                return {
+                    "found": True,
+                    "type": "salient_object",
+                    "cx": float(round(sal_cx, 3)),
+                    "cy": float(round(sal_cy, 3)),
+                    "w": 0.25,
+                    "h": 0.25
+                }
+            return default_res
+
+        if is_streamer:
+            corner_clusters = [c for c in valid_clusters if ((c["cx"] - 0.5)**2 + (c["cy"] - 0.5)**2) > 0.06]
+            chosen = max(corner_clusters or valid_clusters, key=lambda c: len(c["pts"]))
+        else:
+            foreground_clusters = [
+                c for c in valid_clusters
+                if (sum(p["w"] for p in c["pts"]) / len(c["pts"])) >= 0.06 or abs(c["cx"] - 0.5) <= 0.28
+            ]
+            if not foreground_clusters:
+                # All detections are corner webcams; in standard 9:16, analyze saliency/motion of main content
+                if sampled_small_frames:
+                    sal_cx, sal_cy = detect_video_saliency_and_motion_center(sampled_small_frames)
+                    logger.info(f"Corner webcam with non-facecam main content: centered at ({sal_cx:.3f}, {sal_cy:.3f})")
+                    return {
+                        "found": True,
+                        "type": "salient_object",
+                        "cx": float(round(sal_cx, 3)),
+                        "cy": float(round(sal_cy, 3)),
+                        "w": 0.25,
+                        "h": 0.25
+                    }
+                return {"found": True, "is_corner_cam": True, "cx": 0.50, "cy": 0.35, "w": 0.22, "h": 0.25}
+
+            # Check for dual speakers on opposite sides (interviews, podcasts, co-hosts)
+            left_speakers = [c for c in foreground_clusters if c["cx"] < 0.40 and len(c["pts"]) >= 3]
+            right_speakers = [c for c in foreground_clusters if c["cx"] > 0.60 and len(c["pts"]) >= 3]
+            if left_speakers and right_speakers:
+                mid_cx = (max(left_speakers, key=lambda c: len(c["pts"]))["cx"] + max(right_speakers, key=lambda c: len(c["pts"]))["cx"]) / 2.0
+                return {"found": True, "cx": float(round(mid_cx, 3)), "cy": 0.35, "w": 0.25, "h": 0.25, "dual_speakers": True}
+
+            # Rank foreground candidates by: consistency * size * confidence * center prior
+            def score_cluster(c):
+                avg_w = sum(p["w"] for p in c["pts"]) / len(c["pts"])
+                avg_conf = sum(p["conf"] for p in c["pts"]) / len(c["pts"])
+                center_prior = 1.0 - 0.35 * abs(c["cx"] - 0.5)
+                return len(c["pts"]) * (avg_w ** 0.5) * avg_conf * center_prior
+
+            chosen = max(foreground_clusters, key=score_cluster)
+
+        avg_w = sum(p["w"] for p in chosen["pts"]) / len(chosen["pts"])
+        avg_h = sum(p["h"] for p in chosen["pts"]) / len(chosen["pts"])
+        final_cx = float(chosen["cx"])
+
+        if not is_streamer:
+            # Snap to exact center if the host is already close to middle (eliminates micro-jitters)
+            if 0.45 <= final_cx <= 0.55:
+                final_cx = 0.50
+            # Safe crop bounds: never push the crop into extreme edges/walls
+            final_cx = max(0.24, min(0.76, final_cx))
+
+        logger.info(
+            f"Smart face tracking selected speaker: center=({final_cx:.3f}, {chosen['cy']:.3f}), "
+            f"size=({avg_w:.3f}x{avg_h:.3f}) across {len(chosen['pts'])} frames"
+        )
+        return {
+            "found": True,
+            "cx": float(round(final_cx, 3)),
+            "cy": float(round(chosen["cy"], 3)),
+            "w": float(round(avg_w, 3)),
+            "h": float(round(avg_h, 3))
+        }
     except Exception as e:
-        logger.warning(f"Face detection encountered error: {e}, falling back to defaults.")
+        logger.warning(f"Face/object detection encountered error: {e}, safely falling back to center.")
 
     return default_res
 
@@ -1768,7 +2035,11 @@ def build_ffmpeg_filtergraph(
                 )
 
         else:  # 9:16
-            crop_ratio_safe = max(0.0, min(1.0, (face_cx - 0.158) / 0.684))
+            safe_cx = float(face_cx)
+            if 0.46 <= safe_cx <= 0.54:
+                safe_cx = 0.50
+            safe_cx = max(0.22, min(0.78, safe_cx))
+            crop_ratio_safe = max(0.0, min(1.0, (safe_cx - 0.158) / 0.684))
             pip_x, pip_y = 736, 120
             filters.append(
                 f"[0:v]split=2[main_raw][pip_raw];"
@@ -1781,7 +2052,11 @@ def build_ffmpeg_filtergraph(
 
     elif aspect_ratio == "9:16":
         # Full Bleed 9:16 with Face Tracking horizontal crop offset
-        crop_ratio_safe = max(0.0, min(1.0, (face_cx - 0.158) / 0.684))
+        safe_cx = float(face_cx)
+        if 0.46 <= safe_cx <= 0.54:
+            safe_cx = 0.50
+        safe_cx = max(0.22, min(0.78, safe_cx))
+        crop_ratio_safe = max(0.0, min(1.0, (safe_cx - 0.158) / 0.684))
         filters.append(
             f"[0:v]crop=ih*9/16:ih:(iw-ih*9/16)*{crop_ratio_safe:.3f}:0,scale=1080:1920[layout_base]"
         )

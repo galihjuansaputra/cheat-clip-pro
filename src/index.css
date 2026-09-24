@@ -3278,10 +3278,13 @@ label[for="manual-subtitle-file"]:hover {
   max-width: none;
 }
 
-/* In 9:16 full-bleed crop mode, center crop the 16:9 video naturally */
+/* In 9:16 full-bleed crop mode, center crop or focus crop the 16:9 video naturally */
 .aspect-916 .studio-yt-embed-slot iframe {
   width: 1012px;
   height: 569px;
+  left: calc(0px - (var(--preview-crop-pct, 50) / 100) * 692px);
+  transform: translateY(-50%);
+  transition: left 0.3s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 /* In 1:1 square crop mode */

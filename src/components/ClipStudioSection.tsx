@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useLanguage } from '../locales';
 import type {
   ViralClip,
@@ -281,8 +281,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [isLooping, setIsLooping] = useState<boolean>(true);
   const [playerReady, setPlayerReady] = useState<boolean>(false);
 
-  // Face detection tracking state
-  const [, setFaceBox] = useState<{ cx: number; cy: number; w: number; h: number; found: boolean }>({
+  // Face & object detection tracking state
+  const [faceBox, setFaceBox] = useState<{ cx: number; cy: number; w: number; h: number; found: boolean; type?: string }>({
     cx: 0.5,
     cy: 0.35,
     w: 0.25,
@@ -317,7 +317,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const clipEnd = currentPreviewClip ? currentPreviewClip.end_time : 60;
   const clipDuration = Math.max(1, clipEnd - clipStart);
 
-  // Fetch face detection coordinates
+  // Fetch face/object detection coordinates
   useEffect(() => {
     if (!videoId) return;
     let isMounted = true;
@@ -337,6 +337,26 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     fetchFace();
     return () => { isMounted = false; };
   }, [videoId, previewClipIndex, clipStart, videoUrl, facecamPosition, streamerPreset]);
+
+  // Calculate horizontal crop percentage (0 = leftmost edge, 50 = center, 100 = rightmost edge)
+  const previewCropPercent = useMemo(() => {
+    if (!enableFaceTracking || aspectRatio !== '9:16' || streamerPreset !== 'none') {
+      return 50;
+    }
+    if (facecamPosition === 'left') return 28;
+    if (facecamPosition === 'right') return 72;
+    if (facecamPosition === 'center') return 50;
+    if (faceBox && faceBox.found && typeof faceBox.cx === 'number') {
+      let safeCx = faceBox.cx;
+      if (0.46 <= safeCx && safeCx <= 0.54) {
+        safeCx = 0.50;
+      }
+      safeCx = Math.max(0.22, Math.min(0.78, safeCx));
+      const cropRatio = Math.max(0.0, Math.min(1.0, (safeCx - 0.158) / 0.684));
+      return Math.round(cropRatio * 100);
+    }
+    return 50;
+  }, [enableFaceTracking, aspectRatio, streamerPreset, facecamPosition, faceBox]);
 
   // Helper duration formatter
   const formatDuration = (seconds: number) => {
@@ -1298,18 +1318,59 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               </div>
             )}
 
-            {/* AI Active Speaker centering */}
+            {/* AI Active Speaker & Object Centering */}
             {aspectRatio === '9:16' && (
-              <div className="studio-checkbox-row" style={{ marginTop: '0.75rem' }}>
-                <input
-                  type="checkbox"
-                  id="faceTrackingSec"
-                  checked={enableFaceTracking}
-                  onChange={e => setEnableFaceTracking(e.target.checked)}
-                />
-                <label htmlFor="faceTrackingSec">
-                  <strong>{t.studio.faceTracking}</strong> {t.studio.faceTrackingDesc}
-                </label>
+              <div style={{ marginTop: '0.85rem' }}>
+                <div className="studio-checkbox-row">
+                  <input
+                    type="checkbox"
+                    id="faceTrackingSec"
+                    checked={enableFaceTracking}
+                    onChange={e => setEnableFaceTracking(e.target.checked)}
+                  />
+                  <label htmlFor="faceTrackingSec">
+                    <strong>{t.studio.faceTracking}</strong> {t.studio.faceTrackingDesc}
+                  </label>
+                </div>
+
+                {enableFaceTracking && streamerPreset === 'none' && (
+                  <div className="horizontal-framing-selector" style={{ marginTop: '0.65rem', paddingLeft: '1.6rem' }}>
+                    <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                      <span>{t.studio.horizontalFramingLabel || 'Horizontal Framing / Focal Point:'}</span>
+                      {faceBox?.found && facecamPosition === 'auto' && (
+                        <span style={{
+                          fontSize: '0.7rem',
+                          padding: '0.15rem 0.5rem',
+                          borderRadius: '4px',
+                          background: faceBox.type === 'salient_object' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                          color: faceBox.type === 'salient_object' ? '#38bdf8' : '#4ade80',
+                          border: `1px solid ${faceBox.type === 'salient_object' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(34, 197, 94, 0.3)'}`,
+                          fontWeight: 600
+                        }}>
+                          {faceBox.type === 'salient_object' ? '🎯 AI Object Focus' : '👤 AI Face Focus'}
+                        </span>
+                      )}
+                    </div>
+                    <div className="pill-group framing-pills" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                      {[
+                        { id: 'auto', label: t.studio.framingAuto || '🤖 AI Auto' },
+                        { id: 'center', label: t.studio.framingCenter || '🎯 Center (50%)' },
+                        { id: 'left', label: t.studio.framingLeft || '⬅️ Left Focus (35%)' },
+                        { id: 'right', label: t.studio.framingRight || '➡️ Right Focus (65%)' },
+                      ].map(opt => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          className={`pill-btn ${facecamPosition === opt.id ? 'active' : ''}`}
+                          style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem' }}
+                          onClick={() => setFacecamPosition(opt.id as FacecamPosition)}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -2972,7 +3033,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                           src={videoUrl}
                           playsInline
                           muted={isMuted}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                          style={{
+                            width: '100%',
+                            height: '100%',
+                            objectFit: 'cover',
+                            objectPosition: `${previewCropPercent}% 50%`,
+                            transition: 'object-position 0.3s ease-out'
+                          }}
                           onPlay={() => {
                             setIsPlaying(true);
                             startTracking();
@@ -3003,6 +3070,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                           style={{
                             opacity: playerReady ? 1 : 0,
                             transition: 'opacity 0.25s ease',
+                            ['--preview-crop-pct' as any]: previewCropPercent,
                           }}
                         >
                           <div id="studio-yt-iframe-slot"></div>

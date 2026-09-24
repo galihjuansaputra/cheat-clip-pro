@@ -207,18 +207,46 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                 </div>
               )}
 
-              {/* Face tracking toggle for 9:16 */}
+              {/* Face & Object tracking toggle for 9:16 */}
               {aspectRatio === '9:16' && (
-                <div className="studio-checkbox-row">
-                  <input
-                    type="checkbox"
-                    id="faceTracking"
-                    checked={enableFaceTracking}
-                    onChange={e => setEnableFaceTracking(e.target.checked)}
-                  />
-                  <label htmlFor="faceTracking">
-                    <strong>{t.studio.faceTracking}</strong> {t.studio.faceTrackingDesc}
-                  </label>
+                <div style={{ marginTop: '0.75rem' }}>
+                  <div className="studio-checkbox-row">
+                    <input
+                      type="checkbox"
+                      id="faceTracking"
+                      checked={enableFaceTracking}
+                      onChange={e => setEnableFaceTracking(e.target.checked)}
+                    />
+                    <label htmlFor="faceTracking">
+                      <strong>{t.studio.faceTracking}</strong> {t.studio.faceTrackingDesc}
+                    </label>
+                  </div>
+
+                  {enableFaceTracking && streamerPreset === 'none' && (
+                    <div className="horizontal-framing-selector" style={{ marginTop: '0.65rem', paddingLeft: '1.6rem' }}>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.4rem' }}>
+                        {t.studio.horizontalFramingLabel || 'Horizontal Framing / Focal Point:'}
+                      </div>
+                      <div className="pill-group framing-pills" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                        {[
+                          { id: 'auto', label: t.studio.framingAuto || '🤖 AI Auto' },
+                          { id: 'center', label: t.studio.framingCenter || '🎯 Center (50%)' },
+                          { id: 'left', label: t.studio.framingLeft || '⬅️ Left Focus (35%)' },
+                          { id: 'right', label: t.studio.framingRight || '➡️ Right Focus (65%)' },
+                        ].map(opt => (
+                          <button
+                            key={opt.id}
+                            type="button"
+                            className={`pill-btn ${facecamPosition === opt.id ? 'active' : ''}`}
+                            style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem' }}
+                            onClick={() => setFacecamPosition(opt.id as FacecamPosition)}
+                          >
+                            {opt.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
