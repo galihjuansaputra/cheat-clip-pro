@@ -19,7 +19,11 @@ declare global {
 export default function App() {
   const { t } = useLanguage();
   const [url, setUrl] = useState('');
-  const [durationPref, setDurationPref] = useState<'15s' | '30s' | '60s'>('30s');
+  const [durationPref, setDurationPref] = useState<'15s' | '30s' | '60s' | 'auto'>(() => {
+    const saved = localStorage.getItem('cheat_clip_duration_pref');
+    if (saved === '15s' || saved === '30s' || saved === '60s' || saved === 'auto') return saved;
+    return '30s';
+  });
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('cheat_clip_gemini_api_key') || '');
   const [showApiKey, setShowApiKey] = useState(false);
   const [isCookiesModalOpen, setIsCookiesModalOpen] = useState(false);
@@ -60,6 +64,10 @@ export default function App() {
   const [targetClipCount, setTargetClipCount] = useState<number>(() => {
     const val = localStorage.getItem('cheat_clip_target_clip_count');
     return val ? Number(val) : 10;
+  });
+  const [clipCountMode, setClipCountMode] = useState<'auto' | 'custom'>(() => {
+    const saved = localStorage.getItem('cheat_clip_clip_count_mode');
+    return (saved === 'auto' || saved === 'custom') ? saved : 'auto';
   });
 
   // Custom range selection states
@@ -622,7 +630,18 @@ export default function App() {
     try {
       const data: AnalyzeResponse = JSON.parse(raw);
       setUrl(`https://www.youtube.com/watch?v=${entry.video_id}`);
-      setDurationPref(entry.duration_pref as '15s' | '30s' | '60s');
+      setDurationPref((entry.duration_pref as '15s' | '30s' | '60s' | 'auto') || '30s');
+
+      // Restore clip count mode
+      if (entry.range_suffix?.includes('_clips_auto')) {
+        setClipCountMode('auto');
+      } else {
+        const clipMatch = entry.range_suffix?.match(/_clips_(\d+)/);
+        if (clipMatch) {
+          setClipCountMode('custom');
+          setTargetClipCount(Number(clipMatch[1]));
+        }
+      }
 
       // Restore subtitle source state
       if (entry.range_suffix?.includes('_manual')) {
@@ -938,7 +957,7 @@ export default function App() {
     const manualSuffix = subtitlesSource === 'manual' ? '_manual' : '';
     const promptSuffix = customPrompt.trim() ? `_prompt_${customPrompt.trim().replace(/[^a-zA-Z0-9]/g, '_')}` : '';
     const modelSuffix = `_model_${selectedModel}`;
-    const clipsSuffix = `_clips_${targetClipCount}`;
+    const clipsSuffix = clipCountMode === 'auto' ? '_clips_auto' : `_clips_${targetClipCount}`;
     const cacheKey = videoId ? `cheat_clip_cache_${videoId}_${durationPref}${modelSuffix}${clipsSuffix}${promptSuffix}${rangeSuffix}${manualSuffix}` : null;
 
     if (cacheKey) {
@@ -1024,7 +1043,7 @@ export default function App() {
           range_end: rangeEndSecs,
           subtitles: subtitlesSource === 'manual' ? manualSubtitlesContent : undefined,
           subtitles_filename: subtitlesSource === 'manual' ? manualSubtitlesFileName : undefined,
-          target_clip_count: targetClipCount,
+          target_clip_count: clipCountMode === 'auto' ? 'auto' : targetClipCount,
         }),
       });
 
@@ -1127,7 +1146,7 @@ export default function App() {
         try {
           const promptSuffix = customPrompt.trim() ? `_prompt_${customPrompt.trim().replace(/[^a-zA-Z0-9]/g, '_')}` : '';
           const modelSuffix = `_model_${selectedModel}`;
-          const clipsSuffix = `_clips_${targetClipCount}`;
+          const clipsSuffix = clipCountMode === 'auto' ? '_clips_auto' : `_clips_${targetClipCount}`;
           const targetCacheKey = `cheat_clip_cache_${resultData.video_id}_${durationPref}${modelSuffix}${clipsSuffix}${promptSuffix}${rangeSuffix}${manualSuffix}`;
           const tsKey = `cheat_clip_ts_${resultData.video_id}_${durationPref}${modelSuffix}${clipsSuffix}${promptSuffix}${rangeSuffix}${manualSuffix}`;
           localStorage.setItem(targetCacheKey, JSON.stringify(resultData));
@@ -2032,7 +2051,10 @@ Transcript:
                   <button
                     type="button"
                     className={`duration-btn ${durationPref === '15s' ? 'active' : ''}`}
-                    onClick={() => setDurationPref('15s')}
+                    onClick={() => {
+                      setDurationPref('15s');
+                      localStorage.setItem('cheat_clip_duration_pref', '15s');
+                    }}
                     disabled={loading}
                   >
                     {t.form.dur15s}
@@ -2040,7 +2062,10 @@ Transcript:
                   <button
                     type="button"
                     className={`duration-btn ${durationPref === '30s' ? 'active' : ''}`}
-                    onClick={() => setDurationPref('30s')}
+                    onClick={() => {
+                      setDurationPref('30s');
+                      localStorage.setItem('cheat_clip_duration_pref', '30s');
+                    }}
                     disabled={loading}
                   >
                     {t.form.dur30s}
@@ -2048,12 +2073,31 @@ Transcript:
                   <button
                     type="button"
                     className={`duration-btn ${durationPref === '60s' ? 'active' : ''}`}
-                    onClick={() => setDurationPref('60s')}
+                    onClick={() => {
+                      setDurationPref('60s');
+                      localStorage.setItem('cheat_clip_duration_pref', '60s');
+                    }}
                     disabled={loading}
                   >
                     {t.form.dur60s}
                   </button>
+                  <button
+                    type="button"
+                    className={`duration-btn ${durationPref === 'auto' ? 'active' : ''}`}
+                    onClick={() => {
+                      setDurationPref('auto');
+                      localStorage.setItem('cheat_clip_duration_pref', 'auto');
+                    }}
+                    disabled={loading}
+                  >
+                    {t.form.durAuto}
+                  </button>
                 </div>
+                {durationPref === 'auto' && (
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.3, marginTop: '0.1rem' }}>
+                    💡 {t.form.durAutoTip}
+                  </span>
+                )}
               </div>
 
               {/* Focus Prompt Search Keyword */}
@@ -2072,7 +2116,7 @@ Transcript:
                 />
               </div>
 
-              {/* Target Clip Count Slider */}
+              {/* Target Clip Count Selector & Slider */}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', marginTop: '0.25rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
@@ -2087,37 +2131,72 @@ Transcript:
                     borderRadius: '6px',
                     padding: '0.1rem 0.5rem'
                   }}>
-                    {t.form.approxClips(targetClipCount)}
+                    {clipCountMode === 'auto' ? t.form.clipCountAutoBadge : t.form.approxClips(targetClipCount)}
                   </span>
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', width: '10px' }}>1</span>
-                  <input
-                    type="range"
-                    min="1"
-                    max="50"
-                    value={targetClipCount}
-                    onChange={(e) => {
-                      const val = Number(e.target.value);
-                      setTargetClipCount(val);
-                      localStorage.setItem('cheat_clip_target_clip_count', String(val));
+
+                {/* Auto vs Custom Count Option Buttons */}
+                <div className="duration-selector" id="clip-count-mode-group">
+                  <button
+                    type="button"
+                    className={`duration-btn ${clipCountMode === 'auto' ? 'active' : ''}`}
+                    onClick={() => {
+                      setClipCountMode('auto');
+                      localStorage.setItem('cheat_clip_clip_count_mode', 'auto');
                     }}
                     disabled={loading}
-                    style={{
-                      flex: 1,
-                      height: '6px',
-                      borderRadius: '3px',
-                      background: 'rgba(255, 255, 255, 0.1)',
-                      outline: 'none',
-                      cursor: 'pointer',
-                      accentColor: 'var(--secondary)'
+                  >
+                    {t.form.clipCountAuto}
+                  </button>
+                  <button
+                    type="button"
+                    className={`duration-btn ${clipCountMode === 'custom' ? 'active' : ''}`}
+                    onClick={() => {
+                      setClipCountMode('custom');
+                      localStorage.setItem('cheat_clip_clip_count_mode', 'custom');
                     }}
-                  />
-                  <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', width: '20px', textAlign: 'right' }}>50</span>
+                    disabled={loading}
+                  >
+                    {t.form.clipCountCustom}
+                  </button>
                 </div>
-                <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
-                  💡 {t.form.clipCountTip(targetClipCount, targetClipCount <= 5 ? `${Math.max(1, targetClipCount - 1)}-${targetClipCount + 2}` : targetClipCount <= 10 ? `${Math.max(1, targetClipCount - 2)}-${targetClipCount + 3}` : `${targetClipCount - 5}-${targetClipCount + 5}`)}
-                </span>
+
+                {clipCountMode === 'custom' ? (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginTop: '0.25rem' }}>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', width: '10px' }}>1</span>
+                      <input
+                        type="range"
+                        min="1"
+                        max="50"
+                        value={targetClipCount}
+                        onChange={(e) => {
+                          const val = Number(e.target.value);
+                          setTargetClipCount(val);
+                          localStorage.setItem('cheat_clip_target_clip_count', String(val));
+                        }}
+                        disabled={loading}
+                        style={{
+                          flex: 1,
+                          height: '6px',
+                          borderRadius: '3px',
+                          background: 'rgba(255, 255, 255, 0.1)',
+                          outline: 'none',
+                          cursor: 'pointer',
+                          accentColor: 'var(--secondary)'
+                        }}
+                      />
+                      <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', width: '20px', textAlign: 'right' }}>50</span>
+                    </div>
+                    <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
+                      💡 {t.form.clipCountTip(targetClipCount, targetClipCount <= 5 ? `${Math.max(1, targetClipCount - 1)}-${targetClipCount + 2}` : targetClipCount <= 10 ? `${Math.max(1, targetClipCount - 2)}-${targetClipCount + 3}` : `${targetClipCount - 5}-${targetClipCount + 5}`)}
+                    </span>
+                  </>
+                ) : (
+                  <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', lineHeight: 1.3, marginTop: '0.1rem' }}>
+                    💡 {t.form.clipCountAutoTip}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -2517,7 +2596,7 @@ Transcript:
                             borderRadius: '4px',
                             lineHeight: 1
                           }}>
-                            {entry.duration_pref}
+                            {entry.duration_pref === 'auto' ? 'Auto' : entry.duration_pref}
                           </span>
                         </div>
 
@@ -2536,7 +2615,7 @@ Transcript:
                           <div style={{ display: 'flex', gap: '0.65rem', marginTop: '0.25rem', fontSize: '0.74rem', color: 'var(--text-muted)', flexWrap: 'wrap', alignItems: 'center' }}>
                             <span style={{ color: 'var(--secondary)', fontWeight: 600 }}>{t.form.clipsCountMeta(entry.clip_count)}</span>
                             <span>•</span>
-                            <span>⏱ {entry.duration_pref}</span>
+                            <span>⏱ {entry.duration_pref === 'auto' ? 'Auto' : entry.duration_pref}</span>
                             <span>•</span>
                             <span>🕓 {formatRelativeTime(entry.analyzed_at)}</span>
                             <span>•</span>

@@ -32,7 +32,7 @@ import html
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote, urlsplit
-from typing import List, Optional, Dict, Any, Tuple, Callable
+from typing import List, Optional, Dict, Any, Tuple, Callable, Union
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File
 from fastapi.responses import StreamingResponse, RedirectResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -142,7 +142,7 @@ class VideoAnalysis(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     url: str = Field(..., description="YouTube video URL")
-    duration: str = Field("30s", description="Target clip duration: '15s', '30s', or '60s'")
+    duration: str = Field("30s", description="Target clip duration: '15s', '30s', '60s', or 'auto'")
     api_key: Optional[str] = Field(None, description="Optional custom Gemini API key provided by the user")
     model: Optional[str] = Field("gemini-2.5-flash", description="Preferred Gemini model name")
     custom_prompt: Optional[str] = Field(None, description="Optional custom focus prompt for clips search")
@@ -150,7 +150,7 @@ class AnalyzeRequest(BaseModel):
     range_end: Optional[float] = Field(None, description="Search range end in seconds")
     subtitles: Optional[str] = Field(None, description="Optional manual subtitles text (SRT or TXT)")
     subtitles_filename: Optional[str] = Field(None, description="Optional manual subtitles filename")
-    target_clip_count: Optional[int] = Field(None, description="Optional target number of clips (1-50)")
+    target_clip_count: Optional[Union[int, str]] = Field(None, description="Optional target number of clips or 'auto'")
     proxy: Optional[str] = Field(None, description="Optional custom proxy URL")
 
 class HeatmapPoint(BaseModel):
@@ -1877,8 +1877,23 @@ async def analyze_video(request: AnalyzeRequest):
             return
 
         is_long_video = duration > 3600
-        if request.target_clip_count:
-            N = request.target_clip_count
+        is_auto_clip_count = False
+        target_count_num = None
+        if request.target_clip_count is not None:
+            if isinstance(request.target_clip_count, str) and request.target_clip_count.lower() == 'auto':
+                is_auto_clip_count = True
+            else:
+                try:
+                    target_count_num = int(request.target_clip_count)
+                    if target_count_num <= 0:
+                        is_auto_clip_count = True
+                except (ValueError, TypeError):
+                    is_auto_clip_count = True
+        else:
+            is_auto_clip_count = True
+
+        if not is_auto_clip_count and target_count_num:
+            N = target_count_num
             if N <= 5:
                 min_clips = max(1, N - 1)
                 max_clips = N + 2
@@ -1886,11 +1901,21 @@ async def analyze_video(request: AnalyzeRequest):
                 min_clips = max(1, N - 2)
                 max_clips = N + 3
             else:
-                min_clips = N - 5
+                min_clips = max(1, N - 5)
                 max_clips = N + 5
             clip_range = f"{min_clips}-{max_clips}"
+            clip_count_instruction = (
+                f"TARGET CLIP COUNT: Approximately {clip_range} clips. "
+                f"Identify the highest-quality, most viral segments within this range."
+            )
         else:
-            clip_range = "15-60" if is_long_video else "10-30"
+            clip_range = "up to around 200 (AI-determined based on interesting topics)"
+            clip_count_instruction = (
+                "DYNAMIC AUTO CLIP COUNT & TOPIC CURATION RULES:\n"
+                "- You (the AI editor) decide the total number of clips to extract based on how many genuinely interesting, high-value, and viral topics exist in this video.\n"
+                "- Upper Constraint Ceiling: Extract up to around 200 clips maximum (no need to reach exactly 200; extract as many as the video's content genuinely justifies, up to approximately 200 clips).\n"
+                "- High-Interest Standalone Topics Required: Every single clip MUST focus on an interesting, distinct, and compelling topic, idea, debate, story, funny moment, or revelation. Do NOT produce repetitive, weak, or trivial filler clips just to inflate the count. Only create clips for moments that would actually captivate an audience."
+            )
 
         # ── Step 4: Build prompt & Detect Language ─────────────────────────────
         detected_lang = detect_transcript_language(enriched_transcript, title)
@@ -1903,13 +1928,27 @@ async def analyze_video(request: AnalyzeRequest):
             eng = f"|{line['engagement']:.2f}" if heatmap and line['engagement'] > 0 else ""
             transcript_dump.append(f"{line['start']:.1f}|{line['end']:.1f}{eng} {line['text']}")
 
-        MAX_LINES = 2500 if is_long_video else 800
+        MAX_LINES = 8000 if is_long_video else 4000
         if len(transcript_dump) > MAX_LINES:
             logger.warning(f"Transcript {len(transcript_dump)} lines — truncating to {MAX_LINES}.")
             transcript_dump = transcript_dump[:MAX_LINES]
 
         transcript_text = "\n".join(transcript_dump)
-        dur_range   = {"15s": "10-20s", "30s": "20-40s", "60s": "45-75s"}.get(request.duration, "20-40s")
+
+        is_auto_duration = str(request.duration).lower() == "auto"
+        if is_auto_duration:
+            dur_range = "Auto dynamic length (~15s to ~90s max)"
+            duration_instruction = (
+                "DYNAMIC AUTO CLIP DURATION GUIDELINES:\n"
+                "- Intelligently adjust the duration of each individual clip based on its natural narrative flow and context so that NO CONTEXT, setup, premise, punchline, or explanation is cut off mid-thought.\n"
+                "- Generate variant clip durations naturally: ranging flexibly from approximately 15 seconds up to around 90 seconds (1 minute 30 seconds maximum). Do NOT force all clips to be the same length (some can be ~20-30s, some ~40-60s, and deeper discussions or complex stories can be up to around 90s).\n"
+                "- Strict maximum constraint: No clip should ever exceed 90 seconds (1 minute 30 seconds). Always ensure clips begin and end cleanly at complete sentence boundaries without mid-word or mid-sentence cuts."
+            )
+        else:
+            dur_target = {"15s": "10-20s", "30s": "20-40s", "60s": "45-75s"}.get(request.duration, "20-40s")
+            dur_range = dur_target
+            duration_instruction = f"Target clip length: {dur_target}. Keep clips tightly focused around this duration."
+
         heatmap_note = (
             "Columns: start|end|audience_interest(0-1). Prioritise high-interest peaks."
             if heatmap else
@@ -1952,6 +1991,8 @@ async def analyze_video(request: AnalyzeRequest):
             f"   - `hashtag_suggestion`: Relevant hashtags in the original video language ({lang_name}).\n"
             f"   - `key_quotes`: MUST be verbatim spoken quotes directly from the transcript in the original language.\n"
             f"================================================================================\n\n"
+            f"{duration_instruction}\n\n"
+            f"{clip_count_instruction}\n\n"
             f"{focus_instruction}"
             f"CRITICAL TITLE & ATTRIBUTION RULES (NO FIRST-PERSON 'I' OR 'ME'):\n"
             f"1. NEVER write clip titles or title suggestions using first-person pronouns ('I', 'me', 'my', 'mine', 'myself', or equivalents in other languages such as 'saya', 'aku', 'gue')!\n"
@@ -1963,7 +2004,7 @@ async def analyze_video(request: AnalyzeRequest):
             f"4. Keep titles snappy, viral, engaging, and under 8 words.\n\n"
             f"Transcript (start|end[|interest] text):\n---\n{transcript_text}\n---\n\n"
             f"Rules: use exact seconds from transcript; clips must start/end at sentence boundaries; do not overlap.\n"
-            f"Return {clip_range} clips sorted by virality_score desc."
+            f"Return clips sorted by virality_score desc."
         )
 
         requested_model = (request.model or 'gemini-2.5-flash').strip()
@@ -2045,6 +2086,7 @@ async def analyze_video(request: AnalyzeRequest):
                         response_mime_type="application/json",
                         response_schema=VideoAnalysis,
                         temperature=0.2,
+                        max_output_tokens=65536 if any(v in model_name for v in ['2.0', '2.5', '3.']) else 8192,
                     )
                 ))
                 
@@ -2072,7 +2114,8 @@ async def analyze_video(request: AnalyzeRequest):
                             step_prog = min(85, 72 + int((elapsed - 20) * 1.3))
                         elif elapsed < 42:
                             stage = "Virality Scoring & Selection"
-                            detail = f"Calculating virality coefficients (1-100) and selecting the top {clip_range} highest potential clips..."
+                            display_clip_count = "all high-value" if is_auto_clip_count else f"the top {clip_range}"
+                            detail = f"Calculating virality coefficients (1-100) and selecting {display_clip_count} highest potential clips..."
                             step_prog = min(92, 85 + int((elapsed - 30) * 0.7))
                         else:
                             stage = "Social Media Metadata Synthesis"
@@ -2238,8 +2281,16 @@ async def analyze_video(request: AnalyzeRequest):
             
             fallback_clips_list = []
             for i, st in enumerate(candidate_starts):
-                target_len = 30.0 if request.duration == "30s" else 15.0 if request.duration == "15s" else 60.0
-                et = min(duration, st + target_len)
+                if request.duration == "15s":
+                    target_len = 15.0
+                elif request.duration == "60s":
+                    target_len = 60.0
+                elif request.duration == "auto":
+                    auto_lens = [25.0, 45.0, 75.0, 35.0, 60.0, 85.0, 20.0, 50.0]
+                    target_len = auto_lens[i % len(auto_lens)]
+                else:
+                    target_len = 30.0
+                et = min(duration, st + min(90.0, target_len))
                 seg_lines = [l['text'] for l in enriched_transcript if max(l['start'], st) < min(l['end'], et)]
                 seg_text = " ".join(seg_lines).strip()
                 preview = seg_text[:60] + "..." if len(seg_text) > 60 else seg_text or f"Viral Highlight #{i+1}"
@@ -2309,6 +2360,16 @@ async def analyze_video(request: AnalyzeRequest):
             if hook is None or not (start <= hook <= end):
                 hook = start
             
+            # Enforce max 90 seconds (1m 30s) duration constraint for auto duration mode
+            if is_auto_duration and (end - start) > 90.0:
+                max_end = start + 90.0
+                best_end = max_end
+                for l in enriched_transcript:
+                    l_end = l.get('end', 0.0)
+                    if start + 15.0 <= l_end <= max_end:
+                        best_end = l_end
+                end = best_end
+            
             clip_lines = [
                 line.get("text", "")
                 for line in enriched_transcript
@@ -2331,6 +2392,10 @@ async def analyze_video(request: AnalyzeRequest):
                 caption_suggestion=caption_sug,
                 hashtag_suggestion=hashtag_sug
             ))
+
+        # Enforce max constraint of ~200 clips for auto clip count
+        if is_auto_clip_count and len(final_clips) > 200:
+            final_clips = final_clips[:200]
 
         response_heatmap = [
             HeatmapPoint(
