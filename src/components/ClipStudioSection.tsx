@@ -340,7 +340,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   // Calculate horizontal crop percentage (0 = leftmost edge, 50 = center, 100 = rightmost edge)
   const previewCropPercent = useMemo(() => {
-    if (!enableFaceTracking || aspectRatio !== '9:16' || streamerPreset !== 'none') {
+    if (!enableFaceTracking || streamerPreset !== 'none') {
       return 50;
     }
     if (facecamPosition === 'left') return 28;
@@ -351,9 +351,19 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       if (0.46 <= safeCx && safeCx <= 0.54) {
         safeCx = 0.50;
       }
-      safeCx = Math.max(0.22, Math.min(0.78, safeCx));
-      const cropRatio = Math.max(0.0, Math.min(1.0, (safeCx - 0.158) / 0.684));
-      return Math.round(cropRatio * 100);
+      safeCx = Math.max(0.15, Math.min(0.85, safeCx));
+      if (aspectRatio === '9:16') {
+        const cropRatio = Math.max(0.0, Math.min(1.0, (safeCx - 0.158) / 0.684));
+        return Math.round(cropRatio * 100);
+      } else if (aspectRatio === '1:1') {
+        const cropRatio = Math.max(0.0, Math.min(1.0, (safeCx - 0.281) / 0.438));
+        return Math.round(cropRatio * 100);
+      } else if (aspectRatio === '4:3') {
+        const cropRatio = Math.max(0.0, Math.min(1.0, (safeCx - 0.375) / 0.25));
+        return Math.round(cropRatio * 100);
+      } else {
+        return Math.round(safeCx * 100);
+      }
     }
     return 50;
   }, [enableFaceTracking, aspectRatio, streamerPreset, facecamPosition, faceBox]);
@@ -1128,12 +1138,16 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     setIsCustomTitleY(false);
   };
 
-  const handleResetPositions = () => {
+  const handleResetTitlePosition = () => {
     const defaults = getDefaultPositions(aspectRatio, titleLineCount, streamerPreset);
     setTitleYPercent(defaults.titleY);
+    setIsCustomTitleY(false);
+  };
+
+  const handleResetSubtitlePosition = () => {
+    const defaults = getDefaultPositions(aspectRatio, titleLineCount, streamerPreset);
     setSubtitleYPercent(defaults.subtitleY);
     setSubtitleCenterYPercent(defaults.subCenterY);
-    setIsCustomTitleY(false);
   };
 
   const handleLaunch = () => {
@@ -1319,290 +1333,58 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             )}
 
             {/* AI Active Speaker & Object Centering */}
-            {aspectRatio === '9:16' && (
-              <div style={{ marginTop: '0.85rem' }}>
-                <div className="studio-checkbox-row">
-                  <input
-                    type="checkbox"
-                    id="faceTrackingSec"
-                    checked={enableFaceTracking}
-                    onChange={e => setEnableFaceTracking(e.target.checked)}
-                  />
-                  <label htmlFor="faceTrackingSec">
-                    <strong>{t.studio.faceTracking}</strong> {t.studio.faceTrackingDesc}
-                  </label>
-                </div>
-
-                {enableFaceTracking && streamerPreset === 'none' && (
-                  <div className="horizontal-framing-selector" style={{ marginTop: '0.65rem', paddingLeft: '1.6rem' }}>
-                    <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
-                      <span>{t.studio.horizontalFramingLabel || 'Horizontal Framing / Focal Point:'}</span>
-                      {faceBox?.found && facecamPosition === 'auto' && (
-                        <span style={{
-                          fontSize: '0.7rem',
-                          padding: '0.15rem 0.5rem',
-                          borderRadius: '4px',
-                          background: faceBox.type === 'salient_object' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(34, 197, 94, 0.15)',
-                          color: faceBox.type === 'salient_object' ? '#38bdf8' : '#4ade80',
-                          border: `1px solid ${faceBox.type === 'salient_object' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(34, 197, 94, 0.3)'}`,
-                          fontWeight: 600
-                        }}>
-                          {faceBox.type === 'salient_object' ? '🎯 AI Object Focus' : '👤 AI Face Focus'}
-                        </span>
-                      )}
-                    </div>
-                    <div className="pill-group framing-pills" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
-                      {[
-                        { id: 'auto', label: t.studio.framingAuto || '🤖 AI Auto' },
-                        { id: 'center', label: t.studio.framingCenter || '🎯 Center (50%)' },
-                        { id: 'left', label: t.studio.framingLeft || '⬅️ Left Focus (35%)' },
-                        { id: 'right', label: t.studio.framingRight || '➡️ Right Focus (65%)' },
-                      ].map(opt => (
-                        <button
-                          key={opt.id}
-                          type="button"
-                          className={`pill-btn ${facecamPosition === opt.id ? 'active' : ''}`}
-                          style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem' }}
-                          onClick={() => setFacecamPosition(opt.id as FacecamPosition)}
-                        >
-                          {opt.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          {/* 2. Manual Up/Down Position Adjustments for All Formats */}
-          <div className="studio-card-group position-sliders-card">
-            <div className="group-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span className="group-title">{t.studio.manualPositionTitle}</span>
-                <span className="group-badge accent-badge">{t.studio.verticalBadge}</span>
-              </div>
-              <button
-                type="button"
-                className="reset-pos-btn"
-                title={t.studio.resetPositionTooltip}
-                onClick={handleResetPositions}
-                style={{
-                  background: 'rgba(255, 255, 255, 0.08)',
-                  border: '1px solid rgba(255, 255, 255, 0.16)',
-                  color: 'var(--text-secondary)',
-                  fontSize: '0.74rem',
-                  fontWeight: 600,
-                  padding: '0.22rem 0.65rem',
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.35rem',
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                {t.studio.resetPosition}
-              </button>
-            </div>
-            <p className="slider-hint-text">
-              {t.studio.positionHint}
-            </p>
-
-            <div className="slider-control-row">
-              <div className="slider-meta-header">
-                <span className="slider-label">{t.studio.titleYLabel}</span>
-                <div className="slider-input-badge-wrap">
-                  <input
-                    type="number"
-                    className="slider-number-input"
-                    min={aspectRatio === '9:16' || streamerPreset === 'split_top_cam' ? 2 : 4}
-                    max={maxTitleY}
-                    step="0.5"
-                    value={safeTitleY}
-                    onChange={e => {
-                      const val = Number(e.target.value);
-                      if (!isNaN(val)) {
-                        setTitleYPercent(val);
-                        setIsCustomTitleY(true);
-                      }
-                    }}
-                  />
-                  <span className="slider-input-unit">%</span>
-                </div>
-              </div>
-              <div className="slider-input-wrapper">
+            <div style={{ marginTop: '0.85rem' }}>
+              <div className="studio-checkbox-row">
                 <input
-                  type="range"
-                  min={aspectRatio === '9:16' || streamerPreset === 'split_top_cam' ? 2 : 4}
-                  max={maxTitleY}
-                  step="0.5"
-                  value={safeTitleY}
-                  onChange={e => {
-                    setTitleYPercent(Number(e.target.value));
-                    setIsCustomTitleY(true);
-                  }}
-                  className="custom-range-slider"
+                  type="checkbox"
+                  id="faceTrackingSec"
+                  checked={enableFaceTracking}
+                  onChange={e => setEnableFaceTracking(e.target.checked)}
                 />
-                <div className="slider-quick-buttons">
-                  {streamerPreset === 'split_top_cam' ? (
-                    <>
-                      <button type="button" onClick={() => { setTitleYPercent(3.5); setIsCustomTitleY(true); }}>3.5% (Top)</button>
-                      <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 3.5 : 4.5); setIsCustomTitleY(true); }}>
-                        {t.studio.quickDefault(titleLineCount >= 3 ? '3.5%' : '4.5%')}
-                      </button>
-                      <button type="button" onClick={() => { setTitleYPercent(8.0); setIsCustomTitleY(true); }}>8.0% (Low)</button>
-                    </>
-                  ) : aspectRatio === '9:16' ? (
-                    <>
-                      <button type="button" onClick={() => { setTitleYPercent(6); setIsCustomTitleY(true); }}>{t.studio.quickHigh(6)}</button>
-                      <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 12.0 : 17.0); setIsCustomTitleY(true); }}>
-                        {t.studio.quickDefault(titleLineCount >= 3 ? '12%' : '17%')}
-                      </button>
-                      <button type="button" onClick={() => { setTitleYPercent(20); setIsCustomTitleY(true); }}>{t.studio.quickLower(20)}</button>
-                    </>
-                  ) : aspectRatio === '1:1' ? (
-                    <>
-                      <button type="button" onClick={() => { setTitleYPercent(7); setIsCustomTitleY(true); }}>{t.studio.quickHigh(7)}</button>
-                      <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 11.5 : 17.0); setIsCustomTitleY(true); }}>
-                        {t.studio.quickSnugDefault(titleLineCount >= 3 ? '11.5%' : '17%')}
-                      </button>
-                    </>
-                  ) : aspectRatio === '4:3' ? (
-                    <>
-                      <button type="button" onClick={() => { setTitleYPercent(12); setIsCustomTitleY(true); }}>{t.studio.quickHigh(12)}</button>
-                      <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 17.3 : 23.6); setIsCustomTitleY(true); }}>
-                        {t.studio.quickSnugDefault(titleLineCount >= 3 ? '17.3%' : '23.6%')}
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" onClick={() => { setTitleYPercent(16); setIsCustomTitleY(true); }}>{t.studio.quickHigh(16)}</button>
-                      <button type="button" onClick={() => { setTitleYPercent(titleLineCount >= 3 ? 22.6 : 28.8); setIsCustomTitleY(true); }}>
-                        {t.studio.quickSnugDefault(titleLineCount >= 3 ? '22.6%' : '28.8%')}
-                      </button>
-                    </>
-                  )}
-                </div>
+                <label htmlFor="faceTrackingSec">
+                  <strong>{t.studio.faceTracking}</strong> {t.studio.faceTrackingDesc}
+                </label>
               </div>
-            </div>
 
-            {/* Subtitle Placement Mode Toggle */}
-            <div className="studio-sub-toggle" style={{ marginTop: '0.95rem', marginBottom: '0.45rem' }}>
-              <span className="sub-toggle-label" style={{ fontWeight: 700 }}>{t.studio.subPlacement}</span>
-              <div className="toggle-pill-group">
-                <button
-                  type="button"
-                  className={`pill-btn ${subtitlePositionMode === 'bottom' ? 'active' : ''}`}
-                  onClick={() => setSubtitlePositionMode('bottom')}
-                >
-                  {t.studio.subBottom}
-                </button>
-                <button
-                  type="button"
-                  className={`pill-btn ${subtitlePositionMode === 'center' ? 'active' : ''}`}
-                  onClick={() => setSubtitlePositionMode('center')}
-                >
-                  {t.studio.subCenter}
-                </button>
-              </div>
-            </div>
-
-            {/* Subtitle Slider: Bottom Mode vs Center Mode */}
-            {subtitlePositionMode === 'bottom' ? (
-              <div className="slider-control-row" style={{ marginTop: '0.65rem' }}>
-                <div className="slider-meta-header">
-                  <span className="slider-label">{t.studio.subYBottomLabel}</span>
-                  <div className="slider-input-badge-wrap">
-                    <input
-                      type="number"
-                      className="slider-number-input"
-                      min={aspectRatio === '9:16' ? 5 : 6}
-                      max={maxSubY}
-                      step="0.5"
-                      value={safeSubtitleY}
-                      onChange={e => {
-                        const val = Number(e.target.value);
-                        if (!isNaN(val)) setSubtitleYPercent(val);
-                      }}
-                    />
-                    <span className="slider-input-unit">%</span>
-                  </div>
-                </div>
-                <div className="slider-input-wrapper">
-                  <input
-                    type="range"
-                    min={aspectRatio === '9:16' ? 5 : 6}
-                    max={maxSubY}
-                    step="0.5"
-                    value={safeSubtitleY}
-                    onChange={e => setSubtitleYPercent(Number(e.target.value))}
-                    className="custom-range-slider"
-                  />
-                  <div className="slider-quick-buttons">
-                    {aspectRatio === '9:16' ? (
-                      <>
-                        <button type="button" onClick={() => setSubtitleYPercent(12)}>{t.studio.quickLow(12)}</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(21)}>{t.studio.quickDefault('21%')}</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(28)}>{t.studio.quickMid(28)}</button>
-                      </>
-                    ) : aspectRatio === '1:1' ? (
-                      <>
-                        <button type="button" onClick={() => setSubtitleYPercent(14)}>{t.studio.quickLow(14)}</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(20)}>{t.studio.quickSnugDefault('20%')}</button>
-                      </>
-                    ) : aspectRatio === '4:3' ? (
-                      <>
-                        <button type="button" onClick={() => setSubtitleYPercent(18)}>{t.studio.quickLow(18)}</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(25)}>{t.studio.quickSnugDefault('25%')}</button>
-                      </>
-                    ) : (
-                      <>
-                        <button type="button" onClick={() => setSubtitleYPercent(22)}>{t.studio.quickLow(22)}</button>
-                        <button type="button" onClick={() => setSubtitleYPercent(30)}>{t.studio.quickSnugDefault('30%')}</button>
-                      </>
+              {enableFaceTracking && streamerPreset === 'none' && (
+                <div className="horizontal-framing-selector" style={{ marginTop: '0.65rem', paddingLeft: '1.6rem' }}>
+                  <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                    <span>{t.studio.horizontalFramingLabel || 'Horizontal Framing / Focal Point:'}</span>
+                    {faceBox?.found && facecamPosition === 'auto' && (
+                      <span style={{
+                        fontSize: '0.7rem',
+                        padding: '0.15rem 0.5rem',
+                        borderRadius: '4px',
+                        background: faceBox.type === 'salient_object' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                        color: faceBox.type === 'salient_object' ? '#38bdf8' : '#4ade80',
+                        border: `1px solid ${faceBox.type === 'salient_object' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(34, 197, 94, 0.3)'}`,
+                        fontWeight: 600
+                      }}>
+                        {faceBox.type === 'salient_object' ? '🎯 AI Object Focus' : '👤 AI Face Focus'}
+                      </span>
                     )}
                   </div>
-                </div>
-              </div>
-            ) : (
-              <div className="slider-control-row" style={{ marginTop: '0.65rem' }}>
-                <div className="slider-meta-header">
-                  <span className="slider-label">{t.studio.subYCenterLabel}</span>
-                  <div className="slider-input-badge-wrap">
-                    <input
-                      type="number"
-                      className="slider-number-input"
-                      min={minCenterY}
-                      max={maxCenterY}
-                      step="1"
-                      value={safeSubCenterY}
-                      onChange={e => {
-                        const val = Number(e.target.value);
-                        if (!isNaN(val)) setSubtitleCenterYPercent(val);
-                      }}
-                    />
-                    <span className="slider-input-unit">%</span>
+                  <div className="pill-group framing-pills" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                    {[
+                      { id: 'auto', label: t.studio.framingAuto || '🤖 AI Auto' },
+                      { id: 'center', label: t.studio.framingCenter || '🎯 Center (50%)' },
+                      { id: 'left', label: t.studio.framingLeft || '⬅️ Left Focus (35%)' },
+                      { id: 'right', label: t.studio.framingRight || '➡️ Right Focus (65%)' },
+                    ].map(opt => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        className={`pill-btn ${facecamPosition === opt.id ? 'active' : ''}`}
+                        style={{ fontSize: '0.75rem', padding: '0.3rem 0.65rem' }}
+                        onClick={() => setFacecamPosition(opt.id as FacecamPosition)}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
                   </div>
                 </div>
-                <div className="slider-input-wrapper">
-                  <input
-                    type="range"
-                    min={minCenterY}
-                    max={maxCenterY}
-                    step="0.5"
-                    value={safeSubCenterY}
-                    onChange={e => setSubtitleCenterYPercent(Number(e.target.value))}
-                    className="custom-range-slider"
-                  />
-                  <div className="slider-quick-buttons">
-                    <button type="button" onClick={() => setSubtitleCenterYPercent(42)}>{t.studio.quickUpper(42)}</button>
-                    <button type="button" onClick={() => setSubtitleCenterYPercent(50)}>{t.studio.quickDeadCenter(50)}</button>
-                    <button type="button" onClick={() => setSubtitleCenterYPercent(58)}>{t.studio.quickLower(58)}</button>
-                  </div>
-                </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
 
           {/* 3. Streamer Facecam Presets */}
@@ -1863,6 +1645,73 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     </button>
                   </div>
                 </div>
+
+                {/* Title Vertical Position Controls */}
+                <div className="studio-sub-toggle" style={{ marginTop: '0.85rem', flexDirection: 'column', alignItems: 'stretch' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                    <span className="sub-toggle-label" style={{ margin: 0 }}>
+                      {t.studio.titleYLabel || "🏷️ Title Vertical Position:"}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span className="badge" style={{ fontSize: '0.74rem', padding: '0.15rem 0.45rem' }}>
+                        {t.studio.titleYVal(safeTitleY, titleLineCount >= 3)}
+                      </span>
+                      <button
+                        type="button"
+                        className="reset-btn"
+                        onClick={handleResetTitlePosition}
+                        title={t.studio.resetPositionTooltip}
+                        style={{ fontSize: '0.72rem', padding: '0.15rem 0.4rem', border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '4px', cursor: 'pointer' }}
+                      >
+                        {t.studio.resetPosition}
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min="3"
+                    max={maxTitleY}
+                    step="1"
+                    value={safeTitleY}
+                    onChange={(e) => {
+                      setTitleYPercent(Number(e.target.value));
+                      setIsCustomTitleY(true);
+                    }}
+                    className="position-slider"
+                  />
+                  <div className="quick-presets-row" style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className={`pill-btn ${safeTitleY === 8 ? 'active' : ''}`}
+                      onClick={() => {
+                        setTitleYPercent(8);
+                        setIsCustomTitleY(true);
+                      }}
+                      style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                    >
+                      {t.studio.quickHigh(8)}
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill-btn ${safeTitleY === getDefaultPositions(aspectRatio, titleLineCount, streamerPreset).titleY ? 'active' : ''}`}
+                      onClick={handleResetTitlePosition}
+                      style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                    >
+                      {t.studio.quickDefault(`${getDefaultPositions(aspectRatio, titleLineCount, streamerPreset).titleY}%`)}
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill-btn ${safeTitleY === Math.min(22, maxTitleY) ? 'active' : ''}`}
+                      onClick={() => {
+                        setTitleYPercent(Math.min(22, maxTitleY));
+                        setIsCustomTitleY(true);
+                      }}
+                      style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                    >
+                      {t.studio.quickLower(Math.min(22, maxTitleY))}
+                    </button>
+                  </div>
+                </div>
               </>
             )}
           </div>
@@ -2101,6 +1950,150 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     </button>
                   </div>
                 </div>
+
+                {/* Subtitle Placement & Vertical Position */}
+                <div className="studio-sub-toggle" style={{ marginTop: '0.85rem' }}>
+                  <span className="sub-toggle-label">{t.studio.subPlacement}</span>
+                  <div className="toggle-pill-group">
+                    <button
+                      type="button"
+                      className={`pill-btn ${subtitlePositionMode === 'bottom' ? 'active' : ''}`}
+                      onClick={() => setSubtitlePositionMode('bottom')}
+                    >
+                      {t.studio.subBottom}
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill-btn ${subtitlePositionMode === 'center' ? 'active' : ''}`}
+                      onClick={() => setSubtitlePositionMode('center')}
+                    >
+                      {t.studio.subCenter}
+                    </button>
+                  </div>
+                </div>
+
+                {subtitlePositionMode === 'bottom' ? (
+                  <div className="studio-sub-toggle" style={{ marginTop: '0.75rem', flexDirection: 'column', alignItems: 'stretch' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                      <span className="sub-toggle-label" style={{ margin: 0 }}>
+                        {t.studio.subYBottomLabel || "💬 Subtitle Bottom Position:"}
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span className="badge" style={{ fontSize: '0.74rem', padding: '0.15rem 0.45rem' }}>
+                          {t.studio.subYBottomVal(safeSubtitleY)}
+                        </span>
+                        <button
+                          type="button"
+                          className="reset-btn"
+                          onClick={handleResetSubtitlePosition}
+                          title={t.studio.resetPositionTooltip}
+                          style={{ fontSize: '0.72rem', padding: '0.15rem 0.4rem', border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '4px', cursor: 'pointer' }}
+                        >
+                          {t.studio.resetPosition}
+                        </button>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min="5"
+                      max={maxSubY}
+                      step="1"
+                      value={safeSubtitleY}
+                      onChange={(e) => setSubtitleYPercent(Number(e.target.value))}
+                      className="position-slider"
+                    />
+                    <div className="quick-presets-row" style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className={`pill-btn ${safeSubtitleY === 12 ? 'active' : ''}`}
+                        onClick={() => setSubtitleYPercent(12)}
+                        style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                      >
+                        {t.studio.quickLow(12)}
+                      </button>
+                      <button
+                        type="button"
+                        className={`pill-btn ${safeSubtitleY === getDefaultPositions(aspectRatio, titleLineCount, streamerPreset).subtitleY ? 'active' : ''}`}
+                        onClick={handleResetSubtitlePosition}
+                        style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                      >
+                        {t.studio.quickSnugDefault(`${getDefaultPositions(aspectRatio, titleLineCount, streamerPreset).subtitleY}%`)}
+                      </button>
+                      <button
+                        type="button"
+                        className={`pill-btn ${safeSubtitleY === Math.min(32, maxSubY) ? 'active' : ''}`}
+                        onClick={() => setSubtitleYPercent(Math.min(32, maxSubY))}
+                        style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                      >
+                        {t.studio.quickMid(Math.min(32, maxSubY))}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="studio-sub-toggle" style={{ marginTop: '0.75rem', flexDirection: 'column', alignItems: 'stretch' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                      <span className="sub-toggle-label" style={{ margin: 0 }}>
+                        {t.studio.subYCenterLabel || "🎯 Subtitle Center Vertical Position:"}
+                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                        <span className="badge" style={{ fontSize: '0.74rem', padding: '0.15rem 0.45rem' }}>
+                          {t.studio.subYCenterVal(
+                            safeSubCenterY,
+                            safeSubCenterY === 50
+                              ? t.studio.posDeadCenter
+                              : safeSubCenterY < 50
+                              ? t.studio.posUpper
+                              : t.studio.posLower
+                          )}
+                        </span>
+                        <button
+                          type="button"
+                          className="reset-btn"
+                          onClick={handleResetSubtitlePosition}
+                          title={t.studio.resetPositionTooltip}
+                          style={{ fontSize: '0.72rem', padding: '0.15rem 0.4rem', border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '4px', cursor: 'pointer' }}
+                        >
+                          {t.studio.resetPosition}
+                        </button>
+                      </div>
+                    </div>
+                    <input
+                      type="range"
+                      min={minCenterY}
+                      max={maxCenterY}
+                      step="1"
+                      value={safeSubCenterY}
+                      onChange={(e) => setSubtitleCenterYPercent(Number(e.target.value))}
+                      className="position-slider"
+                    />
+                    <div className="quick-presets-row" style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        className={`pill-btn ${safeSubCenterY === Math.max(minCenterY, 40) ? 'active' : ''}`}
+                        onClick={() => setSubtitleCenterYPercent(Math.max(minCenterY, 40))}
+                        style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                      >
+                        {t.studio.quickUpper(Math.max(minCenterY, 40))}
+                      </button>
+                      <button
+                        type="button"
+                        className={`pill-btn ${safeSubCenterY === 50 ? 'active' : ''}`}
+                        onClick={() => setSubtitleCenterYPercent(50)}
+                        style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                      >
+                        {t.studio.quickDeadCenter(50)}
+                      </button>
+                      <button
+                        type="button"
+                        className={`pill-btn ${safeSubCenterY === Math.min(maxCenterY, 60) ? 'active' : ''}`}
+                        onClick={() => setSubtitleCenterYPercent(Math.min(maxCenterY, 60))}
+                        style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                      >
+                        {t.studio.quickLower(Math.min(maxCenterY, 60))}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>

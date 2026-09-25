@@ -2063,8 +2063,12 @@ def build_ffmpeg_filtergraph(
         current_v = "[layout_base]"
 
     elif aspect_ratio == "1:1":
-        # 1:1 Square (1080x1080) - Center crop to 1:1 square then scale to 1080x1080
-        crop_11 = "crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(iw,ih))/2',scale=1080:1080"
+        # 1:1 Square (1080x1080) - Smart crop with speaker/object centering then scale to 1080x1080
+        safe_cx = float(face_cx)
+        if 0.46 <= safe_cx <= 0.54:
+            safe_cx = 0.50
+        safe_cx = max(0.15, min(0.85, safe_cx))
+        crop_11 = f"crop='min(iw,ih)':'min(iw,ih)':'max(0,min(iw-ih,iw*{safe_cx:.3f}-ih/2))':'(ih-min(iw,ih))/2',scale=1080:1080"
         if background_style == "blurred":
             filters.append(
                 f"[0:v]split=2[bg_raw][fg_raw];"
@@ -2079,8 +2083,12 @@ def build_ffmpeg_filtergraph(
         current_v = "[layout_base]"
 
     elif aspect_ratio == "4:3":
-        # 4:3 Standard (1080x810) - Center crop 16:9/source to 4:3 then scale to 1080x810
-        crop_43 = "crop='min(iw,ih*4/3)':'min(ih,iw*3/4)':'(iw-min(iw,ih*4/3))/2':'(ih-min(ih,iw*3/4))/2',scale=1080:810"
+        # 4:3 Standard (1080x810) - Smart crop with speaker/object centering then scale to 1080x810
+        safe_cx = float(face_cx)
+        if 0.46 <= safe_cx <= 0.54:
+            safe_cx = 0.50
+        safe_cx = max(0.15, min(0.85, safe_cx))
+        crop_43 = f"crop='min(iw,ih*4/3)':'min(ih,iw*3/4)':'max(0,min(iw-ih*4/3,iw*{safe_cx:.3f}-(ih*4/3)/2))':'(ih-min(ih,iw*3/4))/2',scale=1080:810"
         if background_style == "blurred":
             filters.append(
                 f"[0:v]split=2[bg_raw][fg_raw];"
@@ -2095,8 +2103,12 @@ def build_ffmpeg_filtergraph(
         current_v = "[layout_base]"
 
     else:  # 16:9 Letterbox
-        # 16:9 Letterbox (1080x608)
-        crop_169 = "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)':'(iw-min(iw,ih*16/9))/2':'(ih-min(ih,iw*9/16))/2',scale=1080:608"
+        # 16:9 Letterbox (1080x608) - Smart crop with speaker/object centering for ultrawide sources
+        safe_cx = float(face_cx)
+        if 0.46 <= safe_cx <= 0.54:
+            safe_cx = 0.50
+        safe_cx = max(0.15, min(0.85, safe_cx))
+        crop_169 = f"crop='min(iw,ih*16/9)':'min(ih,iw*9/16)':'max(0,min(iw-ih*16/9,iw*{safe_cx:.3f}-(ih*16/9)/2))':'(ih-min(ih,iw*9/16))/2',scale=1080:608"
         if background_style == "blurred":
             filters.append(
                 f"[0:v]split=2[bg_raw][fg_raw];"
