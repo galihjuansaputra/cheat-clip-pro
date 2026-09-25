@@ -1,6 +1,6 @@
 # 🎬 Cheat Clip PRO
 
-> **Turn long YouTube videos into viral TikToks, Shorts, and Reels with animated subtitles, face centering, and music in minutes.**
+> **AI Powered Auto Clipper — Turn long YouTube, Google Drive, and uploaded videos into viral TikToks, Shorts, and Reels with animated subtitles, face centering, and music in minutes.**
 
 ---
 

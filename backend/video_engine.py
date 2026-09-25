@@ -8,6 +8,7 @@ import logging
 import subprocess
 import unicodedata
 import math
+import urllib.parse
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Union
 from PIL import Image, ImageDraw, ImageFont
@@ -36,6 +37,8 @@ TEMP_DIR.mkdir(parents=True, exist_ok=True)
 EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
 FONTS_DIR.mkdir(parents=True, exist_ok=True)
 CASCADES_DIR.mkdir(parents=True, exist_ok=True)
+UPLOADS_DIR = TEMP_DIR / "uploads"
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 def ensure_ffmpeg_in_path():
     """Auto-detect FFmpeg if it was installed via winget, scoop, or local paths but not in PATH."""
@@ -291,6 +294,191 @@ def is_valid_mp4(file_path: Union[str, Path]) -> bool:
     return False
 
 
+def get_video_file_metadata(file_path: Union[str, Path]) -> Dict[str, Any]:
+    """
+    Extracts duration, dimensions, FPS, and stream metadata for a local video file.
+    """
+    p = Path(file_path)
+    if not p.exists():
+        raise FileNotFoundError(f"Video file not found: {p}")
+    
+    title = p.stem
+    duration = 0.0
+    width = 1920
+    height = 1080
+    fps = 30.0
+    has_audio = True
+
+    # Try ffprobe first
+    try:
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-show_entries", "format=duration:stream=width,height,r_frame_rate,codec_type",
+            "-of", "json",
+            str(p)
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if res.returncode == 0 and res.stdout:
+            data = json.loads(res.stdout)
+            format_info = data.get("format", {})
+            if "duration" in format_info:
+                duration = float(format_info["duration"])
+            
+            streams = data.get("streams", [])
+            audio_streams = [s for s in streams if s.get("codec_type") == "audio"]
+            has_audio = len(audio_streams) > 0
+
+            video_streams = [s for s in streams if s.get("codec_type") == "video"]
+            if video_streams:
+                v = video_streams[0]
+                width = int(v.get("width", 1920))
+                height = int(v.get("height", 1080))
+                r_fps = str(v.get("r_frame_rate", "30/1"))
+                if "/" in r_fps:
+                    num, den = r_fps.split("/")
+                    fps = float(num) / max(1.0, float(den))
+                else:
+                    fps = float(r_fps)
+    except Exception as e:
+        logger.warning(f"ffprobe metadata extraction failed for {p}: {e}")
+
+    # Fallback to OpenCV if duration or dimensions not found
+    if duration <= 0 or width <= 0 or height <= 0:
+        try:
+            import cv2
+            cap = cv2.VideoCapture(str(p))
+            if cap.isOpened():
+                frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+                cap_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+                if cap_fps > 0:
+                    fps = cap_fps
+                    duration = frame_count / cap_fps
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or width)
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or height)
+                cap.release()
+        except Exception as e:
+            logger.warning(f"OpenCV metadata fallback failed: {e}")
+
+    return {
+        "title": title,
+        "duration": round(duration, 2),
+        "width": width,
+        "height": height,
+        "fps": round(fps, 2),
+        "has_audio": has_audio,
+        "file_path": str(p),
+        "size_bytes": p.stat().st_size
+    }
+
+
+def compute_audio_energy_heatmap(file_path: Union[str, Path], duration: float, num_points: int = 100) -> List[Dict[str, float]]:
+    """
+    Analyzes audio RMS energy / amplitude across the video timeline to generate realistic
+    heatmap engagement telemetry matching YouTube's replay heatmap format (0.0 to 1.0).
+    """
+    p = Path(file_path)
+    if duration <= 0:
+        duration = 60.0
+    
+    seg_dur = duration / max(1, num_points)
+    raw_scores = [0.2] * num_points
+    
+    try:
+        temp_wav = TEMP_DIR / f"temp_heat_{p.stem}_{int(time.time())}.wav"
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-i", str(p),
+            "-vn", "-ac", "1", "-ar", "8000",
+            "-f", "wav",
+            str(temp_wav)
+        ]
+        res = subprocess.run(cmd, capture_output=True, timeout=30)
+        if res.returncode == 0 and temp_wav.exists() and temp_wav.stat().st_size > 100:
+            import wave
+            import numpy as np
+            with wave.open(str(temp_wav), "rb") as wf:
+                n_frames = wf.getnframes()
+                audio_bytes = wf.readframes(n_frames)
+                audio_data = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32)
+                
+                if len(audio_data) > 0:
+                    samples_per_seg = int(len(audio_data) / num_points)
+                    if samples_per_seg > 0:
+                        for i in range(num_points):
+                            chunk = audio_data[i * samples_per_seg : (i + 1) * samples_per_seg]
+                            if len(chunk) > 0:
+                                rms = float(np.sqrt(np.mean(chunk**2)))
+                                raw_scores[i] = rms
+            try:
+                temp_wav.unlink()
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"Audio energy heatmap calculation fallback used: {e}")
+
+    min_v = min(raw_scores)
+    max_v = max(raw_scores)
+    diff = max_v - min_v
+    
+    heatmap = []
+    for i in range(num_points):
+        st = round(i * seg_dur, 2)
+        et = round(min(duration, (i + 1) * seg_dur), 2)
+        if diff > 0.0001:
+            val = round(0.1 + 0.9 * ((raw_scores[i] - min_v) / diff), 3)
+        else:
+            val = round(0.3 + 0.4 * (0.5 + 0.5 * math.sin(i * 0.2)), 3)
+        heatmap.append({
+            "start_time": st,
+            "end_time": et,
+            "value": max(0.05, min(1.0, val))
+        })
+    return heatmap
+
+
+def transcribe_local_video_file(file_path: Union[str, Path], progress_callback=None) -> List[Dict[str, Any]]:
+    """
+    Transcribes speech from a local video or audio file using OpenAI Whisper.
+    Returns standard transcript segments formatted as:
+    [{"text": "...", "start": 0.0, "duration": 3.5}, ...]
+    """
+    p = Path(file_path)
+    if not p.exists():
+        raise FileNotFoundError(f"File not found: {p}")
+
+    whisper_model = get_whisper_model()
+    if whisper_model is None:
+        raise RuntimeError(
+            "Whisper speech recognition model could not be loaded on this system. "
+            "Please ensure `openai-whisper` is installed and FFmpeg is in PATH."
+        )
+
+    if progress_callback:
+        progress_callback("Running Whisper AI", f"Extracting dialogue from {p.name} with Whisper...", 30)
+
+    logger.info(f"Transcribing local file with Whisper: {p}")
+    result = whisper_model.transcribe(str(p), word_timestamps=True, fp16=False, verbose=False)
+    
+    segments = result.get("segments", [])
+    transcript_lines = []
+    
+    for seg in segments:
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+        start = round(float(seg.get("start", 0.0)), 2)
+        end = round(float(seg.get("end", start + 2.0)), 2)
+        dur = round(max(0.4, end - start), 2)
+        transcript_lines.append({
+            "text": text,
+            "start": start,
+            "duration": dur
+        })
+        
+    logger.info(f"Whisper transcribed {len(transcript_lines)} dialogue segments from {p.name}")
+    return transcript_lines
+
+
 def download_clip_segment(
     video_url: str,
     start_time: float,
@@ -298,10 +486,9 @@ def download_clip_segment(
     output_filename: str
 ) -> str:
     """
-    Downloads only the requested time slice in high definition (1080p) using yt-dlp.
-    Includes multi-tier fallbacks: 1080p section -> stream slicing with FFmpeg reconnect
-    -> 720p fallback section -> 480p fallback section -> guest mode.
-    Strictly verifies moov atom and container integrity so corrupt/truncated files are never returned.
+    Downloads or slices the requested time slice in high definition (1080p).
+    If video_url is a local file (uploaded video), uses direct FFmpeg slicing.
+    Otherwise downloads using yt-dlp.
     """
     output_path = TEMP_DIR / output_filename
     if output_path.exists():
@@ -310,7 +497,80 @@ def download_clip_segment(
         except Exception:
             pass
 
-    # Sanitize video URL
+    # Check if video_url points to a local file (e.g. uploaded or Google Drive cached video)
+    clean_raw = urllib.parse.unquote(video_url.strip())
+    clean_base = os.path.basename(clean_raw.split("?")[0])
+    local_source = None
+
+    if os.path.exists(clean_raw):
+        local_source = Path(clean_raw)
+    elif os.path.exists(video_url):
+        local_source = Path(video_url)
+    elif clean_raw.startswith("/api/video/"):
+        candidate = UPLOADS_DIR / clean_base
+        if candidate.exists():
+            local_source = candidate
+    elif (UPLOADS_DIR / clean_base).exists():
+        local_source = UPLOADS_DIR / clean_base
+    elif (TEMP_DIR / clean_base).exists():
+        local_source = TEMP_DIR / clean_base
+    elif (EXPORTS_DIR / clean_base).exists():
+        local_source = EXPORTS_DIR / clean_base
+
+    if not local_source:
+        all_local_files: List[Path] = []
+        for d in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
+            if d.exists():
+                all_local_files.extend([
+                    f for f in d.iterdir()
+                    if f.is_file() and f.suffix.lower() in [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"] and "_clip_" not in f.name
+                ])
+
+        clean_lower = clean_base.lower()
+        # 1. Exact case-insensitive or stem match
+        for f in all_local_files:
+            if f.name.lower() == clean_lower or f.stem.lower() == clean_lower or clean_lower in f.name.lower() or f.stem.lower() in clean_lower:
+                local_source = f
+                break
+
+        if not local_source:
+            # 2. Drive ID or Upload ID match
+            match_id = re.search(r'(gdrive_[a-zA-Z0-9_-]+|upload_[a-zA-Z0-9_-]+)', clean_raw)
+            if match_id:
+                raw_id = match_id.group(1).replace("gdrive_", "").replace("upload_", "")
+                for f in all_local_files:
+                    if raw_id in f.name:
+                        local_source = f
+                        break
+
+    if local_source and local_source.exists():
+        logger.info(f"Slicing local/gdrive video: {local_source} [{start_time:.2f}s -> {end_time:.2f}s] to {output_path}")
+        slice_cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", str(start_time),
+            "-to", str(end_time),
+            "-i", str(local_source),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+            "-c:a", "aac", "-b:a", "192k",
+            "-avoid_negative_ts", "make_zero",
+            "-movflags", "+faststart",
+            str(output_path)
+        ]
+        res = subprocess.run(slice_cmd, capture_output=True, text=True, timeout=90)
+        if output_path.exists() and is_valid_mp4(output_path):
+            return str(output_path)
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except Exception:
+                pass
+        raise RuntimeError(f"Failed to slice video clip from source '{local_source.name}': {res.stderr or 'Corrupted video stream'}")
+
+    # Guard: if it was a Google Drive or Upload request, never send to YouTube
+    if "gdrive" in clean_raw.lower() or "upload_" in clean_raw.lower() or clean_raw.startswith("/api/video/"):
+        raise RuntimeError(f"Source video file not found on disk for '{clean_raw}'. Please re-analyze the video.")
+
+    # Sanitize video URL for YouTube download
     clean_url = video_url.strip()
     if not clean_url.startswith("http"):
         clean_url = f"https://www.youtube.com/watch?v={clean_url}"
@@ -548,10 +808,26 @@ def download_clip_segment(
 
 def download_full_raw_video(video_url: str, output_path: str, progress_callback=None) -> str:
     """
-    Downloads the full raw video from YouTube in maximum quality (up to 1080p).
-    Reports real-time progress to progress_callback if provided.
-    Automatically retries in guest mode if session cookies are rejected.
+    Downloads the full raw video from YouTube in maximum quality (up to 1080p),
+    or copies the local uploaded / Google Drive video file directly.
     """
+    local_source = None
+    if os.path.exists(video_url):
+        local_source = Path(video_url)
+    elif video_url.startswith("/api/video/"):
+        candidate = UPLOADS_DIR / os.path.basename(video_url.split("?")[0])
+        if candidate.exists():
+            local_source = candidate
+    elif (UPLOADS_DIR / os.path.basename(video_url.split("?")[0])).exists():
+        local_source = UPLOADS_DIR / os.path.basename(video_url.split("?")[0])
+
+    if local_source and local_source.exists():
+        logger.info(f"Copying local source video to raw output: {local_source} -> {output_path}")
+        shutil.copyfile(str(local_source), str(output_path))
+        if progress_callback:
+            progress_callback({"percent": 100.0, "downloaded": "Complete", "total": "Complete", "speed": "", "eta": ""})
+        return str(output_path)
+
     clean_url = video_url.strip()
     if not clean_url.startswith("http"):
         clean_url = f"https://www.youtube.com/watch?v={clean_url}"
@@ -2460,6 +2736,46 @@ def extract_clip_frame(video_url: str, video_id: str, timestamp: float = 0.0) ->
 
     if frame_path.exists() and frame_path.stat().st_size > 2000:
         return str(frame_path)
+
+    # 0. Check if this is an uploaded or gdrive local video in UPLOADS_DIR or specified by video_url
+    local_source = None
+    clean_vurl = urllib.parse.unquote(video_url.strip()) if video_url else ""
+    clean_vbase = os.path.basename(clean_vurl.split("?")[0]) if clean_vurl else ""
+
+    if clean_vurl and os.path.exists(clean_vurl):
+        local_source = Path(clean_vurl)
+    elif video_url and os.path.exists(video_url):
+        local_source = Path(video_url)
+    elif clean_vurl and clean_vurl.startswith("/api/video/") and (UPLOADS_DIR / clean_vbase).exists():
+        local_source = UPLOADS_DIR / clean_vbase
+    elif clean_vbase and (UPLOADS_DIR / clean_vbase).exists():
+        local_source = UPLOADS_DIR / clean_vbase
+    elif (UPLOADS_DIR / f"{safe_id}.mp4").exists():
+        local_source = UPLOADS_DIR / f"{safe_id}.mp4"
+    else:
+        for q in [clean_vbase, safe_id, video_id, video_id.replace("gdrive_", "").replace("upload_", "")]:
+            if not q or len(q) < 3:
+                continue
+            for candidate in UPLOADS_DIR.glob(f"*{q}*"):
+                if candidate.is_file() and is_valid_mp4(candidate) and "_clip_" not in candidate.name:
+                    local_source = candidate
+                    break
+            if local_source:
+                break
+
+    if local_source and local_source.exists():
+        cmd = [
+            "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+            "-ss", str(target_ts),
+            "-i", str(local_source),
+            "-vframes", "1",
+            "-q:v", "2",
+            "-strict", "-1",
+            str(frame_path)
+        ]
+        subprocess.run(cmd, capture_output=True, timeout=10)
+        if frame_path.exists() and frame_path.stat().st_size > 500:
+            return str(frame_path)
 
     # 1. Check local sliced clips or exports
     local_candidates = list(TEMP_DIR.glob(f"*{safe_id}*.mp4")) + list(EXPORTS_DIR.glob(f"*{safe_id}*.mp4"))

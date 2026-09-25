@@ -5,8 +5,8 @@ import re
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, File, HTTPException, Request, Response, UploadFile, status
+from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.config import (
     EXPORTS_DIR,
@@ -14,11 +14,184 @@ from backend.config import (
     UPLOADS_DIR,
     detect_speaker_face_box,
     extract_clip_frame,
+    get_video_file_metadata,
     is_valid_mp4,
     logger,
 )
 
 router = APIRouter(tags=["Media"])
+
+
+@router.post("/api/upload-video")
+async def upload_video(file: UploadFile = File(...)):
+    """
+    Handles local video file uploads (.mp4, .mov, .mkv, .webm, .avi, etc.).
+    Extracts video metadata (duration, resolution, fps) and saves to uploads folder.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No file provided")
+    
+    ext = os.path.splitext(file.filename)[1].lower()
+    allowed = [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v", ".flv", ".wmv"]
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported video format. Allowed: {', '.join(allowed)}")
+    
+    clean_name = re.sub(r'[^a-zA-Z0-9_.-]', '_', file.filename)
+    unique_id = f"upload_{uuid.uuid4().hex[:10]}"
+    unique_name = f"{unique_id}_{clean_name}"
+    save_path = UPLOADS_DIR / unique_name
+    
+    try:
+        content = await file.read()
+        with open(save_path, "wb") as f:
+            f.write(content)
+        
+        meta = await asyncio.to_thread(get_video_file_metadata, save_path)
+        logger.info(f"Uploaded video '{file.filename}' -> saved as '{unique_name}' ({meta.get('duration')}s, {meta.get('width')}x{meta.get('height')})")
+        
+        return {
+            "success": True,
+            "video_id": unique_id,
+            "filename": file.filename,
+            "saved_name": unique_name,
+            "file_path": str(save_path),
+            "video_url": f"/api/video/{unique_name}",
+            "duration": meta.get("duration", 0.0),
+            "width": meta.get("width", 1920),
+            "height": meta.get("height", 1080),
+            "fps": meta.get("fps", 30.0),
+            "has_audio": meta.get("has_audio", True),
+            "size_bytes": len(content)
+        }
+    except Exception as e:
+        logger.error(f"Failed to upload video: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process video upload: {str(e)}")
+
+
+def _find_video_file_on_disk(file_name: str) -> Optional[Path]:
+    import urllib.parse
+    clean_name = urllib.parse.unquote(os.path.basename(file_name.split("?")[0])).strip()
+    
+    # Check direct paths
+    for base in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
+        candidate = base / clean_name
+        if candidate.exists() and candidate.is_file():
+            return candidate
+
+    # Search directory listings without regex/glob pitfalls
+    all_files: list[Path] = []
+    for d in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
+        if d.exists():
+            all_files.extend([f for f in d.iterdir() if f.is_file()])
+
+    clean_lower = clean_name.lower()
+    
+    # 1. Exact case-insensitive match
+    for f in all_files:
+        if f.name.lower() == clean_lower:
+            return f
+
+    # 2. Match without extension
+    stem_lower = os.path.splitext(clean_lower)[0]
+    for f in all_files:
+        if f.stem.lower() == stem_lower or f.stem.lower() == clean_lower:
+            return f
+
+    # 3. Match Google Drive or Upload ID substring
+    drive_match = re.search(r'([a-zA-Z0-9_-]{20,})', clean_name)
+    if drive_match:
+        fid = drive_match.group(1)
+        for f in all_files:
+            if fid in f.name:
+                return f
+
+    upload_match = re.search(r'(upload_[a-zA-Z0-9]{6,})', clean_name)
+    if upload_match:
+        uid = upload_match.group(1)
+        for f in all_files:
+            if uid in f.name:
+                return f
+
+    # 4. Containment matching
+    for f in all_files:
+        if clean_lower in f.name.lower() or f.stem.lower() in clean_lower:
+            return f
+
+    return None
+
+
+@router.get("/api/video/{file_name:path}")
+def get_video_file(file_name: str, request: Request):
+    """
+    Streams local video files with HTTP byte ranges support (HTTP 206 Partial Content)
+    for smooth seeking, immediate playback start, and previewing without loading the whole file.
+    """
+    file_path = _find_video_file_on_disk(file_name)
+    if not file_path or not file_path.exists():
+        raise HTTPException(status_code=404, detail="Video file not found")
+
+    file_size = file_path.stat().st_size
+    ext = os.path.splitext(file_path.name)[1].lower()
+    media_type = "video/webm" if ext == ".webm" else "video/quicktime" if ext == ".mov" else "video/x-matroska" if ext == ".mkv" else "video/mp4"
+
+    range_header = request.headers.get("range")
+    if not range_header:
+        # Full file streaming response with Accept-Ranges
+        def iter_full():
+            with open(file_path, "rb") as f:
+                while chunk := f.read(1024 * 512):
+                    yield chunk
+
+        return StreamingResponse(
+            iter_full(),
+            status_code=200,
+            media_type=media_type,
+            headers={
+                "Content-Length": str(file_size),
+                "Accept-Ranges": "bytes",
+                "Content-Disposition": f'inline; filename="{file_path.name}"'
+            }
+        )
+
+    # Parse Range: bytes=start-end
+    range_match = re.match(r"bytes=(\d+)-(\d*)", range_header)
+    if not range_match:
+        return Response(status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE)
+
+    start = int(range_match.group(1))
+    end = int(range_match.group(2)) if range_match.group(2) else file_size - 1
+
+    if start >= file_size or end >= file_size or start > end:
+        return Response(
+            status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+            headers={"Content-Range": f"bytes */{file_size}"}
+        )
+
+    content_length = end - start + 1
+
+    def iter_range():
+        with open(file_path, "rb") as f:
+            f.seek(start)
+            bytes_left = content_length
+            while bytes_left > 0:
+                chunk_size = min(1024 * 512, bytes_left)
+                data = f.read(chunk_size)
+                if not data:
+                    break
+                bytes_left -= len(data)
+                yield data
+
+    return StreamingResponse(
+        iter_range(),
+        status_code=206,
+        media_type=media_type,
+        headers={
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(content_length),
+            "Content-Disposition": f'inline; filename="{file_path.name}"'
+        }
+    )
 
 
 @router.post("/api/upload-bgm")

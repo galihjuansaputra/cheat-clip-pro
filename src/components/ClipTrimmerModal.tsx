@@ -6,6 +6,8 @@ interface ClipTrimmerModalProps {
   isOpen: boolean;
   clip: ViralClip | null;
   videoId: string;
+  videoUrl?: string;
+  sourceType?: string;
   videoTitle?: string;
   videoDuration: number;
   transcript?: TranscriptLine[];
@@ -48,12 +50,23 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
   isOpen,
   clip,
   videoId,
+  videoUrl,
+  sourceType,
   videoDuration,
   transcript = [],
   onClose,
   onDownload,
 }) => {
   const { t } = useLanguage();
+
+  const isDirectVideo = Boolean(
+    sourceType === 'gdrive' ||
+    sourceType === 'upload' ||
+    videoId?.startsWith('gdrive_') ||
+    videoId?.startsWith('upload_') ||
+    videoUrl?.startsWith('/api/video/')
+  );
+  const directVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const origStart = clip?.start_time ?? 0;
   const origEnd = clip?.end_time ?? 0;
@@ -76,6 +89,24 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
   const [downloadSuccess, setDownloadSuccess] = useState<boolean>(false);
   const [playerReady, setPlayerReady] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
+
+  const [volume, setVolume] = useState<number>(1);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+
+  const toggleMute = () => {
+    if (isMuted) {
+      setIsMuted(false);
+      if (directVideoRef.current) {
+        directVideoRef.current.muted = false;
+        directVideoRef.current.volume = volume || 0.8;
+      }
+    } else {
+      setIsMuted(true);
+      if (directVideoRef.current) {
+        directVideoRef.current.muted = true;
+      }
+    }
+  };
 
   const timelineBarRef = useRef<HTMLDivElement | null>(null);
   const ytPlayerRef = useRef<any>(null);
@@ -103,8 +134,11 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
       setCurrentTime(clip.start_time);
       setIsDownloading(false);
       setDownloadSuccess(false);
+      if (isDirectVideo && directVideoRef.current) {
+        directVideoRef.current.currentTime = clip.start_time;
+      }
     }
-  }, [clip]);
+  }, [clip, isDirectVideo]);
 
   // Keep manual text inputs synced with numeric state
   useEffect(() => {
@@ -125,8 +159,11 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
     setDownloadSuccess(false);
   }, [adjustedStart, adjustedEnd]);
 
-  // Setup YouTube Iframe API player for the modal preview
+  // Setup YouTube Iframe API player for the modal preview (only for YouTube videos)
   useEffect(() => {
+    if (!isOpen || !clip || isDirectVideo) {
+      return;
+    }
     let isMounted = true;
     let pollTimer: number | null = null;
     let fallbackTimer: number | null = null;
@@ -213,7 +250,6 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
               setIsPlaying(e.data === 1);
             },
             onError: (err: any) => {
-              // Log transient seek/playback errors without wiping container and destroying the player!
               console.warn('YouTube Player transient error in trimmer:', err);
             }
           }
@@ -229,7 +265,6 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
       }
     };
 
-    // Safety fallback timer ONLY if player never initialized and playerReadyRef is false
     fallbackTimer = window.setTimeout(() => {
       if (isMounted && !playerReadyRef.current && !ytPlayerRef.current) {
         const container = document.getElementById('trimmer-yt-player-container');
@@ -252,7 +287,7 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
         ytPlayerRef.current = null;
       }
     };
-  }, [videoId, clip?.start_time]);
+  }, [videoId, clip?.start_time, isOpen, isDirectVideo]);
 
   // Monitor playhead and enforce looping/pause at adjustedEnd
   useEffect(() => {
@@ -282,18 +317,22 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
     };
   }, []);
 
-  // Throttled seeking helper during dragging to prevent YouTube postMessage flooding & player crashes
+  // Throttled seeking helper during dragging to prevent excessive calls
   const doThrottledSeek = useCallback((targetSec: number) => {
     if (throttledSeekRef.current) return;
     throttledSeekRef.current = window.setTimeout(() => {
       throttledSeekRef.current = null;
-      if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+      if (isDirectVideo) {
+        if (directVideoRef.current) {
+          directVideoRef.current.currentTime = targetSec;
+        }
+      } else if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
         try {
           ytPlayerRef.current.seekTo(targetSec, false);
         } catch {}
       }
-    }, 120);
-  }, []);
+    }, 100);
+  }, [isDirectVideo]);
 
   // Player seeking helper (immediate)
   const seekToTime = useCallback((targetSec: number, play: boolean = false) => {
@@ -303,7 +342,19 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
       clearTimeout(throttledSeekRef.current);
       throttledSeekRef.current = null;
     }
-    if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
+    if (isDirectVideo) {
+      const vid = directVideoRef.current;
+      if (vid) {
+        vid.currentTime = clamped;
+        if (play) {
+          vid.muted = isMuted;
+          vid.volume = isMuted ? 0 : volume;
+          vid.play().then(() => setIsPlaying(true)).catch((err) => {
+            console.warn('Seek play error:', err);
+          });
+        }
+      }
+    } else if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
       try {
         ytPlayerRef.current.seekTo(clamped, true);
         if (play) {
@@ -312,10 +363,38 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
         }
       } catch {}
     }
-  }, [minTimelineStart, maxTimelineEnd]);
+  }, [minTimelineStart, maxTimelineEnd, isDirectVideo, isMuted, volume]);
 
-  const togglePlay = useCallback(() => {
-    if (ytPlayerRef.current) {
+  const togglePlay = useCallback(async () => {
+    if (isDirectVideo) {
+      const vid = directVideoRef.current;
+      if (!vid) return;
+      if (!vid.paused) {
+        vid.pause();
+        setIsPlaying(false);
+      } else {
+        if (vid.currentTime >= boundsRef.current.end || vid.currentTime < boundsRef.current.start - 0.5) {
+          vid.currentTime = boundsRef.current.start;
+          setCurrentTime(boundsRef.current.start);
+        }
+        vid.muted = isMuted;
+        vid.volume = isMuted ? 0 : volume;
+        try {
+          await vid.play();
+          setIsPlaying(true);
+        } catch (err) {
+          console.warn('Playback with audio blocked, trying fallback:', err);
+          try {
+            vid.muted = true;
+            setIsMuted(true);
+            await vid.play();
+            setIsPlaying(true);
+          } catch (e) {
+            console.error('Direct video play error:', e);
+          }
+        }
+      }
+    } else if (ytPlayerRef.current) {
       try {
         if (isPlaying && typeof ytPlayerRef.current.pauseVideo === 'function') {
           ytPlayerRef.current.pauseVideo();
@@ -330,7 +409,7 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
         }
       } catch {}
     }
-  }, [isPlaying, currentTime, adjustedStart, adjustedEnd, seekToTime]);
+  }, [isDirectVideo, isPlaying, adjustedStart, adjustedEnd, currentTime, isMuted, volume, seekToTime]);
 
   // Position calculation helpers
   const timeToPct = useCallback((tSec: number): number => {
@@ -570,133 +649,239 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
 
           {/* Top Row: Embedded Video Preview Player & Live Context Metrics */}
           <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 1.25fr) minmax(260px, 1fr)', gap: '1rem', alignItems: 'start' }}>
-            {/* Video Player Box */}
-            <div
-              className="trimmer-player-wrapper"
-              style={{
-                background: '#090d16',
-                backgroundImage: videoId ? `url(https://img.youtube.com/vi/${videoId}/hqdefault.jpg)` : undefined,
-                backgroundSize: 'cover',
-                backgroundPosition: 'center',
-                borderRadius: '12px',
-                overflow: 'hidden',
-                border: '1px solid rgba(255,255,255,0.08)',
-                position: 'relative',
-                aspectRatio: '16/9'
-              }}
-            >
-              {/* Thumbnail backdrop loading placeholder */}
-              {!playerReady && (
-                <div style={{
-                  position: 'absolute',
-                  inset: 0,
-                  background: 'rgba(0, 0, 0, 0.45)',
-                  backdropFilter: 'blur(2px)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  zIndex: 1,
-                  pointerEvents: 'none'
-                }}>
+            {/* Left Column: Video Player Box + External Control Bar */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+              <div
+                className="trimmer-player-wrapper"
+                style={{
+                  background: '#090d16',
+                  backgroundImage: (!isDirectVideo && videoId) ? `url(https://img.youtube.com/vi/${videoId}/hqdefault.jpg)` : undefined,
+                  backgroundSize: 'cover',
+                  backgroundPosition: 'center',
+                  borderRadius: '12px',
+                  overflow: 'hidden',
+                  border: '1px solid rgba(255,255,255,0.08)',
+                  position: 'relative',
+                  aspectRatio: '16/9',
+                  cursor: isDirectVideo ? 'pointer' : 'default'
+                }}
+                onClick={isDirectVideo ? togglePlay : undefined}
+              >
+                {/* Thumbnail backdrop loading placeholder */}
+                {!playerReady && (
                   <div style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: 'rgba(0, 0, 0, 0.45)',
+                    backdropFilter: 'blur(2px)',
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '0.6rem',
-                    padding: '0.5rem 0.9rem',
-                    background: 'rgba(10, 15, 28, 0.85)',
-                    borderRadius: '8px',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    fontSize: '0.78rem',
-                    color: 'var(--text-secondary)'
+                    justifyContent: 'center',
+                    zIndex: 1,
+                    pointerEvents: 'none'
                   }}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: 'spin 1.2s linear infinite' }}>
-                      <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
-                    </svg>
-                    <span>Loading preview player...</span>
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.6rem',
+                      padding: '0.5rem 0.9rem',
+                      background: 'rgba(10, 15, 28, 0.85)',
+                      borderRadius: '8px',
+                      border: '1px solid rgba(255, 255, 255, 0.12)',
+                      fontSize: '0.78rem',
+                      color: 'var(--text-secondary)'
+                    }}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={{ animation: 'spin 1.2s linear infinite' }}>
+                        <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                      </svg>
+                      <span>Loading preview player...</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Player mount container */}
+                {isDirectVideo ? (
+                  <video
+                    ref={directVideoRef}
+                    src={videoUrl ? encodeURI(videoUrl) : `/api/video/${encodeURIComponent(videoId)}`}
+                    playsInline
+                    preload="auto"
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      position: 'relative',
+                      zIndex: 2,
+                      opacity: playerReady ? 1 : 0,
+                      transition: 'opacity 0.28s ease',
+                      pointerEvents: isDragging ? 'none' : 'auto',
+                      objectFit: 'contain',
+                      background: '#000',
+                      borderRadius: '8px'
+                    }}
+                    onLoadedMetadata={() => {
+                      playerReadyRef.current = true;
+                      setPlayerReady(true);
+                      if (directVideoRef.current) {
+                        directVideoRef.current.currentTime = adjustedStart;
+                      }
+                    }}
+                    onTimeUpdate={(e) => {
+                      if (isDraggingRef.current) return;
+                      const curr = e.currentTarget.currentTime;
+                      setCurrentTime(curr);
+                      if (curr >= boundsRef.current.end) {
+                        e.currentTarget.currentTime = boundsRef.current.start;
+                        e.currentTarget.pause();
+                        setIsPlaying(false);
+                      }
+                    }}
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                  />
+                ) : (
+                  <div
+                    id="trimmer-yt-player-container"
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      position: 'relative',
+                      zIndex: 2,
+                      opacity: playerReady ? 1 : 0,
+                      transition: 'opacity 0.28s ease',
+                      pointerEvents: isDragging ? 'none' : 'auto'
+                    }}
+                  ></div>
+                )}
+              </div>
+
+              {/* Dedicated External Player Controls (Outside the video frame) */}
+              <div
+                className="trimmer-video-controls-bar"
+                style={{
+                  background: 'rgba(255, 255, 255, 0.03)',
+                  border: '1px solid rgba(255, 255, 255, 0.07)',
+                  borderRadius: '10px',
+                  padding: '0.45rem 0.65rem',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '0.5rem',
+                  flexWrap: 'wrap'
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <button
+                    type="button"
+                    onClick={togglePlay}
+                    style={{
+                      background: isPlaying ? 'rgba(239, 68, 68, 0.2)' : 'rgba(59, 130, 246, 0.25)',
+                      border: `1px solid ${isPlaying ? 'rgba(239, 68, 68, 0.5)' : 'rgba(59, 130, 246, 0.6)'}`,
+                      color: isPlaying ? '#fca5a5' : '#93c5fd',
+                      borderRadius: '7px',
+                      padding: '0.3rem 0.75rem',
+                      cursor: 'pointer',
+                      fontSize: '0.78rem',
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '0.3rem',
+                      transition: 'all 0.2s ease'
+                    }}
+                  >
+                    {isPlaying ? '⏸ Pause' : '▶ Play'}
+                  </button>
+
+                  {/* Audio Mute / Unmute & Volume */}
+                  <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
+                    <button
+                      type="button"
+                      onClick={toggleMute}
+                      style={{
+                        background: isMuted ? 'rgba(239, 68, 68, 0.15)' : 'rgba(255, 255, 255, 0.06)',
+                        border: `1px solid ${isMuted ? 'rgba(239, 68, 68, 0.4)' : 'rgba(255, 255, 255, 0.12)'}`,
+                        color: isMuted ? '#fca5a5' : '#fff',
+                        borderRadius: '6px',
+                        padding: '0.3rem 0.5rem',
+                        cursor: 'pointer',
+                        fontSize: '0.76rem'
+                      }}
+                      title={isMuted ? 'Unmute Audio' : 'Mute Audio'}
+                    >
+                      {isMuted ? '🔇' : '🔊'}
+                    </button>
+                    {isDirectVideo && (
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={isMuted ? 0 : volume}
+                        onChange={(e) => {
+                          const v = parseFloat(e.target.value);
+                          setVolume(v);
+                          if (v === 0) {
+                            setIsMuted(true);
+                          } else if (isMuted) {
+                            setIsMuted(false);
+                          }
+                          if (directVideoRef.current) {
+                            directVideoRef.current.volume = v;
+                            directVideoRef.current.muted = (v === 0);
+                          }
+                        }}
+                        style={{ width: '48px', accentColor: '#38bdf8', cursor: 'pointer', height: '4px' }}
+                        title={`Volume: ${Math.round(volume * 100)}%`}
+                      />
+                    )}
                   </div>
                 </div>
-              )}
 
-              {/* Player mount container */}
-              <div
-                id="trimmer-yt-player-container"
-                style={{
-                  width: '100%',
-                  height: '100%',
-                  position: 'relative',
-                  zIndex: 2,
-                  opacity: playerReady ? 1 : 0,
-                  transition: 'opacity 0.28s ease',
-                  pointerEvents: isDragging ? 'none' : 'auto'
-                }}
-              ></div>
-              {/* Overlay Player Controls */}
-              <div style={{
-                position: 'absolute',
-                bottom: 0,
-                left: 0,
-                right: 0,
-                background: 'linear-gradient(to top, rgba(0,0,0,0.85) 0%, transparent 100%)',
-                padding: '0.4rem 0.6rem',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '0.4rem',
-                fontSize: '0.75rem'
-              }}>
-                <button
-                  type="button"
-                  onClick={togglePlay}
-                  style={{
-                    background: 'rgba(59, 130, 246, 0.3)',
-                    border: '1px solid rgba(59, 130, 246, 0.6)',
-                    color: '#fff',
-                    borderRadius: '6px',
-                    padding: '0.2rem 0.55rem',
-                    cursor: 'pointer',
-                    fontSize: '0.75rem',
-                    fontWeight: 600
-                  }}
-                >
-                  {isPlaying ? '⏸ Pause' : '▶ Play'}
-                </button>
-                <div style={{ display: 'flex', gap: '0.3rem' }}>
+                {/* Quick boundary jumps */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', flexWrap: 'wrap' }}>
                   <button
                     type="button"
                     onClick={() => seekToTime(adjustedStart, true)}
-                    style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', borderRadius: '5px', padding: '0.15rem 0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}
+                    style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', color: 'var(--text-secondary)', borderRadius: '5px', padding: '0.22rem 0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}
                     title={t.trimmer.jumpToStart}
                   >
-                    {t.trimmer.jumpToStart}
+                    ⏮ Start
                   </button>
                   <button
                     type="button"
                     onClick={() => seekToTime(origStart, true)}
-                    style={{ background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.4)', color: '#facc15', borderRadius: '5px', padding: '0.15rem 0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}
+                    style={{ background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.4)', color: '#facc15', borderRadius: '5px', padding: '0.22rem 0.45rem', cursor: 'pointer', fontSize: '0.68rem', fontWeight: 600 }}
                     title={t.trimmer.jumpToAiStart}
                   >
-                    {t.trimmer.jumpToAiStart}
+                    ⚡ AI Start
                   </button>
                   <button
                     type="button"
                     onClick={() => seekToTime(origEnd, true)}
-                    style={{ background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.4)', color: '#facc15', borderRadius: '5px', padding: '0.15rem 0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}
+                    style={{ background: 'rgba(234, 179, 8, 0.15)', border: '1px solid rgba(234, 179, 8, 0.4)', color: '#facc15', borderRadius: '5px', padding: '0.22rem 0.45rem', cursor: 'pointer', fontSize: '0.68rem', fontWeight: 600 }}
                     title={t.trimmer.jumpToAiEnd}
                   >
-                    {t.trimmer.jumpToAiEnd}
+                    AI End ⚡
                   </button>
                   <button
                     type="button"
                     onClick={() => seekToTime(adjustedEnd, true)}
-                    style={{ background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)', color: '#fff', borderRadius: '5px', padding: '0.15rem 0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}
+                    style={{ background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.12)', color: 'var(--text-secondary)', borderRadius: '5px', padding: '0.22rem 0.45rem', cursor: 'pointer', fontSize: '0.68rem' }}
                     title={t.trimmer.jumpToEnd}
                   >
-                    {t.trimmer.jumpToEnd}
+                    End ⏭
                   </button>
                 </div>
-                <span style={{ color: '#fff', fontWeight: 600, fontFamily: 'monospace' }}>
-                  {formatSeconds(currentTime)}
-                </span>
+
+                {/* Real-time Time / Length badge */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', background: 'rgba(0,0,0,0.35)', padding: '0.2rem 0.5rem', borderRadius: '5px', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  <span style={{ color: '#38bdf8', fontWeight: 700, fontFamily: 'monospace', fontSize: '0.78rem' }}>
+                    {formatSeconds(currentTime)}
+                  </span>
+                  <span style={{ color: 'rgba(255,255,255,0.25)', fontSize: '0.68rem' }}>/</span>
+                  <span style={{ color: 'var(--text-muted)', fontFamily: 'monospace', fontSize: '0.72rem' }}>
+                    {formatSeconds(adjustedEnd - adjustedStart)}
+                  </span>
+                </div>
               </div>
             </div>
 

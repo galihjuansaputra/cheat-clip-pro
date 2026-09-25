@@ -380,7 +380,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const initPreviewPlayer = () => {
     if (!videoId && !videoUrl) return;
 
-    const isDirect = videoUrl && (videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.includes('/api/video'));
+    const isDirect = Boolean(videoUrl && (videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.endsWith('.mov') || videoUrl.endsWith('.mkv') || videoUrl.includes('/api/video') || videoUrl.startsWith('blob:') || videoId?.startsWith('upload_') || videoId?.startsWith('gdrive_')));
     if (isDirect) {
       setPlayerReady(true);
       setCurrentTime(clipStart);
@@ -1055,30 +1055,30 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     if (preset === 'split_top_cam') {
       return {
         maxTitleY: 35.0,
-        maxSubY: 35.0,
+        maxSubY: 50.0,
       };
     }
     if (ratio === '1:1') {
       return {
         maxTitleY: lines >= 4 ? 12.5 : lines === 3 ? 13.5 : lines === 2 ? 15.0 : 18.0,
-        maxSubY: 18.0,
+        maxSubY: 50.0,
       };
     }
     if (ratio === '4:3') {
       return {
         maxTitleY: lines >= 4 ? 19.5 : lines === 3 ? 20.5 : lines === 2 ? 22.0 : 25.0,
-        maxSubY: 25.0,
+        maxSubY: 50.0,
       };
     }
     if (ratio === '16:9') {
       return {
         maxTitleY: lines >= 4 ? 24.5 : lines === 3 ? 25.5 : lines === 2 ? 27.0 : 30.0,
-        maxSubY: 30.5,
+        maxSubY: 50.0,
       };
     }
     return {
       maxTitleY: 45.0,
-      maxSubY: 45.0,
+      maxSubY: 50.0,
     };
   };
 
@@ -2021,11 +2021,19 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       </button>
                       <button
                         type="button"
-                        className={`pill-btn ${safeSubtitleY === Math.min(32, maxSubY) ? 'active' : ''}`}
-                        onClick={() => setSubtitleYPercent(Math.min(32, maxSubY))}
+                        className={`pill-btn ${safeSubtitleY === 32 ? 'active' : ''}`}
+                        onClick={() => setSubtitleYPercent(32)}
                         style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
                       >
-                        {t.studio.quickMid(Math.min(32, maxSubY))}
+                        {t.studio.quickMid(32)}
+                      </button>
+                      <button
+                        type="button"
+                        className={`pill-btn ${safeSubtitleY === 42 ? 'active' : ''}`}
+                        onClick={() => setSubtitleYPercent(42)}
+                        style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                      >
+                        {t.studio.quickHigh ? t.studio.quickHigh(42) : `High (42%)`}
                       </button>
                     </div>
                   </div>
@@ -2949,7 +2957,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               >
                 {backgroundStyle === 'blurred' && aspectRatio !== '9:16' && (
                   <div className="ambient-blur-backdrop" style={{ overflow: 'hidden' }}>
-                    {videoUrl && (videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.includes('/api/video')) ? (
+                    {videoUrl && (videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.endsWith('.mov') || videoUrl.endsWith('.mkv') || videoUrl.includes('/api/video') || videoUrl.startsWith('blob:') || videoId?.startsWith('upload_') || videoId?.startsWith('gdrive_')) ? (
                       <video
                         ref={ambientVideoRef}
                         src={videoUrl}
@@ -3020,7 +3028,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   <div className={`wireframe-content-box aspect-${aspectRatio.replace(':', '')} ${streamerPreset === 'split_top_cam' ? 'split-mode' : ''}`}>
                     <div className="wireframe-content-inner">
                       {/* HTML5 or YouTube Player slot - ALWAYS STABLY MOUNTED */}
-                      {videoUrl && (videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.includes('/api/video')) ? (
+                      {videoUrl && (videoUrl.endsWith('.mp4') || videoUrl.endsWith('.webm') || videoUrl.endsWith('.mov') || videoUrl.endsWith('.mkv') || videoUrl.includes('/api/video') || videoUrl.startsWith('blob:') || videoId?.startsWith('upload_') || videoId?.startsWith('gdrive_')) ? (
                         <video
                           ref={directVideoRef}
                           src={videoUrl}

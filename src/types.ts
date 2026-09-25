@@ -33,6 +33,8 @@ export interface AnalyzeResponse {
   clips: ViralClip[];
   transcript?: TranscriptLine[];
   model?: string;
+  video_url?: string;
+  source_type?: 'youtube' | 'upload' | 'gdrive';
 }
 
 export type AspectRatioOption = '9:16' | '1:1' | '4:3' | '16:9';

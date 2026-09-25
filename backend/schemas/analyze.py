@@ -62,3 +62,5 @@ class AnalyzeResponse(BaseModel):
     clips: List[ViralClip]
     transcript: Optional[List[TranscriptLine]] = None
     model: Optional[str] = None
+    video_url: Optional[str] = None
+    source_type: Optional[str] = "youtube"

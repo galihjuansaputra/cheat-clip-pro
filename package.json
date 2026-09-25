@@ -4,9 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently \"npm run dev-frontend\" \"npm run dev-backend\"",
+    "dev": "concurrently --prefix \"[{name}]\" --names \"frontend,backend\" -c \"cyan,magenta\" \"npm run dev-frontend\" \"npm run dev-backend\"",
     "dev-frontend": "vite",
-    "dev-backend": "python -m uvicorn backend.main:app --reload --port 8000",
+    "dev-backend": "node scripts/start-backend.js",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"

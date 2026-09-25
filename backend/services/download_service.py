@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import time
+import urllib.parse
 from typing import Dict, Optional
 from urllib.parse import quote
 
@@ -13,6 +14,7 @@ from backend.config import (
     ACTIVE_ENCODER_NAME,
     EXPORTS_DIR,
     TEMP_DIR,
+    UPLOADS_DIR,
     download_clip_segment,
     download_full_raw_video,
     is_valid_mp4,
@@ -40,6 +42,36 @@ async def run_raw_download_job(
 
     try:
         raw_download_jobs[job_id]["status"] = "downloading"
+
+        # Check if local video exists in UPLOADS_DIR / TEMP_DIR (e.g. Google Drive or Uploaded video)
+        clean_vname = urllib.parse.unquote(os.path.basename(v_url.split("?")[0])).strip()
+        local_src = None
+        if os.path.exists(v_url):
+            local_src = os.path.abspath(v_url)
+        elif (UPLOADS_DIR / clean_vname).exists():
+            local_src = str(UPLOADS_DIR / clean_vname)
+        elif (TEMP_DIR / clean_vname).exists():
+            local_src = str(TEMP_DIR / clean_vname)
+        else:
+            for d in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
+                if d.exists():
+                    for f in d.iterdir():
+                        if f.is_file() and (f.name.lower() == clean_vname.lower() or clean_vname.lower() in f.name.lower() or f.stem.lower() in clean_vname.lower()):
+                            local_src = str(f)
+                            break
+                if local_src:
+                    break
+
+        if local_src and os.path.exists(local_src):
+            logger.info(f"Serving local/gdrive video {local_src} directly as full download {out_path}")
+            shutil.copy2(local_src, out_path)
+            raw_download_jobs[job_id]["status"] = "ready"
+            raw_download_jobs[job_id]["progress_percent"] = 100.0
+            dl_name = download_title or filename
+            raw_download_jobs[job_id]["download_url"] = f"/api/download-rendered/{filename}?title={quote(dl_name)}"
+            raw_download_jobs[job_id]["filename"] = f"{dl_name}.mp4" if not dl_name.endswith(".mp4") else dl_name
+            return
+
         await asyncio.to_thread(download_full_raw_video, v_url, out_path, on_progress)
         raw_download_jobs[job_id]["status"] = "ready"
         raw_download_jobs[job_id]["progress_percent"] = 100.0
@@ -72,11 +104,30 @@ async def run_raw_clip_download_job(
         raw_clip_download_jobs[job_id]["status"] = "downloading"
         raw_clip_download_jobs[job_id]["progress_percent"] = 25.0
 
-        # Optimization: Check if a full raw video already exists locally in EXPORTS_DIR or TEMP_DIR
-        local_candidates = list(EXPORTS_DIR.glob(f"*{safe_id}*.mp4")) + list(TEMP_DIR.glob(f"*{safe_id}*.mp4"))
+        # Optimization: Check if a full raw video already exists locally in UPLOADS_DIR, EXPORTS_DIR or TEMP_DIR
+        local_candidates = []
+        clean_vname = urllib.parse.unquote(os.path.basename(v_url.split("?")[0])).strip() if v_url else ""
+        if clean_vname:
+            if (UPLOADS_DIR / clean_vname).exists():
+                local_candidates.append(UPLOADS_DIR / clean_vname)
+            if (TEMP_DIR / clean_vname).exists():
+                local_candidates.append(TEMP_DIR / clean_vname)
+
+        all_dirs = [UPLOADS_DIR, EXPORTS_DIR, TEMP_DIR]
+        raw_vid_id = (video_id or "").replace("gdrive_", "").replace("upload_", "")
+        
+        for d in all_dirs:
+            if d.exists():
+                for f in d.iterdir():
+                    if f.is_file() and f.suffix.lower() in [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]:
+                        if clean_vname and (clean_vname.lower() in f.name.lower() or f.name.lower() in clean_vname.lower()):
+                            local_candidates.append(f)
+                        elif raw_vid_id and len(raw_vid_id) >= 4 and raw_vid_id in f.name:
+                            local_candidates.append(f)
+
         source_video = None
         for candidate in local_candidates:
-            if candidate.exists() and candidate.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(candidate):
+            if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 1024 * 1024 and is_valid_mp4(candidate):
                 # Avoid using a small trimmed clip segment as source
                 if "_clip_" not in candidate.name and candidate.name != seg_filename:
                     source_video = str(candidate)

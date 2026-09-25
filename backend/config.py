@@ -47,6 +47,9 @@ try:
         render_clip_to_mp4,
         extract_clip_frame,
         detect_speaker_face_box,
+        get_video_file_metadata,
+        compute_audio_energy_heatmap,
+        transcribe_local_video_file,
     )
 except ImportError:
     from video_engine import (
@@ -68,6 +71,9 @@ except ImportError:
         render_clip_to_mp4,
         extract_clip_frame,
         detect_speaker_face_box,
+        get_video_file_metadata,
+        compute_audio_energy_heatmap,
+        transcribe_local_video_file,
     )
 
 UPLOADS_DIR = TEMP_DIR / "uploads"

@@ -19,6 +19,22 @@ declare global {
 export default function App() {
   const { t } = useLanguage();
   const [url, setUrl] = useState('');
+  const [gdriveUrl, setGdriveUrl] = useState('');
+  const [sourceMode, setSourceMode] = useState<'youtube' | 'gdrive' | 'upload'>('youtube');
+  const [uploadedVideoFile, setUploadedVideoFile] = useState<File | null>(null);
+  const [uploadedVideoInfo, setUploadedVideoInfo] = useState<{
+    videoId: string;
+    filename: string;
+    savedName: string;
+    duration: number;
+    videoUrl: string;
+    filePath: string;
+    width: number;
+    height: number;
+  } | null>(null);
+  const [isUploadingVideo, setIsUploadingVideo] = useState(false);
+  const [isDragOverVideo, setIsDragOverVideo] = useState(false);
+  const videoFileInputRef = useRef<HTMLInputElement | null>(null);
   const [durationPref, setDurationPref] = useState<'15s' | '30s' | '60s' | 'auto'>(() => {
     const saved = localStorage.getItem('cheat_clip_duration_pref');
     if (saved === '15s' || saved === '30s' || saved === '60s' || saved === 'auto') return saved;
@@ -395,6 +411,7 @@ export default function App() {
   // Audio/video playback state tracking
   const [currentTime, setCurrentTime] = useState(0);
   const playerRef = useRef<any>(null);
+  const directVideoPlayerRef = useRef<HTMLVideoElement | null>(null);
   const trackingInterval = useRef<number | null>(null);
   const clipEndIntervalRef = useRef<number | null>(null);
   const loadingSectionRef = useRef<HTMLElement | null>(null);
@@ -756,7 +773,6 @@ export default function App() {
       }
       playerRef.current = null;
     }
-    // Re-create the div placeholder (destroy() removes the iframe but leaves the div empty)
     const container = document.getElementById('youtube-player-container');
     if (container) {
       container.innerHTML = '<div id="youtube-player"></div>';
@@ -764,6 +780,9 @@ export default function App() {
   };
 
   const initPlayer = (videoId: string, forceRecreate = false) => {
+    if (!videoId || videoId.startsWith('upload_') || videoId.startsWith('gdrive_')) {
+      return;
+    }
     // If player already exists and we're not forcing recreate, try to load new video
     if (!forceRecreate && playerRef.current && typeof playerRef.current.loadVideoById === 'function') {
       try {
@@ -848,6 +867,12 @@ export default function App() {
   };
 
   const handleSeek = (seconds: number) => {
+    if (directVideoPlayerRef.current) {
+      directVideoPlayerRef.current.currentTime = seconds;
+      setCurrentTime(seconds);
+      directVideoPlayerRef.current.play().catch(() => {});
+      return;
+    }
     if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
       playerRef.current.seekTo(seconds, true);
       setCurrentTime(seconds);
@@ -869,8 +894,18 @@ export default function App() {
     // Automatically stop video at end time (optional user experience feature)
     // We can monitor playback and pause if it goes past end_time
     const intervalId = window.setInterval(() => {
-      if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
-        const curr = playerRef.current.getCurrentTime();
+      let curr = 0;
+      if (directVideoPlayerRef.current) {
+        curr = directVideoPlayerRef.current.currentTime;
+        if (curr >= clip.end_time) {
+          directVideoPlayerRef.current.pause();
+          clearInterval(intervalId);
+          if (clipEndIntervalRef.current === intervalId) {
+            clipEndIntervalRef.current = null;
+          }
+        }
+      } else if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+        curr = playerRef.current.getCurrentTime();
         if (curr >= clip.end_time) {
           playerRef.current.pauseVideo();
           clearInterval(intervalId);
@@ -889,9 +924,37 @@ export default function App() {
     clipEndIntervalRef.current = intervalId;
   };
 
+  const isGoogleDriveUrl = (urlStr: string): boolean => {
+    if (!urlStr) return false;
+    return /(?:drive\.google\.com|docs\.google\.com|drive\.usercontent\.google\.com)/i.test(urlStr.trim());
+  };
+
+  const extractGoogleDriveId = (urlStr: string): string | null => {
+    if (!urlStr) return null;
+    const trimmed = urlStr.trim();
+    const patterns = [
+      /\/file\/d\/([a-zA-Z0-9_-]{20,})/,
+      /[?&]id=([a-zA-Z0-9_-]{20,})/,
+      /drive\.google\.com\/uc\?.*id=([a-zA-Z0-9_-]{20,})/,
+      /drive\.google\.com\/open\?id=([a-zA-Z0-9_-]{20,})/,
+    ];
+    for (const pattern of patterns) {
+      const match = trimmed.match(pattern);
+      if (match && match[1]) return match[1];
+    }
+    if (/^[a-zA-Z0-9_-]{25,45}$/.test(trimmed)) {
+      return trimmed;
+    }
+    return null;
+  };
+
   const extractVideoId = (urlStr: string): string | null => {
     if (!urlStr) return null;
     const trimmed = urlStr.trim();
+    if (isGoogleDriveUrl(trimmed)) {
+      const gId = extractGoogleDriveId(trimmed);
+      return gId ? `gdrive_${gId}` : null;
+    }
     if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
       return trimmed;
     }
@@ -911,7 +974,21 @@ export default function App() {
 
   const handleAnalyze = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!url.trim()) return;
+
+    if (sourceMode === 'upload') {
+      if (!uploadedVideoFile && !uploadedVideoInfo) {
+        setError(t.errors.chooseVideoFilePrompt);
+        return;
+      }
+    } else if (sourceMode === 'gdrive') {
+      if (!gdriveUrl.trim()) return;
+      if (!isGoogleDriveUrl(gdriveUrl)) {
+        setError('Please enter a valid Google Drive video sharing link (e.g. https://drive.google.com/file/d/...)');
+        return;
+      }
+    } else {
+      if (!url.trim()) return;
+    }
 
     // Require an API key before making any request
     if (!apiKey.trim()) {
@@ -949,18 +1026,77 @@ export default function App() {
       return;
     }
 
-    // Check localStorage cache first to avoid redundant API/Gemini processing
-    const videoId = extractVideoId(url);
     const rangeSuffix = (rangeStartSecs !== undefined || rangeEndSecs !== undefined)
       ? `_range_${rangeStartSecs ?? 0}_${rangeEndSecs ?? 'end'}`
       : '';
     const manualSuffix = subtitlesSource === 'manual' ? '_manual' : '';
-    const promptSuffix = customPrompt.trim() ? `_prompt_${customPrompt.trim().replace(/[^a-zA-Z0-9]/g, '_')}` : '';
-    const modelSuffix = `_model_${selectedModel}`;
-    const clipsSuffix = clipCountMode === 'auto' ? '_clips_auto' : `_clips_${targetClipCount}`;
-    const cacheKey = videoId ? `cheat_clip_cache_${videoId}_${durationPref}${modelSuffix}${clipsSuffix}${promptSuffix}${rangeSuffix}${manualSuffix}` : null;
 
-    if (cacheKey) {
+    // Determine target video identifier
+    let targetAnalyzeUrl = sourceMode === 'gdrive' ? gdriveUrl.trim() : url.trim();
+    let videoId = extractVideoId(targetAnalyzeUrl);
+
+    if (sourceMode === 'upload') {
+      setLoading(true);
+      setError(null);
+      setResult(null);
+      setActiveClip(null);
+      setCurrentStep(1);
+      setStepProgress({ 1: 20, 2: 0, 3: 0, 4: 0 });
+      setOverallProgress(5);
+      setActiveProcessingModel(selectedModel);
+
+      let currentVideoInfo = uploadedVideoInfo;
+      if (!currentVideoInfo && uploadedVideoFile) {
+        setIsUploadingVideo(true);
+        setLoadingDetails(t.form.uploadingVideo);
+        setAiStage('Uploading Local Video');
+        setAiDetail(`Uploading ${uploadedVideoFile.name} (${(uploadedVideoFile.size / (1024 * 1024)).toFixed(1)} MB)...`);
+
+        try {
+          const formData = new FormData();
+          formData.append('file', uploadedVideoFile);
+          const upRes = await fetch('/api/upload-video', {
+            method: 'POST',
+            body: formData,
+          });
+          if (!upRes.ok) {
+            const errJson = await upRes.json().catch(() => ({}));
+            throw new Error(errJson.detail || 'Failed to upload video file');
+          }
+          const upData = await upRes.json();
+          currentVideoInfo = {
+            videoId: upData.video_id,
+            filename: upData.filename,
+            savedName: upData.saved_name,
+            duration: upData.duration,
+            videoUrl: upData.video_url,
+            filePath: upData.file_path,
+            width: upData.width,
+            height: upData.height,
+          };
+          setUploadedVideoInfo(currentVideoInfo);
+          setIsUploadingVideo(false);
+        } catch (uploadErr: any) {
+          setIsUploadingVideo(false);
+          setLoading(false);
+          setError(uploadErr.message || 'Failed to upload video file');
+          return;
+        }
+      }
+
+      if (currentVideoInfo) {
+        targetAnalyzeUrl = currentVideoInfo.savedName || currentVideoInfo.videoId;
+        videoId = currentVideoInfo.videoId;
+      }
+    }
+
+    // Check localStorage cache first to avoid redundant API/Gemini processing (for YouTube URLs)
+    if (sourceMode === 'youtube' && videoId) {
+      const promptSuffix = customPrompt.trim() ? `_prompt_${customPrompt.trim().replace(/[^a-zA-Z0-9]/g, '_')}` : '';
+      const modelSuffix = `_model_${selectedModel}`;
+      const clipsSuffix = clipCountMode === 'auto' ? '_clips_auto' : `_clips_${targetClipCount}`;
+      const cacheKey = `cheat_clip_cache_${videoId}_${durationPref}${modelSuffix}${clipsSuffix}${promptSuffix}${rangeSuffix}${manualSuffix}`;
+
       const cachedData = localStorage.getItem(cacheKey);
       if (cachedData) {
         try {
@@ -975,7 +1111,6 @@ export default function App() {
           setOverallProgress(25);
           setLoadingDetails('Checking cache... Found matching clip analysis in memory!');
 
-          // Fast progress stepper transitions for cached data (premium responsive feel)
           await new Promise(r => setTimeout(r, 300));
           setCurrentStep(2);
           setStepProgress({ 1: 100, 2: 100, 3: 0, 4: 0 });
@@ -998,17 +1133,15 @@ export default function App() {
           setResult(parsedData);
           setLoading(false);
 
-          // Select first clip by default
           if (parsedData.clips && parsedData.clips.length > 0) {
             setActiveClip(parsedData.clips[0]);
           }
 
-          // Initialize player
           setTimeout(() => {
             initPlayer(parsedData.video_id);
           }, 100);
 
-          return; // Skip server request
+          return;
         } catch (e) {
           console.warn('Failed to parse cached clip data, requesting fresh analysis:', e);
         }
@@ -1022,10 +1155,11 @@ export default function App() {
     setCurrentStep(1);
     setStepProgress({ 1: 20, 2: 0, 3: 0, 4: 0 });
     setOverallProgress(5);
-    setAiStage('Initializing Analysis Pipeline');
-    setAiDetail('Connecting to YouTube and resolving media stream metadata...');
+    const isGDrive = isGoogleDriveUrl(targetAnalyzeUrl);
+    setAiStage(isGDrive ? 'Connecting to Google Drive' : 'Initializing Analysis Pipeline');
+    setAiDetail(sourceMode === 'upload' ? 'Inspecting local video container & audio track...' : isGDrive ? 'Connecting to Google Drive and resolving video...' : 'Connecting to YouTube and resolving media stream metadata...');
     setActiveProcessingModel(selectedModel);
-    setLoadingDetails('Connecting to YouTube...');
+    setLoadingDetails(sourceMode === 'upload' ? 'Inspecting local video file...' : isGDrive ? 'Connecting to Google Drive...' : 'Connecting to YouTube...');
 
     let resultData: AnalyzeResponse | null = null;
 
@@ -1034,7 +1168,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          url: url.trim(),
+          url: targetAnalyzeUrl,
           duration: durationPref,
           api_key: apiKey.trim() || undefined,
           model: selectedModel,
@@ -1172,7 +1306,23 @@ export default function App() {
       }, 250);
 
     } catch (err: any) {
-      setError(err.message || 'An unexpected error occurred during analysis.');
+      const msg = String(err?.message || '');
+      if (
+        msg.includes('Failed to fetch') ||
+        msg.includes('NetworkError') ||
+        msg.includes('503') ||
+        msg.includes('ECONNREFUSED') ||
+        msg.includes('server on port 8000') ||
+        msg.includes('not running')
+      ) {
+        setError(
+          '🔌 Backend API Server is unreachable (Port 8000).\n' +
+          'Please ensure the full app is running in your terminal (`npm run dev`).\n' +
+          'If Python dependencies were not installed yet, run: `pip install -r requirements.txt`'
+        );
+      } else {
+        setError(msg || 'An unexpected error occurred during analysis.');
+      }
       setLoading(false);
     }
   };
@@ -1205,14 +1355,28 @@ export default function App() {
   };
 
   const handleRefreshPlayer = () => {
-    if (result) {
+    if (!result) return;
+    const isDirect = Boolean(
+      result.video_url ||
+      result.source_type === 'upload' ||
+      result.source_type === 'gdrive' ||
+      result.video_id?.startsWith('upload_') ||
+      result.video_id?.startsWith('gdrive_')
+    );
+    if (isDirect) {
+      if (directVideoPlayerRef.current) {
+        directVideoPlayerRef.current.load();
+        directVideoPlayerRef.current.currentTime = currentTime;
+        directVideoPlayerRef.current.play().catch(() => {});
+      }
+    } else {
       initPlayer(result.video_id, true);
     }
   };
 
   const handleDownloadRawVideo = async () => {
     if (!result || !result.video_id) return;
-    const targetUrl = url.trim() || `https://www.youtube.com/watch?v=${result.video_id}`;
+    const targetUrl = result.video_url || (url.trim() ? url.trim() : (result.video_id?.startsWith('gdrive_') || result.video_id?.startsWith('upload_') ? `/api/video/${result.video_id}` : `https://www.youtube.com/watch?v=${result.video_id}`));
     setIsDownloadingRaw(true);
     setRawDownloadProgress({
       jobId: '',
@@ -1336,7 +1500,7 @@ export default function App() {
     }));
     setToastMessage(`${t.results.downloadingRawClip} "${clip.title}"`);
 
-    const targetUrl = url.trim() || `https://www.youtube.com/watch?v=${result.video_id}`;
+    const targetUrl = result.video_url || (url.trim() ? url.trim() : (result.video_id?.startsWith('gdrive_') || result.video_id?.startsWith('upload_') ? `/api/video/${result.video_id}` : `https://www.youtube.com/watch?v=${result.video_id}`));
 
     try {
       const res = await fetch("/api/download-raw-clip", {
@@ -1900,44 +2064,396 @@ Transcript:
       {/* Main Form controls panel */}
       <section className="glass-panel" style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
         <form onSubmit={handleAnalyze} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <div className="form-main-input-row">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
-              <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.urlLabel}</label>
-              <input
-                id="youtube-url-input"
-                type="text"
-                className="form-input"
-                placeholder={t.form.urlPlaceholder}
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                disabled={loading}
-                required
-              />
-            </div>
+          {/* Source Selector Tabs: YouTube vs Google Drive vs Upload Video File */}
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.25rem', flexWrap: 'wrap' }}>
+            {/* YouTube Tab */}
             <button
-              id="analyze-btn"
-              type="submit"
-              className="glowing-btn"
-              disabled={loading || !url.trim()}
-              style={{ height: '48px', padding: '0 2.5rem' }}
+              type="button"
+              id="source-mode-youtube"
+              className={`source-tab-btn ${sourceMode === 'youtube' ? 'active' : ''}`}
+              onClick={() => {
+                setSourceMode('youtube');
+                setError(null);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                padding: '0.55rem 1.1rem',
+                borderRadius: '10px',
+                border: sourceMode === 'youtube' ? '1px solid rgba(239, 68, 68, 0.4)' : '1px solid rgba(255,255,255,0.08)',
+                background: sourceMode === 'youtube' ? 'linear-gradient(135deg, rgba(239, 68, 68, 0.2) 0%, rgba(220, 38, 38, 0.08) 100%)' : 'rgba(255,255,255,0.03)',
+                color: sourceMode === 'youtube' ? '#fff' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: '0.85rem',
+                transition: 'all 0.2s ease',
+                boxShadow: sourceMode === 'youtube' ? '0 0 15px rgba(239, 68, 68, 0.2)' : 'none'
+              }}
             >
-              {loading ? (
-                <>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
-                    <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
-                  </svg>
-                  {t.form.processing}
-                </>
-              ) : (
-                <>
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                  </svg>
-                  {t.form.hackClips}
-                </>
-              )}
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style={{ color: '#ef4444' }}>
+                <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+              </svg>
+              {t.form.tabYoutube}
+            </button>
+
+            {/* Google Drive Tab */}
+            <button
+              type="button"
+              id="source-mode-gdrive"
+              className={`source-tab-btn ${sourceMode === 'gdrive' ? 'active' : ''}`}
+              onClick={() => {
+                setSourceMode('gdrive');
+                setError(null);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                padding: '0.55rem 1.1rem',
+                borderRadius: '10px',
+                border: sourceMode === 'gdrive' ? '1px solid rgba(16, 185, 129, 0.45)' : '1px solid rgba(255,255,255,0.08)',
+                background: sourceMode === 'gdrive' ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.2) 0%, rgba(5, 150, 105, 0.08) 100%)' : 'rgba(255,255,255,0.03)',
+                color: sourceMode === 'gdrive' ? '#fff' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: '0.85rem',
+                transition: 'all 0.2s ease',
+                boxShadow: sourceMode === 'gdrive' ? '0 0 15px rgba(16, 185, 129, 0.2)' : 'none'
+              }}
+            >
+              <svg width="17" height="17" viewBox="0 0 87.3 78" fill="none">
+                <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8H0c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+                <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44c-.8 1.4-1.2 2.95-1.2 4.5h27.5z" fill="#00ac47"/>
+                <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5H59.8l5.85 10.1z" fill="#ea4335"/>
+                <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+                <path d="m59.8 53h27.5c0-1.55-.4-3.1-1.2-4.5l-25.4-44c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8z" fill="#ffba00"/>
+                <path d="m73.55 76.8c1.35 0 2.9-.4 4.25-1.2l-14.1-22.6H27.5l13.75 23.8h32.3z" fill="#2684fc"/>
+              </svg>
+              {t.form.tabGdrive}
+            </button>
+
+            {/* Upload Video File Tab */}
+            <button
+              type="button"
+              id="source-mode-upload"
+              className={`source-tab-btn ${sourceMode === 'upload' ? 'active' : ''}`}
+              onClick={() => {
+                setSourceMode('upload');
+                setError(null);
+              }}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.5rem',
+                padding: '0.55rem 1.1rem',
+                borderRadius: '10px',
+                border: sourceMode === 'upload' ? '1px solid rgba(59, 130, 246, 0.4)' : '1px solid rgba(255,255,255,0.08)',
+                background: sourceMode === 'upload' ? 'linear-gradient(135deg, rgba(59, 130, 246, 0.2) 0%, rgba(37, 99, 235, 0.08) 100%)' : 'rgba(255,255,255,0.03)',
+                color: sourceMode === 'upload' ? '#fff' : 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontWeight: 600,
+                fontSize: '0.85rem',
+                transition: 'all 0.2s ease',
+                boxShadow: sourceMode === 'upload' ? '0 0 15px rgba(59, 130, 246, 0.2)' : 'none'
+              }}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ color: '#3b82f6' }}>
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="17 8 12 3 7 8"></polyline>
+                <line x1="12" y1="3" x2="12" y2="15"></line>
+              </svg>
+              {t.form.tabUpload}
             </button>
           </div>
+
+          {/* YouTube input mode */}
+          {sourceMode === 'youtube' && (
+            <div className="form-main-input-row">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.urlLabel}</label>
+                <input
+                  id="youtube-url-input"
+                  type="text"
+                  className="form-input"
+                  placeholder={t.form.urlPlaceholder}
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  disabled={loading}
+                  required={sourceMode === 'youtube'}
+                />
+              </div>
+              <button
+                id="analyze-btn"
+                type="submit"
+                className="glowing-btn"
+                disabled={loading || !url.trim()}
+                style={{ height: '48px', padding: '0 2.5rem' }}
+              >
+                {loading ? (
+                  <>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
+                      <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                    </svg>
+                    {t.form.processing}
+                  </>
+                ) : (
+                  <>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg>
+                    {t.form.hackClips}
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Google Drive input mode */}
+          {sourceMode === 'gdrive' && (
+            <div className="form-main-input-row">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <label style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--text-secondary)' }}>{t.form.gdriveUrlLabel}</label>
+                <input
+                  id="gdrive-url-input"
+                  type="text"
+                  className="form-input"
+                  placeholder={t.form.gdriveUrlPlaceholder}
+                  value={gdriveUrl}
+                  onChange={(e) => setGdriveUrl(e.target.value)}
+                  disabled={loading}
+                  required={sourceMode === 'gdrive'}
+                />
+                <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)', lineHeight: 1.3 }}>
+                  💡 {t.form.gdriveNotice}
+                </span>
+              </div>
+              <button
+                id="analyze-gdrive-btn"
+                type="submit"
+                className="glowing-btn"
+                disabled={loading || !gdriveUrl.trim()}
+                style={{ height: '48px', padding: '0 2.5rem' }}
+              >
+                {loading ? (
+                  <>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
+                      <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                    </svg>
+                    {t.form.processing}
+                  </>
+                ) : (
+                  <>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg>
+                    {t.form.hackClips}
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Upload Local Video mode */}
+          {sourceMode === 'upload' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              <input
+                type="file"
+                ref={videoFileInputRef}
+                accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    setUploadedVideoFile(file);
+                    setUploadedVideoInfo(null);
+                    setError(null);
+                  }
+                }}
+              />
+
+              {!uploadedVideoFile && !uploadedVideoInfo ? (
+                <div
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setIsDragOverVideo(true);
+                  }}
+                  onDragLeave={() => setIsDragOverVideo(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setIsDragOverVideo(false);
+                    const file = e.dataTransfer.files?.[0];
+                    if (file) {
+                      setUploadedVideoFile(file);
+                      setUploadedVideoInfo(null);
+                      setError(null);
+                    }
+                  }}
+                  onClick={() => videoFileInputRef.current?.click()}
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '0.85rem',
+                    padding: '2.5rem 1.5rem',
+                    borderRadius: '14px',
+                    border: isDragOverVideo ? '2px dashed #3b82f6' : '2px dashed rgba(255, 255, 255, 0.15)',
+                    background: isDragOverVideo ? 'rgba(59, 130, 246, 0.12)' : 'rgba(255, 255, 255, 0.02)',
+                    cursor: 'pointer',
+                    transition: 'all 0.25s ease'
+                  }}
+                >
+                  <div style={{
+                    width: '56px',
+                    height: '56px',
+                    borderRadius: '50%',
+                    background: 'rgba(59, 130, 246, 0.15)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#60a5fa'
+                  }}>
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                      <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                    </svg>
+                  </div>
+                  <div style={{ textAlign: 'center' }}>
+                    <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '0.25rem' }}>
+                      {t.form.dropVideoTitle}
+                    </div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      {t.form.dropVideoSubtitle}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="action-link-btn"
+                    style={{
+                      marginTop: '0.25rem',
+                      padding: '0.45rem 1.2rem',
+                      borderRadius: '8px',
+                      background: 'rgba(59, 130, 246, 0.2)',
+                      border: '1px solid rgba(59, 130, 246, 0.4)',
+                      color: '#93c5fd',
+                      fontSize: '0.82rem',
+                      fontWeight: 600
+                    }}
+                  >
+                    {t.form.chooseVideoFile}
+                  </button>
+                </div>
+              ) : (
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  padding: '1.25rem 1.5rem',
+                  borderRadius: '12px',
+                  background: 'rgba(59, 130, 246, 0.08)',
+                  border: '1px solid rgba(59, 130, 246, 0.25)',
+                  flexWrap: 'wrap',
+                  gap: '1rem'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', minWidth: 0 }}>
+                    <div style={{
+                      width: '44px',
+                      height: '44px',
+                      borderRadius: '10px',
+                      background: 'rgba(59, 130, 246, 0.2)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: '#60a5fa',
+                      flexShrink: 0
+                    }}>
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <polygon points="23 7 16 12 23 17 23 7"></polygon>
+                        <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+                      </svg>
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{
+                        fontSize: '0.95rem',
+                        fontWeight: 600,
+                        color: 'var(--text-primary)',
+                        whiteSpace: 'nowrap',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis'
+                      }}>
+                        {uploadedVideoFile?.name || uploadedVideoInfo?.filename}
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.5rem', fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.2rem', alignItems: 'center' }}>
+                        {uploadedVideoFile && (
+                          <span>📦 {(uploadedVideoFile.size / (1024 * 1024)).toFixed(1)} MB</span>
+                        )}
+                        {uploadedVideoInfo && uploadedVideoInfo.duration > 0 && (
+                          <span>⏱ {Math.round(uploadedVideoInfo.duration)}s</span>
+                        )}
+                        <span>•</span>
+                        <span style={{ color: '#10b981', fontWeight: 600 }}>✨ Whisper AI Auto-Transcribe</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUploadedVideoFile(null);
+                        setUploadedVideoInfo(null);
+                        if (videoFileInputRef.current) videoFileInputRef.current.value = '';
+                      }}
+                      disabled={loading}
+                      style={{
+                        padding: '0.5rem 1rem',
+                        borderRadius: '8px',
+                        background: 'rgba(255, 255, 255, 0.05)',
+                        border: '1px solid rgba(255, 255, 255, 0.1)',
+                        color: 'var(--text-secondary)',
+                        fontSize: '0.8rem',
+                        fontWeight: 600,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {t.form.changeVideo}
+                    </button>
+                    <button
+                      id="analyze-uploaded-btn"
+                      type="submit"
+                      className="glowing-btn"
+                      disabled={loading || isUploadingVideo}
+                      style={{ height: '42px', padding: '0 2rem' }}
+                    >
+                      {isUploadingVideo ? (
+                        <>
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
+                            <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                          </svg>
+                          {t.form.uploadingVideo}
+                        </>
+                      ) : loading ? (
+                        <>
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
+                            <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                          </svg>
+                          {t.form.processing}
+                        </>
+                      ) : (
+                        <>
+                          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                          </svg>
+                          {t.form.hackClips}
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="form-settings-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem' }}>
             {/* Card 1: AI Engine Configuration */}
@@ -2214,7 +2730,7 @@ Transcript:
                   style={{ accentColor: 'var(--primary)' }}
                   disabled={loading}
                 />
-                {t.form.autoFetchYoutube}
+                {sourceMode === 'youtube' ? t.form.autoFetchYoutube : t.form.autoTranscript}
               </label>
               <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontSize: '0.9rem', cursor: 'pointer' }}>
                 <input
@@ -3035,8 +3551,37 @@ Transcript:
             <div className="glass-panel" style={{ padding: '1.25rem', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
               <h2 style={{ fontSize: '1.25rem', lineHeight: 1.3 }}>{result.title}</h2>
 
-              <div id="youtube-player-container" className="video-wrapper" style={{ position: 'relative' }}>
-                <div id="youtube-player"></div>
+              <div className="video-wrapper" style={{ position: 'relative' }}>
+                {(result.video_url || result.source_type === 'upload' || result.source_type === 'gdrive' || result.video_id?.startsWith('upload_') || result.video_id?.startsWith('gdrive_')) ? (
+                  <video
+                    key={`direct-player-${result.video_id}`}
+                    ref={directVideoPlayerRef}
+                    src={result.video_url ? encodeURI(result.video_url) : `/api/video/${encodeURIComponent(result.video_id)}`}
+                    controls
+                    playsInline
+                    preload="auto"
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: 0,
+                      width: '100%',
+                      height: '100%',
+                      borderRadius: '8px',
+                      objectFit: 'contain',
+                      background: '#000',
+                      zIndex: 2
+                    }}
+                    onTimeUpdate={(e) => {
+                      setCurrentTime(e.currentTarget.currentTime);
+                    }}
+                    onPlay={() => startTracking()}
+                    onPause={() => stopTracking()}
+                  />
+                ) : (
+                  <div id="youtube-player-container" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}>
+                    <div id="youtube-player"></div>
+                  </div>
+                )}
                 {subtitlesSource === 'manual' && currentSubtitle && (
                   <div className="video-subtitle-overlay">
                     <span>{currentSubtitle.text}</span>
@@ -3813,7 +4358,7 @@ Transcript:
       {/* Embedded Clip Studio Section with side inline batch progress */}
       {result && (
         <ClipStudioSection
-          videoUrl={url}
+          videoUrl={result.video_url || url}
           videoId={result.video_id}
           allClips={result.clips}
           markedClips={markedClipsList}
@@ -3851,6 +4396,8 @@ Transcript:
         isOpen={Boolean(trimmerClip)}
         clip={trimmerClip}
         videoId={result?.video_id || ''}
+        videoUrl={result?.video_url}
+        sourceType={result?.source_type}
         videoTitle={result?.title}
         videoDuration={result?.duration || 0}
         transcript={result?.transcript}
