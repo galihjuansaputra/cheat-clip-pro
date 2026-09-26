@@ -398,6 +398,8 @@ export default function App() {
     analyzed_at: string;
     thumbnail: string;
     url: string;
+    source_type?: 'youtube' | 'upload' | 'gdrive';
+    video_url?: string;
     range_suffix?: string;
     summary?: string;
     clip_titles?: string[];
@@ -611,14 +613,34 @@ export default function App() {
           const clip_titles = (data.clips || []).map((c: any) => c.title || '').filter(Boolean);
           const key_quotes = (data.clips || []).flatMap((c: any) => c.key_quotes || []).filter(Boolean);
 
+          const isGDrive = data.source_type === 'gdrive' || video_id.startsWith('gdrive_');
+          const isUpload = data.source_type === 'upload' || video_id.startsWith('upload_');
+          const sourceType: 'youtube' | 'upload' | 'gdrive' = isGDrive ? 'gdrive' : (isUpload ? 'upload' : 'youtube');
+
+          // Determine appropriate link and thumbnail
+          let itemUrl = `https://www.youtube.com/watch?v=${video_id}`;
+          if (isGDrive) {
+            const gdriveIdMatch = video_id.match(/gdrive_([a-zA-Z0-9_-]+)/);
+            const gdriveId = gdriveIdMatch ? gdriveIdMatch[1] : '';
+            itemUrl = gdriveId ? `https://drive.google.com/file/d/${gdriveId}/view` : (data.video_url || '');
+          } else if (isUpload) {
+            itemUrl = data.video_url || `/api/video/${video_id}`;
+          }
+
+          const thumb = (isGDrive || isUpload)
+            ? `/api/frame/${encodeURIComponent(video_id)}?t=2`
+            : `https://img.youtube.com/vi/${video_id}/mqdefault.jpg`;
+
           entries.push({
             video_id,
             title: data.title,
             duration_pref,
             clip_count: data.clips?.length || 0,
             analyzed_at,
-            thumbnail: `https://img.youtube.com/vi/${video_id}/mqdefault.jpg`,
-            url: `https://www.youtube.com/watch?v=${video_id}`,
+            thumbnail: thumb,
+            url: itemUrl,
+            source_type: sourceType,
+            video_url: data.video_url,
             range_suffix,
             summary: data.summary || '',
             clip_titles,
@@ -646,7 +668,44 @@ export default function App() {
     if (!raw) return;
     try {
       const data: AnalyzeResponse = JSON.parse(raw);
-      setUrl(`https://www.youtube.com/watch?v=${entry.video_id}`);
+
+      const isGDrive = data.source_type === 'gdrive' || entry.source_type === 'gdrive' || entry.video_id.startsWith('gdrive_');
+      const isUpload = data.source_type === 'upload' || entry.source_type === 'upload' || entry.video_id.startsWith('upload_');
+
+      if (isGDrive) {
+        setSourceMode('gdrive');
+        setUrl('');
+        const gdriveIdMatch = entry.video_id.match(/gdrive_([a-zA-Z0-9_-]+)/);
+        const gdriveId = gdriveIdMatch ? gdriveIdMatch[1] : '';
+        const targetGDriveUrl = (entry.url && entry.url.includes('drive.google.com'))
+          ? entry.url
+          : (gdriveId ? `https://drive.google.com/file/d/${gdriveId}/view` : entry.video_id);
+        setGdriveUrl(targetGDriveUrl);
+        setUploadedVideoInfo(null);
+        setUploadedVideoFile(null);
+      } else if (isUpload) {
+        setSourceMode('upload');
+        setUrl('');
+        setGdriveUrl('');
+        setUploadedVideoInfo({
+          videoId: data.video_id,
+          filename: data.title || data.video_id,
+          savedName: data.video_url?.replace('/api/video/', '') || data.video_id,
+          duration: data.duration,
+          videoUrl: data.video_url || `/api/video/${data.video_id}`,
+          filePath: '',
+          width: 1080,
+          height: 1920
+        });
+        setUploadedVideoFile(null);
+      } else {
+        setSourceMode('youtube');
+        setUrl(entry.url || `https://www.youtube.com/watch?v=${entry.video_id}`);
+        setGdriveUrl('');
+        setUploadedVideoInfo(null);
+        setUploadedVideoFile(null);
+      }
+
       setDurationPref((entry.duration_pref as '15s' | '30s' | '60s' | 'auto') || '30s');
 
       // Restore clip count mode
@@ -3098,6 +3157,9 @@ Transcript:
                           <img
                             src={entry.thumbnail}
                             alt=""
+                            onError={(e) => {
+                              (e.target as HTMLImageElement).src = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="84" height="48" viewBox="0 0 84 48"><rect width="84" height="48" fill="%231e1e2d"/><polygon points="36,18 52,24 36,30" fill="%236366f1"/></svg>';
+                            }}
                             style={{ width: '84px', height: '48px', objectFit: 'cover', borderRadius: '7px', background: '#111', display: 'block' }}
                           />
                           <span style={{
@@ -3135,15 +3197,31 @@ Transcript:
                             <span>•</span>
                             <span>🕓 {formatRelativeTime(entry.analyzed_at)}</span>
                             <span>•</span>
-                            <a
-                              href={entry.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              onClick={(e) => e.stopPropagation()}
-                              style={{ color: 'var(--primary)', textDecoration: 'none', opacity: 0.8 }}
-                            >
-                              🔗 YouTube
-                            </a>
+                            {entry.source_type === 'gdrive' ? (
+                              <a
+                                href={entry.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ color: '#10b981', textDecoration: 'none', opacity: 0.9, fontWeight: 600 }}
+                              >
+                                🔗 Google Drive
+                              </a>
+                            ) : entry.source_type === 'upload' ? (
+                              <span style={{ color: '#3b82f6', opacity: 0.9, fontWeight: 600 }}>
+                                📁 Local Video
+                              </span>
+                            ) : (
+                              <a
+                                href={entry.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={(e) => e.stopPropagation()}
+                                style={{ color: 'var(--primary)', textDecoration: 'none', opacity: 0.85, fontWeight: 600 }}
+                              >
+                                🔗 YouTube
+                              </a>
+                            )}
                           </div>
 
                           {/* Matched clip/quote search preview */}

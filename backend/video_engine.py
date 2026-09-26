@@ -938,7 +938,7 @@ def transcribe_clip_words(
     Timestamps are mapped relative to the sliced clip audio (0.0s = clip_start_time).
     Whisper is only used as a fallback if no video transcript is available.
     """
-    # 1. Primary: Use the analyzed video transcript (exact matches from YouTube)
+    # 1. Primary: Use the analyzed video transcript (exact matches from YouTube / Whisper)
     if fallback_transcript:
         words = []
         for line in fallback_transcript:
@@ -951,27 +951,44 @@ def transcribe_clip_words(
                 continue
 
             l_start = float(line.get("start", 0.0))
-            l_dur = float(line.get("duration", 2.0))
-            l_end = l_start + l_dur
+            if "end" in line and float(line.get("end", 0.0)) > l_start:
+                l_end = float(line.get("end", 0.0))
+            elif "duration" in line and float(line.get("duration", 0.0)) > 0:
+                l_end = l_start + float(line.get("duration", 0.0))
+            else:
+                words_cnt = max(1, len(cleaned_line.split()))
+                l_end = l_start + max(1.8, words_cnt * 0.38)
 
             # If clip range is defined, filter lines overlapping the clip
             if clip_end_time > clip_start_time:
-                if l_end < clip_start_time - 0.2 or l_start > clip_end_time + 0.2:
+                if l_end <= clip_start_time or l_start >= clip_end_time:
                     continue
-                # Shift timestamps relative to clip start (0.0)
-                rel_start = max(0.0, l_start - clip_start_time)
-                rel_end = max(rel_start + 0.15, l_end - clip_start_time)
-            else:
-                rel_start = max(0.0, l_start)
-                rel_end = max(rel_start + 0.15, l_end)
 
             line_words = cleaned_line.split()
             if not line_words:
                 continue
-            w_duration = max(0.12, (rel_end - rel_start) / len(line_words))
+
+            # Distribute words realistically across the line duration based on character length
+            line_dur = max(0.2, l_end - l_start)
+            total_chars = max(1, sum(max(1, len(w)) for w in line_words))
+            cur_time = l_start
+
             for i, w in enumerate(line_words):
-                w_s = rel_start + (i * w_duration)
-                w_e = w_s + w_duration
+                w_dur = max(0.15, (max(1, len(w)) / total_chars) * line_dur)
+                w_s_global = cur_time
+                w_e_global = cur_time + w_dur
+                cur_time = w_e_global
+
+                if clip_end_time > clip_start_time:
+                    # Exclude words that fall completely outside the clip
+                    if w_e_global <= clip_start_time or w_s_global >= clip_end_time:
+                        continue
+                    w_s = max(0.0, w_s_global - clip_start_time)
+                    w_e = max(w_s + 0.12, min(clip_end_time - clip_start_time, w_e_global - clip_start_time))
+                else:
+                    w_s = max(0.0, w_s_global)
+                    w_e = max(w_s + 0.12, w_e_global)
+
                 words.append({
                     "word": w,
                     "start": round(w_s, 2),
