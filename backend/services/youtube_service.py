@@ -79,7 +79,7 @@ def normalize_transcript(fetched_data) -> List[dict]:
 
 def fetch_transcript_cli(
     video_id: str,
-    priority_langs: List[str],
+    priority_langs: Optional[List[str]] = None,
     proxy_url: Optional[str] = None,
     custom_proxy: Optional[str] = None,
     timeout: int = 20
@@ -455,10 +455,21 @@ def fetch_transcript_ytdlp(video_id: str, proxy: Optional[str] = None) -> List[d
             subtitles = info.get('subtitles') or {}
             auto_subtitles = info.get('automatic_captions') or {}
             
-            priority_langs = ['id', 'en', 'es', 'pt', 'fr', 'de', 'ja', 'ko', 'zh-Hans', 'zh-Hant', 'ar', 'hi', 'ru']
+            # Identify the video's native audio language
+            audio_lang = (info.get('audio_language') or info.get('language') or '').lower().split('-')[0]
+            
+            # Build priority: native language first, then whatever matches
+            langs_to_try = []
+            if audio_lang:
+                langs_to_try.append(audio_lang)
+            for l in ['en', 'id', 'es', 'pt', 'fr', 'de', 'ja', 'ko', 'zh-Hans', 'zh-Hant', 'ar', 'hi', 'ru']:
+                if l not in langs_to_try:
+                    langs_to_try.append(l)
+
+            # Manual subtitles first, then auto captions in native language
             for lang_dict, is_auto in [(subtitles, False), (auto_subtitles, True)]:
-                langs_to_try = [l for l in priority_langs if l in lang_dict] + [l for l in lang_dict if l not in priority_langs]
-                for lang in langs_to_try:
+                ordered_langs = [l for l in langs_to_try if l in lang_dict] + [l for l in lang_dict if l not in langs_to_try]
+                for lang in ordered_langs:
                     formats = lang_dict.get(lang) or []
                     json3_entry = next((f['url'] for f in formats if f.get('ext') == 'json3'), None)
                     if json3_entry:
@@ -537,48 +548,40 @@ def fetch_transcript(
             client = create_http_client(timeout=15.0)
             proxy_api = YouTubeTranscriptApi(proxy_config=proxy_cfg, http_client=client)
 
-            # 2a. Direct language match
-            try:
-                data = proxy_api.fetch(video_id, languages=priority_langs)
-                res = normalize_transcript(data)
-                if res:
-                    _shared_cookie_jar.update(client.cookies)
-                    logger.info(f"[Tier 2a] Transcript fetched via proxy Python API direct: {len(res)} lines")
-                    return res
-            except Exception as direct_err:
-                logger.info(f"[Tier 2a] Proxy direct language fetch missed: {direct_err}")
-
-            # 2b. List all transcripts & try fetching manual, then auto
+            # 2. List all transcripts to identify original video speech language
             try:
                 transcripts = list(proxy_api.list(video_id))
-                manual = [t for t in transcripts if not getattr(t, 'is_generated', False)]
                 generated = [t for t in transcripts if getattr(t, 'is_generated', False)]
+                manual = [t for t in transcripts if not getattr(t, 'is_generated', False)]
+                
+                # The video's true spoken language is the language of the YouTube ASR generated track
+                native_code = generated[0].language_code if generated else (manual[0].language_code if manual else None)
+                
+                # Priority: manual transcript in native language, then generated native transcript
+                target_tracks = []
+                if native_code:
+                    for t in manual:
+                        if t.language_code == native_code or t.language_code.startswith(f"{native_code}-"):
+                            target_tracks.append(t)
+                    for t in generated:
+                        if t.language_code == native_code or t.language_code.startswith(f"{native_code}-"):
+                            target_tracks.append(t)
+                
+                # Fallback to any available original tracks (NO translation to other languages)
                 for t in (manual + generated):
+                    if t not in target_tracks:
+                        target_tracks.append(t)
+                
+                for t in target_tracks:
                     try:
                         data = t.fetch()
                         res = normalize_transcript(data)
                         if res:
                             _shared_cookie_jar.update(client.cookies)
-                            logger.info(f"[Tier 2b] Transcript fetched via proxy Python API list ({t.language}): {len(res)} lines")
+                            logger.info(f"[Tier 2] Transcript fetched via proxy Python API ({t.language_code} - {t.language}): {len(res)} lines")
                             return res
                     except Exception:
                         continue
-
-                # 2c. Translation fallback: translate any translatable track to 'id' or 'en'
-                for t in transcripts:
-                    if getattr(t, 'is_translatable', False):
-                        for target_lang in ['id', 'en']:
-                            try:
-                                notify("Tier 2/7: Translating Captions", f"Translating available {t.language} track to {target_lang} via proxy...", 52)
-                                translated = t.translate(target_lang)
-                                data = translated.fetch()
-                                res = normalize_transcript(data)
-                                if res:
-                                    _shared_cookie_jar.update(client.cookies)
-                                    logger.info(f"[Tier 2c] Transcript translated via proxy Python API ({t.language} -> {target_lang}): {len(res)} lines")
-                                    return res
-                            except Exception:
-                                continue
 
                 attempt_history.append(f"Tier 2 (Proxy Python API): No accessible track in {len(transcripts)} tracks")
             except Exception as list_err:
@@ -593,7 +596,7 @@ def fetch_transcript(
         try:
             cli_data = fetch_transcript_cli(
                 video_id,
-                priority_langs,
+                priority_langs=None,
                 proxy_url=proxy_url,
                 custom_proxy=custom_proxy,
                 timeout=20
@@ -630,45 +633,38 @@ def fetch_transcript(
         direct_api = YouTubeTranscriptApi(http_client=direct_client)
 
         try:
-            data = direct_api.fetch(video_id, languages=priority_langs)
-            res = normalize_transcript(data)
-            if res:
-                _shared_cookie_jar.update(direct_client.cookies)
-                logger.info(f"[Tier 5a] Transcript fetched via direct Python API: {len(res)} lines")
-                return res
-        except Exception:
-            pass
-
-        try:
             all_transcripts = list(direct_api.list(video_id))
-            manual = [t for t in all_transcripts if not getattr(t, 'is_generated', False)]
             generated = [t for t in all_transcripts if getattr(t, 'is_generated', False)]
-            for transcript in (manual + generated):
+            manual = [t for t in all_transcripts if not getattr(t, 'is_generated', False)]
+            
+            # The video's true spoken language is the language of the YouTube ASR generated track
+            native_code = generated[0].language_code if generated else (manual[0].language_code if manual else None)
+            
+            # Priority: manual transcript in native language, then generated native transcript
+            target_tracks = []
+            if native_code:
+                for t in manual:
+                    if t.language_code == native_code or t.language_code.startswith(f"{native_code}-"):
+                        target_tracks.append(t)
+                for t in generated:
+                    if t.language_code == native_code or t.language_code.startswith(f"{native_code}-"):
+                        target_tracks.append(t)
+            
+            # Fallback to any available original tracks (NO translation to other languages)
+            for t in (manual + generated):
+                if t not in target_tracks:
+                    target_tracks.append(t)
+            
+            for transcript in target_tracks:
                 try:
                     data = transcript.fetch()
                     res = normalize_transcript(data)
                     if res:
                         _shared_cookie_jar.update(direct_client.cookies)
-                        logger.info(f"[Tier 5b] Transcript fetched via direct list ({transcript.language}): {len(res)} lines")
+                        logger.info(f"[Tier 5] Transcript fetched via direct list ({transcript.language_code} - {transcript.language}): {len(res)} lines")
                         return res
                 except Exception:
                     continue
-
-            # Direct translation fallback
-            for t in all_transcripts:
-                if getattr(t, 'is_translatable', False):
-                    for target_lang in ['id', 'en']:
-                        try:
-                            notify("Tier 5/7: Translating Captions", f"Translating available {t.language} track to {target_lang} directly...", 84)
-                            translated = t.translate(target_lang)
-                            data = translated.fetch()
-                            res = normalize_transcript(data)
-                            if res:
-                                _shared_cookie_jar.update(direct_client.cookies)
-                                logger.info(f"[Tier 5c] Transcript translated via direct list ({t.language} -> {target_lang}): {len(res)} lines")
-                                return res
-                        except Exception:
-                            continue
 
             attempt_history.append(f"Tier 5 (Direct Python API): No accessible track in {len(all_transcripts)} tracks")
         except Exception as list_err:
@@ -681,7 +677,7 @@ def fetch_transcript(
     # ── Tier 6: Direct YouTubeTranscriptApi CLI Subprocess ────────────────────
     notify("Tier 6/7: Direct CLI Subprocess", "Trying Method 6/7: Direct isolated CLI subprocess...", 88)
     try:
-        direct_cli_data = fetch_transcript_cli(video_id, priority_langs, proxy_url=None, timeout=15)
+        direct_cli_data = fetch_transcript_cli(video_id, priority_langs=None, proxy_url=None, timeout=15)
         if direct_cli_data:
             logger.info(f"[Tier 6] Transcript fetched via direct CLI subprocess: {len(direct_cli_data)} lines")
             return direct_cli_data

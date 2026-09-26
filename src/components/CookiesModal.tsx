@@ -50,19 +50,40 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
 
   if (!isOpen) return null;
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const readFileContent = (file: File) => {
     const reader = new FileReader();
     reader.onload = (event) => {
-      const content = event.target?.result as string;
-      setCookieText(content || '');
-      setMessage({
-        text: t.cookies.fileLoadedInfo(file.name, (content.length / 1024).toFixed(1)),
-        type: 'info'
-      });
+      const buffer = event.target?.result as ArrayBuffer;
+      if (!buffer) return;
+      const bytes = new Uint8Array(buffer);
+      let encoding = 'utf-8';
+      if (bytes.length >= 2) {
+        if (bytes[0] === 0xFF && bytes[1] === 0xFE) {
+          encoding = 'utf-16le';
+        } else if (bytes[0] === 0xFE && bytes[1] === 0xFF) {
+          encoding = 'utf-16be';
+        } else if (bytes[1] === 0x00) {
+          encoding = 'utf-16le';
+        }
+      }
+      try {
+        const decoder = new TextDecoder(encoding);
+        let content = decoder.decode(bytes).replace(/\ufeff/g, '').replace(/\0/g, '');
+        setCookieText(content);
+        setMessage({
+          text: t.cookies.fileLoadedInfo(file.name, (content.length / 1024).toFixed(1)),
+          type: 'info'
+        });
+      } catch (err: any) {
+        setMessage({ text: `Failed to read file: ${err.message}`, type: 'error' });
+      }
     };
-    reader.readAsText(file);
+    reader.readAsArrayBuffer(file);
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) readFileContent(file);
   };
 
   const handleSave = async () => {
@@ -203,7 +224,7 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
                 {t.cookies.chooseFile}
                 <input
                   type="file"
-                  accept=".txt"
+                  accept=".txt,.json,text/plain,application/json"
                   onChange={handleFileUpload}
                   style={{ display: 'none' }}
                 />
@@ -214,9 +235,19 @@ export const CookiesModal: React.FC<CookiesModalProps> = ({
             <textarea
               className="cookies-textarea"
               rows={7}
-              placeholder={`# Netscape HTTP Cookie File\n# http://curl.haxx.se/rfc/cookie_spec.html\n.youtube.com\tTRUE\t/\tTRUE\t1750000000\tSID\t...\n.youtube.com\tTRUE\t/\tTRUE\t1750000000\tHSID\t...`}
+              placeholder={`# Netscape HTTP Cookie File (.txt) or JSON format (.json):\n# http://curl.haxx.se/rfc/cookie_spec.html\n.youtube.com\tTRUE\t/\tTRUE\t1750000000\tSID\t...\n\n# Or paste JSON format from Cookie-Editor / EditThisCookie:\n[{"domain": ".youtube.com", "name": "SID", "value": "..."}]`}
               value={cookieText}
               onChange={(e) => setCookieText(e.target.value)}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const file = e.dataTransfer.files?.[0];
+                if (file) readFileContent(file);
+              }}
             />
 
             <div className="cookies-guide-card">
