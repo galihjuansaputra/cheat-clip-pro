@@ -29,6 +29,7 @@ from backend.services.system_service import (
 )
 from backend.services.youtube_service import (
     check_single_supadata_key,
+    download_youtube_audio_file,
     fetch_transcript,
     fetch_transcript_cli,
     fetch_transcript_supadata,

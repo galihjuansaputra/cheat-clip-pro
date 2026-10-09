@@ -41,6 +41,7 @@ from backend.services.system_service import (
     is_update_allowed,
 )
 from backend.services.youtube_service import (
+    download_youtube_audio_file,
     fetch_transcript,
     fetch_video_metadata,
     get_supadata_keys,
@@ -648,21 +649,130 @@ async def analyze_video(request: AnalyzeRequest):
                             "detail": "Mock mode — 9 sample dialogue lines loaded.",
                             "message": "Mock mode — using sample transcript."
                         })
+                    elif is_live or live_status in ('is_live', 'is_upcoming', 'post_live'):
+                        yield _sse({
+                            "error": (
+                                "No subtitles could be retrieved because this video is currently live, "
+                                "upcoming, or recently completed (post-live processing). Subtitles are only "
+                                "available once the live stream ends and YouTube finishes processing the video. "
+                                "You can upload custom subtitles manually to analyze this video."
+                            ),
+                            "status": 400
+                        })
+                        return
                     else:
-                        if is_live or live_status in ('is_live', 'is_upcoming', 'post_live'):
+                        # ── Automatic Whisper AI Neural Speech Recognition Fallback ───
+                        logger.info(f"Direct subtitles unavailable for {video_id}. Attempting automatic Whisper AI speech transcription fallback...")
+                        yield _sse({
+                            "step": 3,
+                            "step_progress": 35,
+                            "overall_progress": 56,
+                            "stage": "AI Speech Fallback",
+                            "detail": "Direct YouTube subtitles restricted (Bot check / No CC). Downloading audio track & transcribing with Whisper AI...",
+                            "message": "Direct subtitles restricted — downloading audio & running Whisper AI..."
+                        })
+
+                        audio_path = None
+                        try:
+                            whisper_audio_queue = asyncio.Queue()
+                            def audio_dl_progress(stage: str, detail: str, step_pct: int = 40):
+                                loop.call_soon_threadsafe(whisper_audio_queue.put_nowait, {
+                                    "step": 3,
+                                    "step_progress": step_pct,
+                                    "overall_progress": min(62, 54 + int(step_pct * 0.12)),
+                                    "stage": stage,
+                                    "detail": detail,
+                                    "message": detail
+                                })
+
+                            audio_dl_task = asyncio.create_task(
+                                asyncio.to_thread(download_youtube_audio_file, video_id, None, request.proxy, request.cookies, audio_dl_progress)
+                            )
+                            while not audio_dl_task.done():
+                                try:
+                                    evt = await asyncio.wait_for(whisper_audio_queue.get(), timeout=0.2)
+                                    yield _sse(evt)
+                                except asyncio.TimeoutError:
+                                    pass
+                            while not whisper_audio_queue.empty():
+                                yield _sse(whisper_audio_queue.get_nowait())
+
+                            audio_path = await audio_dl_task
+                        except Exception as dl_err:
+                            logger.warning(f"Audio download for Whisper failed: {dl_err}")
+
+                        if audio_path and Path(audio_path).exists():
                             yield _sse({
-                                "error": (
-                                    "No subtitles could be retrieved because this video is currently live, "
-                                    "upcoming, or recently completed (post-live processing). Subtitles are only "
-                                    "available once the live stream ends and YouTube finishes processing the video. "
-                                    "You can upload custom subtitles manually to analyze this video."
-                                ),
-                                "status": 400
+                                "step": 3,
+                                "step_progress": 60,
+                                "overall_progress": 60,
+                                "stage": "Transcribing with Whisper",
+                                "detail": "Running OpenAI Whisper neural speech model on video audio track...",
+                                "message": "Transcribing dialogue with Whisper AI..."
                             })
+
+                            whisper_trans_queue = asyncio.Queue()
+                            def whisper_trans_progress(stage: str, detail: str, step_pct: int = 50):
+                                loop.call_soon_threadsafe(whisper_trans_queue.put_nowait, {
+                                    "step": 3,
+                                    "step_progress": step_pct,
+                                    "overall_progress": min(68, 58 + int(step_pct * 0.12)),
+                                    "stage": stage,
+                                    "detail": detail,
+                                    "message": detail
+                                })
+
+                            try:
+                                w_task = asyncio.create_task(
+                                    asyncio.to_thread(transcribe_local_video_file, audio_path, whisper_trans_progress)
+                                )
+                                while not w_task.done():
+                                    try:
+                                        evt = await asyncio.wait_for(whisper_trans_queue.get(), timeout=0.2)
+                                        yield _sse(evt)
+                                    except asyncio.TimeoutError:
+                                        pass
+                                while not whisper_trans_queue.empty():
+                                    yield _sse(whisper_trans_queue.get_nowait())
+
+                                transcript_lines = await w_task
+                            except Exception as w_err:
+                                logger.warning(f"Whisper transcription failed: {w_err}")
+                                transcript_lines = []
+
+                            if transcript_lines:
+                                if duration <= 0.0:
+                                    try:
+                                        audio_meta = await asyncio.to_thread(get_video_file_metadata, audio_path)
+                                        duration = float(audio_meta.get("duration") or 0.0)
+                                    except Exception:
+                                        pass
+                                    if duration <= 0.0 and transcript_lines:
+                                        last = transcript_lines[-1]
+                                        duration = float(last.get("start", 0.0) + last.get("duration", 0.0))
+
+                                if (not heatmap or len(heatmap) == 0) and duration > 0.0:
+                                    try:
+                                        heatmap = await asyncio.to_thread(compute_audio_energy_heatmap, audio_path, duration)
+                                    except Exception as hm_err:
+                                        logger.warning(f"Heatmap calculation from audio failed: {hm_err}")
+
+                                yield _sse({
+                                    "step": 3,
+                                    "step_progress": 100,
+                                    "overall_progress": 70,
+                                    "stage": "Subtitles Ready",
+                                    "detail": f"Whisper speech-to-text complete — {len(transcript_lines)} dialogue sentences with timestamps ready.",
+                                    "message": f"Whisper transcribed {len(transcript_lines)} lines parsed successfully."
+                                })
+                            else:
+                                msg = e.detail if isinstance(e, HTTPException) else str(e)
+                                yield _sse({"error": f"Speech transcription failed: {msg}", "status": 400})
+                                return
                         else:
                             msg = e.detail if isinstance(e, HTTPException) else str(e)
                             yield _sse({"error": msg, "status": 400})
-                        return
+                            return
 
         # Estimate duration from transcript if missing
         if duration == 0.0 and transcript_lines:

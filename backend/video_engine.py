@@ -397,10 +397,10 @@ def get_yt_dlp_base_cmd(
     elif shutil.which("node"):
         cmd.extend(["--js-runtimes", "node"])
 
-    # Prevent 'The page needs to be reloaded. Please try again later.'
-    # by allowing yt-dlp to fall back from default/tv_downgraded to web_embedded and ios client APIs.
+    # Prevent 'Sign in to confirm you are not a bot' and 'The page needs to be reloaded'
+    # by allowing yt-dlp to fall back to android, ios, web_embedded, and mweb client APIs.
     cmd.extend([
-        "--extractor-args", "youtube:player_client=default,web_embedded,ios",
+        "--extractor-args", "youtube:player_client=android,ios,web_embedded,mweb,web",
         "--force-ipv4"
     ])
 

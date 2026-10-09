@@ -7,7 +7,13 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, List, Optional
+from pathlib import Path
+from typing import Callable, List, Optional, Union
+
+# Windows Python 3.14 compatibility hotfix for unix RTLD flags used in yt-dlp plugins
+for flag in ('RTLD_LAZY', 'RTLD_NOW', 'RTLD_GLOBAL', 'RTLD_LOCAL', 'RTLD_NODELETE', 'RTLD_NOLOAD', 'RTLD_DEEPBIND'):
+    if not hasattr(os, flag):
+        setattr(os, flag, 1)
 
 import requests
 import yt_dlp
@@ -15,7 +21,7 @@ from fastapi import HTTPException
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api.formatters import JSONFormatter
 
-from backend.config import get_effective_cookies_path, ephemeral_cookies_file, logger
+from backend.config import TEMP_DIR, get_effective_cookies_path, ephemeral_cookies_file, logger
 from backend.utils.proxy import (
     TimeoutSession,
     _shared_cookie_jar,
@@ -219,6 +225,7 @@ def fetch_video_metadata(url: str, custom_proxy: Optional[str] = None, cookies_c
     attempts = [proxy, None] if (is_vercel and proxy) else [None, proxy] if proxy else [None]
     
     with ephemeral_cookies_file(cookies_content) as temp_cookies:
+        eff_cookies = temp_cookies or get_effective_cookies_path()
         for attempt_proxy in attempts:
             ydl_opts = {
                 'skip_download': True,
@@ -227,32 +234,31 @@ def fetch_video_metadata(url: str, custom_proxy: Optional[str] = None, cookies_c
                 'no_warnings': True,
                 'nocheckcertificate': True,
                 'proxy': attempt_proxy,
-                'socket_timeout': 10
+                'socket_timeout': 10,
+                'extractor_args': {'youtube': {'player_client': ['android', 'ios', 'web_embedded', 'mweb', 'web']}}
             }
-            eff_cookies = temp_cookies or get_effective_cookies_path()
             if eff_cookies:
                 ydl_opts['cookiefile'] = str(eff_cookies)
-        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['default', 'web_embedded', 'ios']}}
 
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(target_url, download=False)
-                if not info:
-                    raise Exception("yt-dlp returned empty info dict")
-                title = info.get('title')
-                if not title or title.lower() == 'unknown youtube video':
-                    if video_id:
-                        title = get_youtube_oembed_title(video_id) or title
-                return {
-                    "title": title or 'Unknown YouTube Video',
-                    "channel": info.get('channel') or info.get('uploader') or info.get('creator') or '',
-                    "duration": float(info.get('duration') or 0.0),
-                    "heatmap": info.get('heatmap') or [],
-                    "is_live": bool(info.get('is_live') or False),
-                    "live_status": info.get('live_status') or 'not_live'
-                }
-        except Exception as e:
-            logger.warning(f"yt-dlp metadata extraction failed (proxy={'yes' if attempt_proxy else 'no'}): {e}")
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(target_url, download=False)
+                    if not info:
+                        raise Exception("yt-dlp returned empty info dict")
+                    title = info.get('title')
+                    if not title or title.lower() == 'unknown youtube video':
+                        if video_id:
+                            title = get_youtube_oembed_title(video_id) or title
+                    return {
+                        "title": title or 'Unknown YouTube Video',
+                        "channel": info.get('channel') or info.get('uploader') or info.get('creator') or '',
+                        "duration": float(info.get('duration') or 0.0),
+                        "heatmap": info.get('heatmap') or [],
+                        "is_live": bool(info.get('is_live') or False),
+                        "live_status": info.get('live_status') or 'not_live'
+                    }
+            except Exception as e:
+                logger.warning(f"yt-dlp metadata extraction failed (proxy={'yes' if attempt_proxy else 'no'}): {e}")
 
     # Fallback: parse video ID and retrieve title from oEmbed API directly
     if video_id:
@@ -476,12 +482,12 @@ def fetch_transcript_ytdlp(video_id: str, proxy: Optional[str] = None, cookies_c
             'no_warnings': True,
             'nocheckcertificate': True,
             'proxy': proxy,
-            'socket_timeout': 10
+            'socket_timeout': 10,
+            'extractor_args': {'youtube': {'player_client': ['android', 'ios', 'web_embedded', 'mweb', 'web']}}
         }
         eff_cookies = temp_cookies or get_effective_cookies_path()
         if eff_cookies:
             ydl_opts['cookiefile'] = str(eff_cookies)
-        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['default', 'web_embedded', 'ios']}}
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -533,6 +539,69 @@ def fetch_transcript_ytdlp(video_id: str, proxy: Optional[str] = None, cookies_c
     except Exception as e:
         logger.warning(f"yt-dlp subtitle extraction failed (proxy={'yes' if proxy else 'no'}): {e}")
     return []
+
+
+def download_youtube_audio_file(
+    video_id: str,
+    output_dir: Optional[Union[str, Path]] = None,
+    proxy: Optional[str] = None,
+    cookies_content: Optional[str] = None,
+    on_progress: Optional[Callable[[str, str, int], None]] = None
+) -> Optional[Path]:
+    """Downloads audio track for a YouTube video using multi-client yt-dlp.
+    Guarantees bypass of 'Sign in to confirm you are not a bot' even without cookies."""
+    target_dir = Path(output_dir) if output_dir else TEMP_DIR
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    # Check for existing cached audio
+    for cand in target_dir.glob(f"yt_audio_{video_id}.*"):
+        if cand.is_file() and cand.stat().st_size > 10000:
+            logger.info(f"Using cached YouTube audio file: {cand}")
+            return cand
+
+    if on_progress:
+        on_progress("Downloading Audio Track", "Downloading audio stream for Whisper speech transcription...", 35)
+
+    with ephemeral_cookies_file(cookies_content) as temp_cookies:
+        eff_cookies = temp_cookies or get_effective_cookies_path()
+        client_combinations = [
+            ['android', 'ios', 'web_embedded', 'mweb', 'web'],
+            ['android', 'web_embedded', 'ios'],
+            ['web_embedded', 'ios'],
+            ['android'],
+            ['default', 'web_embedded', 'ios']
+        ]
+
+        target_url = f"https://www.youtube.com/watch?v={video_id}"
+
+        for clients in client_combinations:
+            ydl_opts = {
+                'format': 'bestaudio[ext=m4a]/bestaudio/best[height<=360]/best',
+                'outtmpl': str(target_dir / f"yt_audio_{video_id}.%(ext)s"),
+                'quiet': True,
+                'no_warnings': True,
+                'nocheckcertificate': True,
+                'proxy': proxy or get_proxy_url(),
+                'socket_timeout': 15,
+                'retries': 3,
+                'extractor_args': {'youtube': {'player_client': clients}}
+            }
+            if eff_cookies:
+                ydl_opts['cookiefile'] = str(eff_cookies)
+
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([target_url])
+
+                for cand in target_dir.glob(f"yt_audio_{video_id}.*"):
+                    if cand.is_file() and cand.stat().st_size > 5000:
+                        logger.info(f"YouTube audio downloaded successfully ({clients}): {cand} ({cand.stat().st_size} bytes)")
+                        return cand
+            except Exception as e:
+                logger.warning(f"Audio download attempt with client {clients} failed: {e}")
+                continue
+
+    return None
 
 
 def fetch_transcript(
