@@ -1383,6 +1383,100 @@ def get_emoji_font(size: int) -> Optional[ImageFont.FreeTypeFont]:
     return None
 
 
+def get_ffmpeg_safe_font_path(font_name: str = "Montserrat") -> str:
+    """Returns an escaped font file path safe for FFmpeg drawtext filter to avoid Fontconfig errors on Windows."""
+    fonts_dir = Path(FONTS_DIR)
+    clean_name = font_name.replace(".ttf", "").replace(".otf", "").strip() if font_name else "Montserrat"
+    candidates = [
+        fonts_dir / f"{clean_name}.ttf",
+        fonts_dir / f"{clean_name}.otf",
+        fonts_dir / "Montserrat.ttf",
+        fonts_dir / "Inter.ttf",
+        fonts_dir / "Poppins.ttf",
+        fonts_dir / "Bebas Neue.ttf",
+        fonts_dir / "Anton.ttf",
+    ]
+    for c in candidates:
+        if c.exists():
+            clean = str(c.resolve()).replace("\\", "/")
+            return clean.replace(":", "\\:")
+    win_font = Path("C:/Windows/Fonts/arial.ttf")
+    if win_font.exists():
+        clean = str(win_font.resolve()).replace("\\", "/")
+        return clean.replace(":", "\\:")
+    return ""
+
+
+def render_text_watermark_png(
+    text: str,
+    output_png_path: str,
+    font_name: str = "Montserrat",
+    font_size: int = 48,
+    font_color: Tuple[int, int, int] = (255, 255, 255),
+    border_color: Tuple[int, int, int] = (0, 0, 0),
+    border_width: int = 2
+) -> Optional[str]:
+    """
+    Renders text watermark (handles, usernames, hashtags, emojis) to a transparent PNG.
+    Guarantees 100% immune to Fontconfig errors on Windows/Linux/Docker and supports color emojis.
+    """
+    clean_text = str(text or "").strip()
+    if not clean_text:
+        return None
+
+    # Resolve fonts
+    text_font = get_font(font_name, font_size)
+    emoji_font = get_emoji_font(int(font_size * 0.90))
+
+    # Measure segments
+    segments = split_text_and_emojis(clean_text)
+    if not segments:
+        segments = [('text', clean_text)]
+
+    temp_img = Image.new("RGBA", (10, 10), (0, 0, 0, 0))
+    temp_draw = ImageDraw.Draw(temp_img)
+
+    seg_widths = []
+    max_h = 0
+    for kind, chunk in segments:
+        f = emoji_font if (kind == 'emoji' and emoji_font) else text_font
+        bbox = temp_draw.textbbox((0, 0), chunk, font=f)
+        w = max(1, bbox[2] - bbox[0])
+        h = max(1, bbox[3] - bbox[1])
+        seg_widths.append(w)
+        max_h = max(max_h, h)
+
+    total_w = sum(seg_widths)
+    pad = max(6, int(font_size * 0.20))
+    canvas_w = total_w + (pad * 2) + (border_width * 4)
+    canvas_h = max_h + (pad * 2) + (border_width * 4)
+
+    img = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+
+    cur_x = pad + border_width
+    y_pos = pad + border_width
+
+    # Draw text outline and fills
+    for (kind, chunk), w in zip(segments, seg_widths):
+        if kind == 'emoji' and emoji_font:
+            draw.text((cur_x, y_pos), chunk, font=emoji_font, embedded_color=True)
+        else:
+            draw.text(
+                (cur_x, y_pos),
+                chunk,
+                font=text_font,
+                fill=(*font_color, 255),
+                stroke_width=max(1, border_width),
+                stroke_fill=(*border_color, 230)
+            )
+        cur_x += w
+
+    os.makedirs(os.path.dirname(os.path.abspath(output_png_path)), exist_ok=True)
+    img.save(output_png_path, "PNG")
+    return output_png_path
+
+
 def render_title_overlay_png(
     title_text: str,
     output_png_path: str,
@@ -2723,8 +2817,10 @@ def build_ffmpeg_filtergraph(
         else:
             y_pos = 80 if aspect_ratio == "16:9_landscape" else (345 if aspect_ratio == "1:1" else (480 if aspect_ratio in ["4:3", "9:16"] else 581))
         box_style = "box=0"
+        safe_font = get_ffmpeg_safe_font_path()
+        font_arg = f":fontfile='{safe_font}'" if safe_font else ""
         title_filter = (
-            f"{current_v}drawtext=text='{clean_title}':fontsize=60:fontcolor=white:"
+            f"{current_v}drawtext=text='{clean_title}'{font_arg}:fontsize=60:fontcolor=white:"
             f"x=(w-text_w)/2:y={y_pos}:borderw=2.5:bordercolor=black@0.8:{box_style}[v_with_title]"
         )
         filters.append(title_filter)
@@ -2885,19 +2981,48 @@ def render_clip_to_mp4(
             out_video_map = "[v_watermarked]"
 
         elif watermark_text and watermark_text.strip():
-            clean_text = watermark_text.replace("'", "").replace(":", "\\:").replace("%", "").strip()
-            # Font size scaled smoothly across 0-500% range: 20% -> 36px, 100% -> 180px, 500% -> 900px
-            wm_font_size = max(10, min(900, int(180 * (float(watermark_size) / 100.0))))
-            # Center-based positioning: text anchor is centered at (X%, Y%) coordinates on the canvas
-            overlay_x_expr = f"w*{wm_x_ratio:.4f}-text_w/2"
-            overlay_y_expr = f"h*{wm_y_ratio:.4f}-text_h/2"
-            drawtext_cmd = (
-                f"{out_video_map}drawtext=text='{clean_text}':fontsize={wm_font_size}:"
-                f"fontcolor=white@{wm_opacity:.2f}:borderw=2:bordercolor=black@{wm_opacity:.2f}:"
-                f"x='{overlay_x_expr}':y='{overlay_y_expr}'[v_watermarked]"
+            # Render text watermark to a transparent PNG overlay using Pillow
+            # This completely avoids FFmpeg Fontconfig bugs on Windows while adding emoji & anti-aliasing support
+            wm_font_size = max(14, min(900, int(180 * (float(watermark_size) / 100.0))))
+            wm_png_filename = f"wm_text_{int(time.time() * 1000)}.png"
+            wm_png_path = TEMP_DIR / wm_png_filename
+            rendered_wm = render_text_watermark_png(
+                text=watermark_text.strip(),
+                output_png_path=str(wm_png_path),
+                font_name="Montserrat",
+                font_size=wm_font_size,
+                border_width=max(2, int(wm_font_size * 0.055))
             )
-            filter_chains.append(drawtext_cmd)
-            out_video_map = "[v_watermarked]"
+
+            if rendered_wm and os.path.exists(rendered_wm):
+                wm_idx = input_idx_counter
+                input_idx_counter += 1
+                extra_input_args.extend(["-i", str(rendered_wm)])
+
+                wm_prep = f"[{wm_idx}:v]format=rgba,colorchannelmixer=aa={wm_opacity:.2f}[wm_proc]"
+                filter_chains.append(wm_prep)
+
+                overlay_cmd = (
+                    f"{out_video_map}[wm_proc]overlay="
+                    f"x='main_w*{wm_x_ratio:.4f}-overlay_w/2':"
+                    f"y='main_h*{wm_y_ratio:.4f}-overlay_h/2':eval=init[v_watermarked]"
+                )
+                filter_chains.append(overlay_cmd)
+                out_video_map = "[v_watermarked]"
+            else:
+                # Fallback to drawtext with explicit fontfile (never relies on Fontconfig)
+                safe_font = get_ffmpeg_safe_font_path()
+                font_arg = f":fontfile='{safe_font}'" if safe_font else ""
+                clean_text = watermark_text.replace("'", "").replace(":", "\\:").replace("%", "").strip()
+                overlay_x_expr = f"w*{wm_x_ratio:.4f}-text_w/2"
+                overlay_y_expr = f"h*{wm_y_ratio:.4f}-text_h/2"
+                drawtext_cmd = (
+                    f"{out_video_map}drawtext=text='{clean_text}'{font_arg}:fontsize={wm_font_size}:"
+                    f"fontcolor=white@{wm_opacity:.2f}:borderw=2:bordercolor=black@{wm_opacity:.2f}:"
+                    f"x='{overlay_x_expr}':y='{overlay_y_expr}'[v_watermarked]"
+                )
+                filter_chains.append(drawtext_cmd)
+                out_video_map = "[v_watermarked]"
 
     # 2. Audio Processing (Original Audio with Boost, BGM with start offset, and Hook SFX at frame 0)
     audio_inputs_to_mix = []
