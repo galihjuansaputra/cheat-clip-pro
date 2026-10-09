@@ -256,6 +256,20 @@ def get_whisper_model():
     return _WHISPER_MODEL if _WHISPER_MODEL is not False else None
 
 
+def release_whisper_model():
+    """Explicitly frees Whisper PyTorch model from RAM to preserve memory on low-spec servers."""
+    global _WHISPER_MODEL
+    if _WHISPER_MODEL is not None and _WHISPER_MODEL is not False:
+        try:
+            del _WHISPER_MODEL
+            _WHISPER_MODEL = None
+            import gc
+            gc.collect()
+            logger.info("Whisper model unloaded from memory to free server RAM.")
+        except Exception:
+            pass
+
+
 def check_encoder_support(encoder_name: str) -> bool:
     """Check if a specific FFmpeg video encoder is operational on this system."""
     try:
@@ -273,8 +287,8 @@ def check_encoder_support(encoder_name: str) -> bool:
 ENCODER_CONFIGS: Dict[str, Tuple[str, List[str]]] = {
     "nvenc": ("h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "23"]),
     "amf": ("h264_amf", ["-c:v", "h264_amf", "-quality", "speed", "-rc", "cbr", "-b:v", "6M"]),
-    "qsv": ("h264_qsv", ["-c:v", "h264_qsv", "-preset", "veryfast"]),
-    "cpu": ("libx264", ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22"]),
+    "qsv": ("h264_qsv", ["-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23", "-look_ahead", "0"]),
+    "cpu": ("libx264", ["-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-threads", "2"]),
 }
 
 _DETECTED_SUPPORT: Optional[Dict[str, Any]] = None
@@ -2358,13 +2372,14 @@ def detect_speaker_face_box(
 
         fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-        step = max(1, total_frames // 25) if total_frames > 25 else max(1, int(fps * 0.75))
+        # Low-CPU keyframe sampling: 10 frames are sufficient for spatial clustering without loading server CPU
+        step = max(1, total_frames // 10) if total_frames > 10 else max(1, int(fps * 1.5))
 
         detections = []
         sampled_small_frames = []
         frame_idx = 0
         checked = 0
-        while cap.isOpened() and frame_idx < total_frames and checked < 25:
+        while cap.isOpened() and frame_idx < total_frames and checked < 10:
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
             ret, frame = cap.read()
             frame_idx += step
@@ -3126,7 +3141,7 @@ def render_clip_to_mp4(
                 "-filter_complex", final_filter_complex,
                 "-map", out_video_map,
                 "-map", out_audio_map,
-                "-c:v", "libx264", "-preset", "veryfast", "-crf", "22",
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "22", "-threads", "2",
                 "-c:a", "aac", "-b:a", "192k",
                 "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart",

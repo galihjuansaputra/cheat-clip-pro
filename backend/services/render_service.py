@@ -22,6 +22,8 @@ from backend.schemas.render import RenderBatchRequest, RenderSettingsModel
 
 RENDER_BATCHES: Dict[str, Dict[str, Any]] = {}
 BATCH_REQUESTS: Dict[str, RenderBatchRequest] = {}
+# Concurrency gate: serialize video rendering (1 active render job at a time) to prevent CPU starvation on low-spec servers
+_RENDER_SEMAPHORE = asyncio.Semaphore(1)
 
 
 async def render_single_batch_clip(
@@ -531,109 +533,111 @@ async def render_merged_batch_clips(
 
 
 async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
-    batch = RENDER_BATCHES.get(batch_id)
-    if not batch:
-        return
+    async with _RENDER_SEMAPHORE:
+        batch = RENDER_BATCHES.get(batch_id)
+        if not batch:
+            return
 
-    clips = request.clips
-    settings = request.settings
+        clips = request.clips
+        settings = request.settings
 
-    # Normalize video URL for history or direct URL
-    target_url = (request.video_url or "").strip()
-    if not target_url:
-        if request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
-            target_url = f"/api/video/{request.video_id}"
-        elif request.video_id:
-            target_url = f"https://www.youtube.com/watch?v={request.video_id}"
-    elif not target_url.startswith("http") and not target_url.startswith("/api/video/"):
-        if request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
-            target_url = f"/api/video/{request.video_id}"
-        elif request.video_id:
-            target_url = f"https://www.youtube.com/watch?v={request.video_id}"
-        else:
-            target_url = f"https://www.youtube.com/watch?v={target_url}"
+        # Normalize video URL for history or direct URL
+        target_url = (request.video_url or "").strip()
+        if not target_url:
+            if request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
+                target_url = f"/api/video/{request.video_id}"
+            elif request.video_id:
+                target_url = f"https://www.youtube.com/watch?v={request.video_id}"
+        elif not target_url.startswith("http") and not target_url.startswith("/api/video/"):
+            if request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
+                target_url = f"/api/video/{request.video_id}"
+            elif request.video_id:
+                target_url = f"https://www.youtube.com/watch?v={request.video_id}"
+            else:
+                target_url = f"https://www.youtube.com/watch?v={target_url}"
 
-    cookies_content = getattr(request, "cookies", None)
-    is_merged = bool(settings and getattr(settings, "render_mode", "separate") == "merged")
-    if is_merged:
-        batch["current_clip_index"] = 0
-        await render_merged_batch_clips(
-            batch_id=batch_id,
-            clips=clips,
-            settings=settings,
-            target_url=target_url,
-            transcript=request.transcript,
-            cookies_content=cookies_content
-        )
-        batch["current_clip_index"] = 1
-    else:
-        for idx, clip in enumerate(clips):
-            batch["current_clip_index"] = idx
-            await render_single_batch_clip(
+        cookies_content = getattr(request, "cookies", None)
+        is_merged = bool(settings and getattr(settings, "render_mode", "separate") == "merged")
+        if is_merged:
+            batch["current_clip_index"] = 0
+            await render_merged_batch_clips(
                 batch_id=batch_id,
-                idx=idx,
-                clip=clip,
+                clips=clips,
                 settings=settings,
                 target_url=target_url,
                 transcript=request.transcript,
-                total_clips=len(clips),
                 cookies_content=cookies_content
             )
-            batch["current_clip_index"] = idx + 1
-
-    update_batch_summary_and_zip(batch_id, settings)
-
-
-async def process_batch_retry(batch_id: str, clip_indices: List[int]):
-    batch = RENDER_BATCHES.get(batch_id)
-    request = BATCH_REQUESTS.get(batch_id)
-    if not batch or not request:
-        logger.error(f"Cannot retry batch {batch_id}: batch or request data not found")
-        return
-
-    batch["overall_status"] = "running"
-    clips = request.clips
-    settings = request.settings
-    target_url = (request.video_url or "").strip()
-    if not target_url:
-        if request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
-            target_url = f"/api/video/{request.video_id}"
-        elif request.video_id:
-            target_url = f"https://www.youtube.com/watch?v={request.video_id}"
-    elif not target_url.startswith("http") and not target_url.startswith("/api/video/"):
-        if request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
-            target_url = f"/api/video/{request.video_id}"
-        elif request.video_id:
-            target_url = f"https://www.youtube.com/watch?v={request.video_id}"
+            batch["current_clip_index"] = 1
         else:
-            target_url = f"https://www.youtube.com/watch?v={target_url}"
-
-    cookies_content = getattr(request, "cookies", None)
-    is_merged = bool(batch.get("is_merged")) or bool(settings and getattr(settings, "render_mode", "separate") == "merged")
-    if is_merged:
-        batch["current_clip_index"] = 0
-        await render_merged_batch_clips(
-            batch_id=batch_id,
-            clips=clips,
-            settings=settings,
-            target_url=target_url,
-            transcript=request.transcript,
-            cookies_content=cookies_content
-        )
-        batch["current_clip_index"] = 1
-    else:
-        for idx in clip_indices:
-            if 0 <= idx < len(clips):
+            for idx, clip in enumerate(clips):
                 batch["current_clip_index"] = idx
                 await render_single_batch_clip(
                     batch_id=batch_id,
                     idx=idx,
-                    clip=clips[idx],
+                    clip=clip,
                     settings=settings,
                     target_url=target_url,
                     transcript=request.transcript,
                     total_clips=len(clips),
                     cookies_content=cookies_content
                 )
+                batch["current_clip_index"] = idx + 1
 
-    update_batch_summary_and_zip(batch_id, settings)
+        update_batch_summary_and_zip(batch_id, settings)
+
+
+async def process_batch_retry(batch_id: str, clip_indices: List[int]):
+    async with _RENDER_SEMAPHORE:
+        batch = RENDER_BATCHES.get(batch_id)
+        request = BATCH_REQUESTS.get(batch_id)
+        if not batch or not request:
+            logger.error(f"Cannot retry batch {batch_id}: batch or request data not found")
+            return
+
+        batch["overall_status"] = "running"
+        clips = request.clips
+        settings = request.settings
+        target_url = (request.video_url or "").strip()
+        if not target_url:
+            if request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
+                target_url = f"/api/video/{request.video_id}"
+            elif request.video_id:
+                target_url = f"https://www.youtube.com/watch?v={request.video_id}"
+        elif not target_url.startswith("http") and not target_url.startswith("/api/video/"):
+            if request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
+                target_url = f"/api/video/{request.video_id}"
+            elif request.video_id:
+                target_url = f"https://www.youtube.com/watch?v={request.video_id}"
+            else:
+                target_url = f"https://www.youtube.com/watch?v={target_url}"
+
+        cookies_content = getattr(request, "cookies", None)
+        is_merged = bool(batch.get("is_merged")) or bool(settings and getattr(settings, "render_mode", "separate") == "merged")
+        if is_merged:
+            batch["current_clip_index"] = 0
+            await render_merged_batch_clips(
+                batch_id=batch_id,
+                clips=clips,
+                settings=settings,
+                target_url=target_url,
+                transcript=request.transcript,
+                cookies_content=cookies_content
+            )
+            batch["current_clip_index"] = 1
+        else:
+            for idx in clip_indices:
+                if 0 <= idx < len(clips):
+                    batch["current_clip_index"] = idx
+                    await render_single_batch_clip(
+                        batch_id=batch_id,
+                        idx=idx,
+                        clip=clips[idx],
+                        settings=settings,
+                        target_url=target_url,
+                        transcript=request.transcript,
+                        total_clips=len(clips),
+                        cookies_content=cookies_content
+                    )
+
+        update_batch_summary_and_zip(batch_id, settings)
