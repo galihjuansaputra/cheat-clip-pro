@@ -1130,12 +1130,39 @@ def transcribe_clip_words(
     clip_end_time: float = 0.0
 ) -> List[Dict[str, Any]]:
     """
-    Extracts word-level timestamps using the analyzed video transcript.
-    This guarantees 100% fidelity with the analyzed speech (no mis-speech or Whisper hallucinations).
-    Timestamps are mapped relative to the sliced clip audio (0.0s = clip_start_time).
-    Whisper is only used as a fallback if no video transcript is available.
+    Transcribes word-level timestamps directly from the sliced clip audio using Whisper AI.
+    Listens directly to the audio waveform of the sliced clip (0.0s = start of clip) for 100% acoustic accuracy.
+    Falls back to transcript distribution only if Whisper AI is not available.
     """
-    # 1. Primary: Use the analyzed video transcript (exact matches from YouTube / Whisper)
+    # 1. Primary: Run Whisper directly on sliced clip audio for exact acoustic timestamps
+    whisper_model = get_whisper_model()
+    if whisper_model is not None and os.path.exists(video_path):
+        try:
+            logger.info(f"Running Whisper acoustic word transcription on: {os.path.basename(video_path)}...")
+            result = whisper_model.transcribe(
+                video_path,
+                word_timestamps=True,
+                fp16=False
+            )
+            words = []
+            for segment in result.get("segments", []):
+                for w in segment.get("words", []):
+                    word_clean = clean_caption_text(w.get("word", "").strip())
+                    if word_clean:
+                        st = max(0.0, float(w.get("start", 0.0)))
+                        et = max(st + 0.12, float(w.get("end", st + 0.25)))
+                        words.append({
+                            "word": word_clean,
+                            "start": round(st, 2),
+                            "end": round(et, 2)
+                        })
+            if words:
+                logger.info(f"Whisper successfully transcribed {len(words)} acoustic words for clip.")
+                return words
+        except Exception as e:
+            logger.warning(f"Whisper acoustic transcription error: {e}")
+
+    # 2. Secondary fallback: Use fallback_transcript if Whisper model is unavailable
     if fallback_transcript:
         words = []
         for line in fallback_transcript:
@@ -1156,72 +1183,30 @@ def transcribe_clip_words(
                 words_cnt = max(1, len(cleaned_line.split()))
                 l_end = l_start + max(1.8, words_cnt * 0.38)
 
-            # If clip range is defined, filter lines overlapping the clip
             if clip_end_time > clip_start_time:
-                if l_end <= clip_start_time or l_start >= clip_end_time:
+                if l_end < clip_start_time - 0.2 or l_start > clip_end_time + 0.2:
                     continue
+                rel_start = max(0.0, l_start - clip_start_time)
+                rel_end = max(rel_start + 0.15, l_end - clip_start_time)
+            else:
+                rel_start = max(0.0, l_start)
+                rel_end = max(rel_start + 0.15, l_end)
 
             line_words = cleaned_line.split()
             if not line_words:
                 continue
-
-            # Distribute words realistically across the line duration based on character length
-            line_dur = max(0.2, l_end - l_start)
-            total_chars = max(1, sum(max(1, len(w)) for w in line_words))
-            cur_time = l_start
-
+            w_duration = max(0.12, (rel_end - rel_start) / len(line_words))
             for i, w in enumerate(line_words):
-                w_dur = max(0.15, (max(1, len(w)) / total_chars) * line_dur)
-                w_s_global = cur_time
-                w_e_global = cur_time + w_dur
-                cur_time = w_e_global
-
-                if clip_end_time > clip_start_time:
-                    # Exclude words that fall completely outside the clip
-                    if w_e_global <= clip_start_time or w_s_global >= clip_end_time:
-                        continue
-                    w_s = max(0.0, w_s_global - clip_start_time)
-                    w_e = max(w_s + 0.12, min(clip_end_time - clip_start_time, w_e_global - clip_start_time))
-                else:
-                    w_s = max(0.0, w_s_global)
-                    w_e = max(w_s + 0.12, w_e_global)
-
+                w_s = rel_start + (i * w_duration)
+                w_e = w_s + w_duration
                 words.append({
                     "word": w,
                     "start": round(w_s, 2),
                     "end": round(w_e, 2)
                 })
         if words:
-            logger.info(f"Using analyzed video transcript: mapped {len(words)} words for clip range [{clip_start_time:.1f}s -> {clip_end_time:.1f}s].")
+            logger.info(f"Fallback: using transcript words for clip range [{clip_start_time:.1f}s -> {clip_end_time:.1f}s].")
             return words
-
-    # 2. Secondary fallback: Whisper if no transcript was returned from YouTube
-    whisper_model = get_whisper_model()
-    if whisper_model is not None:
-        try:
-            logger.info("Running Whisper word-level transcription as fallback...")
-            whisper_prompt = "Transkrip video percakapan dalam Bahasa Indonesia atau English."
-            result = whisper_model.transcribe(
-                video_path,
-                word_timestamps=True,
-                fp16=False,
-                initial_prompt=whisper_prompt
-            )
-            words = []
-            for segment in result.get("segments", []):
-                for w in segment.get("words", []):
-                    word_clean = clean_caption_text(w.get("word", "").strip())
-                    if word_clean:
-                        words.append({
-                            "word": word_clean,
-                            "start": max(0.0, float(w.get("start", 0.0))),
-                            "end": max(float(w.get("start", 0.0)) + 0.1, float(w.get("end", 0.0)))
-                        })
-            if words:
-                logger.info(f"Whisper transcribed {len(words)} words successfully.")
-                return words
-        except Exception as e:
-            logger.warning(f"Whisper word transcription error: {e}")
 
     return []
 
@@ -1962,18 +1947,21 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 continue
             w_text = escape_ass_text(apply_text_case(raw_text, text_case))
             st = max(0.0, float(w.get("start", 0.0)))
-            et = max(st + 0.08, float(w.get("end", st + 0.25)))
+            et = max(st + 0.15, float(w.get("end", st + 0.25)))
             valid_words.append({"word_text": w_text, "start": st, "end": et, "raw": w})
 
         valid_words.sort(key=lambda x: x["start"])
 
-        # Step B: Pack into compact chunks (1 to 3 words, max 16 chars) to strictly guarantee 1 single line
+        # Step B: Pack into compact chunks (1 to 3 words, max 22 chars) to strictly guarantee 1 single line
+        # Split on natural speech pauses (>= 0.38s) or sentence-ending punctuation so words don't hang over silences
         chunks = []
         current_chunk = []
         current_chars = 0
         for item in valid_words:
             w_len = len(item["word_text"])
-            if len(current_chunk) >= 3 or (current_chunk and (current_chars + w_len > 16)):
+            has_pause = bool(current_chunk and (item["start"] - current_chunk[-1]["end"] >= 0.38))
+            ends_sentence = bool(current_chunk and any(current_chunk[-1]["word_text"].endswith(p) for p in [".", "?", "!"]))
+            if len(current_chunk) >= 3 or has_pause or ends_sentence or (current_chunk and (current_chars + w_len > 22)):
                 chunks.append(current_chunk)
                 current_chunk = [item]
                 current_chars = w_len
@@ -1987,27 +1975,30 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         chunk_bounds = []
         for chunk in chunks:
             c_start = chunk[0]["start"]
-            c_end = max(c_start + 0.25, chunk[-1]["end"])
+            c_end = max(c_start + 0.35, chunk[-1]["end"] + 0.12)
             if chunk_bounds:
                 prev_end = chunk_bounds[-1][1]
                 if c_start < prev_end:
                     c_start = prev_end
                 if c_end <= c_start:
-                    c_end = c_start + 0.25
+                    c_end = c_start + 0.28
             chunk_bounds.append((c_start, c_end))
 
         # Clamp against subsequent chunk start times to eliminate any inter-chunk overlaps
         for i in range(len(chunk_bounds) - 1):
             cur_s, cur_e = chunk_bounds[i]
-            nxt_s, _ = chunk_bounds[i + 1]
+            nxt_s, nxt_e = chunk_bounds[i + 1]
             if cur_e > nxt_s:
-                chunk_bounds[i] = (cur_s, nxt_s)
+                split_pt = max(cur_s + 0.28, nxt_s)
+                chunk_bounds[i] = (cur_s, split_pt)
+                if nxt_s < split_pt:
+                    chunk_bounds[i + 1] = (split_pt, max(split_pt + 0.28, nxt_e))
 
         # Step D: Partition each chunk into strictly contiguous active-word time slices
         for chunk_idx, chunk in enumerate(chunks):
             c_start, c_end = chunk_bounds[chunk_idx]
             if c_end <= c_start:
-                c_end = c_start + 0.20
+                c_end = c_start + 0.25
             num_words = len(chunk)
 
             if num_words == 1:
@@ -2016,8 +2007,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 points = [c_start]
                 for w_i in range(1, num_words):
                     raw_st = chunk[w_i]["start"]
-                    min_allowed = points[-1] + 0.08
-                    max_allowed = c_end - 0.08 * (num_words - w_i)
+                    # Enforce minimum 0.16s per word to eliminate micro-flickering while preserving acoustic sync
+                    min_allowed = points[-1] + 0.16
+                    max_allowed = c_end - 0.16 * (num_words - w_i)
                     if min_allowed > max_allowed:
                         pt = points[-1] + (c_end - points[-1]) / (num_words - w_i + 1)
                     else:
