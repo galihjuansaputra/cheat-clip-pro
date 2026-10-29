@@ -1,5 +1,5 @@
 import re
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 def parse_time_str(time_str: str) -> float:
     """Parses time string in formats like HH:MM:SS,mmm or MM:SS,mmm or HH:MM:SS or MM:SS to seconds."""
@@ -132,6 +132,61 @@ def extract_video_id(url: str) -> Optional[str]:
             return match.group(1)
 
     return None
+
+
+def is_twitch_url(url: str) -> bool:
+    """Returns True if the URL points to a Twitch VOD, clip, or Twitch video reference."""
+    if not url:
+        return False
+    trimmed = url.strip()
+    return bool(
+        "twitch.tv" in trimmed or
+        trimmed.startswith("twitch_") or
+        re.search(r'(?:twitch\.tv\/videos\/|clips\.twitch\.tv\/|twitch\.tv\/[^/]+\/clip\/)', trimmed)
+    )
+
+
+def extract_twitch_info(url: str) -> Optional[Dict[str, str]]:
+    """Extracts Twitch video type ('vod' or 'clip') and identifier."""
+    if not url:
+        return None
+    trimmed = url.strip()
+    m_vod = re.search(r'(?:twitch\.tv\/videos\/|twitch\.tv\/[a-zA-Z0-9_]+\/v\/|twitch_vod_|twitch_)(\d+)', trimmed)
+    if m_vod:
+        return {"type": "vod", "id": m_vod.group(1)}
+    
+    m_clip = re.search(r'(?:clips\.twitch\.tv\/|twitch\.tv\/[^/]+\/clip\/|twitch_clip_)([a-zA-Z0-9_-]+)', trimmed)
+    if m_clip:
+        return {"type": "clip", "id": m_clip.group(1)}
+        
+    return None
+
+
+def get_twitch_canonical_url(info: Optional[Dict[str, str]]) -> str:
+    """Returns full canonical URL for a Twitch VOD or Clip."""
+    if not info:
+        return ""
+    if info.get("type") == "clip":
+        return f"https://clips.twitch.tv/{info['id']}"
+    return f"https://www.twitch.tv/videos/{info['id']}"
+
+
+def canonical_video_url(url_or_id: str) -> str:
+    """Resolves any video ID, Twitch URL/ID, or YouTube ID into a fully qualified canonical URL."""
+    if not url_or_id:
+        return ""
+    trimmed = url_or_id.strip()
+    if is_twitch_url(trimmed):
+        tw = extract_twitch_info(trimmed)
+        if tw:
+            return get_twitch_canonical_url(tw)
+        return trimmed
+    if trimmed.startswith("http://") or trimmed.startswith("https://") or trimmed.startswith("/api/video/"):
+        return trimmed
+    yt_id = extract_video_id(trimmed)
+    if yt_id:
+        return f"https://www.youtube.com/watch?v={yt_id}"
+    return trimmed
 
 def lowercase_hashtags_in_string(text: str) -> str:
     """Finds all hashtags (#word) in a string and converts them to lowercase."""

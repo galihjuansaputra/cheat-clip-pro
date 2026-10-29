@@ -19,6 +19,7 @@ from backend.config import (
     transcribe_clip_words,
 )
 from backend.schemas.render import RenderBatchRequest, RenderSettingsModel
+from backend.utils.text import is_twitch_url, extract_twitch_info, get_twitch_canonical_url, canonical_video_url
 
 RENDER_BATCHES: Dict[str, Dict[str, Any]] = {}
 BATCH_REQUESTS: Dict[str, RenderBatchRequest] = {}
@@ -122,7 +123,9 @@ async def render_single_batch_clip(
                     streamer_preset=settings.streamer_preset or "none",
                     title_font_name=settings.title_font or settings.caption_font or "Outfit",
                     title_font_size_px=settings.title_font_size_px,
-                    title_text_case=settings.title_text_case or settings.text_case or "uppercase"
+                    title_text_case=settings.title_text_case or settings.text_case or "uppercase",
+                    title_x_percent=getattr(settings, "title_x_percent", 50.0),
+                subtitle_offset_seconds=getattr(settings, "subtitle_offset_seconds", 0.0)
                 )
                 if rendered_overlay and os.path.exists(rendered_overlay):
                     title_overlay_path = rendered_overlay
@@ -179,7 +182,9 @@ async def render_single_batch_clip(
                 title_font_name=settings.title_font or settings.caption_font or "Outfit",
                 font_size_px=settings.font_size_px,
                 title_font_size_px=settings.title_font_size_px,
-                title_text_case=settings.title_text_case or settings.text_case or "uppercase"
+                title_text_case=settings.title_text_case or settings.text_case or "uppercase",
+                title_x_percent=getattr(settings, "title_x_percent", 50.0),
+                subtitle_offset_seconds=getattr(settings, "subtitle_offset_seconds", 0.0)
             )
 
         # 3. Render Final Vertical MP4
@@ -221,7 +226,9 @@ async def render_single_batch_clip(
             hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
             original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0),
             hardware_accel=settings.hardware_accel or "auto",
-            title_y_percent=settings.title_y_percent
+            title_y_percent=settings.title_y_percent,
+            crop_x_percent=getattr(settings, "crop_x_percent", None),
+            title_x_percent=getattr(settings, "title_x_percent", 50.0)
         )
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):
@@ -444,7 +451,8 @@ async def render_merged_batch_clips(
                     streamer_preset=settings.streamer_preset or "none",
                     title_font_name=settings.title_font or settings.caption_font or "Outfit",
                     title_font_size_px=settings.title_font_size_px,
-                    title_text_case=settings.title_text_case or settings.text_case or "uppercase"
+                    title_text_case=settings.title_text_case or settings.text_case or "uppercase",
+                    title_x_percent=getattr(settings, "title_x_percent", 50.0)
                 )
                 if rendered_overlay and os.path.exists(rendered_overlay):
                     title_overlay_path = rendered_overlay
@@ -523,7 +531,9 @@ async def render_merged_batch_clips(
             hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
             original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0),
             hardware_accel=settings.hardware_accel or "auto",
-            title_y_percent=settings.title_y_percent
+            title_y_percent=settings.title_y_percent,
+            crop_x_percent=getattr(settings, "crop_x_percent", None),
+            title_x_percent=getattr(settings, "title_x_percent", 50.0)
         )
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):
@@ -573,6 +583,12 @@ async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
         elif request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
             if not target_url.startswith("/api/video/"):
                 target_url = f"/api/video/{request.video_id}"
+        elif request.video_id and is_twitch_url(request.video_id):
+            tw_info = extract_twitch_info(request.video_id)
+            target_url = get_twitch_canonical_url(tw_info) if tw_info else request.video_id
+        elif target_url and is_twitch_url(target_url):
+            tw_info = extract_twitch_info(target_url)
+            target_url = get_twitch_canonical_url(tw_info) if tw_info else target_url
         elif not target_url:
             if request.video_id:
                 target_url = f"https://www.youtube.com/watch?v={request.video_id}"

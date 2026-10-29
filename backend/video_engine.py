@@ -16,6 +16,7 @@ import threading
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Union, Callable
 from PIL import Image, ImageDraw, ImageFont
+from backend.utils.text import is_twitch_url, extract_twitch_info, get_twitch_canonical_url, canonical_video_url
 
 logger = logging.getLogger("cheat-clip-pro.video-engine")
 
@@ -914,17 +915,26 @@ def download_clip_segment(
     # Guard: if it was a Google Drive or Upload request, never send to YouTube
     # Exception: if it was a YouTube audio cache file (e.g. /api/video/yt_audio_iLijjSEI_40.mp4), resolve back to original YouTube video
     yt_audio_match = re.search(r'yt_audio_([a-zA-Z0-9_-]{11})', clean_raw)
+    tw_audio_match = re.search(r'twitch_audio_(twitch_\d+|twitch_clip_[a-zA-Z0-9_-]+|\d+|[a-zA-Z0-9_-]+)', clean_raw)
     if yt_audio_match:
         yt_id = yt_audio_match.group(1)
         clean_url = f"https://www.youtube.com/watch?v={yt_id}"
         logger.info(f"Resolved cached audio reference '{clean_raw}' back to genuine YouTube stream: {clean_url}")
+    elif tw_audio_match or is_twitch_url(clean_raw):
+        tw_info = extract_twitch_info(clean_raw)
+        clean_url = get_twitch_canonical_url(tw_info) if tw_info else clean_raw
+        logger.info(f"Resolved Twitch reference '{clean_raw}' back to genuine Twitch stream: {clean_url}")
     elif "gdrive" in clean_raw.lower() or "upload_" in clean_raw.lower() or clean_raw.startswith("/api/video/"):
         raise RuntimeError(f"Source video file not found on disk for '{clean_raw}'. Please re-analyze the video.")
     else:
-        # Sanitize video URL for YouTube download
-        clean_url = video_url.strip()
-        if not clean_url.startswith("http"):
-            clean_url = f"https://www.youtube.com/watch?v={clean_url}"
+        # Sanitize video URL
+        if is_twitch_url(video_url):
+            tw_info = extract_twitch_info(video_url)
+            clean_url = get_twitch_canonical_url(tw_info) if tw_info else video_url.strip()
+        else:
+            clean_url = video_url.strip()
+            if not clean_url.startswith("http"):
+                clean_url = f"https://www.youtube.com/watch?v={clean_url}"
 
     t_start_fmt = format_section_time(start_time)
     t_end_fmt = format_section_time(end_time)
@@ -1187,7 +1197,10 @@ def download_full_raw_video(
         return str(output_path)
 
     clean_url = video_url.strip()
-    if not clean_url.startswith("http"):
+    if is_twitch_url(clean_url):
+        tw_info = extract_twitch_info(clean_url)
+        clean_url = get_twitch_canonical_url(tw_info) if tw_info else clean_url
+    elif not clean_url.startswith("http"):
         clean_url = f"https://www.youtube.com/watch?v={clean_url}"
 
     with ephemeral_cookies_file(cookies_content) as temp_cookies:
@@ -1438,15 +1451,22 @@ def transcribe_clip_words(
             line_words = cleaned_line.split()
             if not line_words:
                 continue
-            w_duration = max(0.12, (rel_end - rel_start) / len(line_words))
+            # Natural speech timing calibration: respect line duration unless trailing silence is detected
+            raw_line_dur = max(0.4, rel_end - rel_start)
+            max_plausible_dur = len(line_words) * 0.52 + 0.25
+            spoken_dur = min(raw_line_dur, max_plausible_dur)
+            weights = [max(2, len(re.sub(r'[^a-zA-Z0-9]', '', w)) or len(w)) for w in line_words]
+            total_w = sum(weights) or 1
+            cur_s = rel_start
             for i, w in enumerate(line_words):
-                w_s = rel_start + (i * w_duration)
-                w_e = w_s + w_duration
+                w_dur = max(0.14, min(0.60, spoken_dur * (weights[i] / total_w)))
+                w_e = cur_s + w_dur
                 words.append({
                     "word": w,
-                    "start": round(w_s, 2),
+                    "start": round(cur_s, 2),
                     "end": round(w_e, 2)
                 })
+                cur_s = w_e
         if words:
             logger.info(f"Fallback: using transcript words for clip range [{clip_start_time:.1f}s -> {clip_end_time:.1f}s].")
             return words
@@ -1720,7 +1740,8 @@ def render_title_overlay_png(
     streamer_preset: Optional[str] = "none",
     title_font_name: Optional[str] = None,
     title_font_size_px: Optional[int] = None,
-    title_text_case: Optional[str] = None
+    title_text_case: Optional[str] = None,
+    title_x_percent: Optional[float] = 50.0
 ) -> Optional[str]:
     """
     Renders the title with full-color emojis and bold styled typography into a transparent
@@ -1864,7 +1885,9 @@ def render_title_overlay_png(
             segment_widths.append(w)
 
         total_line_w = sum(segment_widths)
-        start_x = (canvas_w - total_line_w) / 2.0
+        t_x_pct = 50.0 if title_x_percent is None else float(title_x_percent)
+        target_center_x = canvas_w * (t_x_pct / 100.0)
+        start_x = max(16.0, min(canvas_w - total_line_w - 16.0, target_center_x - (total_line_w / 2.0)))
 
         # 2. Draw shadow first (for text segments)
         cur_x = start_x
@@ -1939,7 +1962,9 @@ def generate_ass_file(
     title_font_name: Optional[str] = None,
     font_size_px: Optional[int] = None,
     title_font_size_px: Optional[int] = None,
-    title_text_case: Optional[str] = None
+    title_text_case: Optional[str] = None,
+    title_x_percent: Optional[float] = 50.0,
+    subtitle_offset_seconds: Optional[float] = 0.0
 ) -> str:
     """
     Generates an Advanced SubStation Alpha (.ass) subtitle and title file with karaoke / word-level animation.
@@ -2213,8 +2238,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             if not raw_text:
                 continue
             w_text = escape_ass_text(apply_text_case(raw_text, text_case))
-            st = max(0.0, float(w.get("start", 0.0)))
-            et = max(st + 0.15, float(w.get("end", st + 0.25)))
+            sub_off = float(subtitle_offset_seconds or 0.0)
+            st = max(0.0, float(w.get("start", 0.0)) + sub_off)
+            et = max(st + 0.15, float(w.get("end", st + 0.25)) + sub_off)
             valid_words.append({"word_text": w_text, "start": st, "end": et, "raw": w})
 
         valid_words.sort(key=lambda x: x["start"])
@@ -2781,7 +2807,8 @@ def build_ffmpeg_filtergraph(
     title_position: str = "auto",
     ass_subtitles_path: Optional[str] = None,
     face_box: Optional[Dict[str, Any]] = None,
-    title_y_percent: Optional[float] = None
+    title_y_percent: Optional[float] = None,
+    crop_x_percent: Optional[float] = None
 ) -> Tuple[str, str]:
     """
     Constructs the FFmpeg -filter_complex chain with proper aspect ratio center-cropping.
@@ -2954,11 +2981,14 @@ def build_ffmpeg_filtergraph(
                 )
 
         else:  # 9:16
-            safe_cx = float(face_cx)
-            if 0.46 <= safe_cx <= 0.54:
-                safe_cx = 0.50
-            safe_cx = max(0.22, min(0.78, safe_cx))
-            crop_ratio_safe = max(0.0, min(1.0, (safe_cx - 0.158) / 0.684))
+            if crop_x_percent is not None:
+                crop_ratio_safe = max(0.0, min(1.0, float(crop_x_percent) / 100.0))
+            else:
+                safe_cx = float(face_cx)
+                if 0.46 <= safe_cx <= 0.54:
+                    safe_cx = 0.50
+                safe_cx = max(0.22, min(0.78, safe_cx))
+                crop_ratio_safe = max(0.0, min(1.0, (safe_cx - 0.158) / 0.684))
             pip_x, pip_y = 736, 120
             filters.append(
                 f"[0:v]split=2[main_raw][pip_raw];"
@@ -2970,12 +3000,15 @@ def build_ffmpeg_filtergraph(
         current_v = "[layout_base]"
 
     elif aspect_ratio == "9:16":
-        # Full Bleed 9:16 with Face Tracking horizontal crop offset
-        safe_cx = float(face_cx)
-        if 0.46 <= safe_cx <= 0.54:
-            safe_cx = 0.50
-        safe_cx = max(0.22, min(0.78, safe_cx))
-        crop_ratio_safe = max(0.0, min(1.0, (safe_cx - 0.158) / 0.684))
+        # Full Bleed 9:16 with Face Tracking / Manual horizontal crop offset
+        if crop_x_percent is not None:
+            crop_ratio_safe = max(0.0, min(1.0, float(crop_x_percent) / 100.0))
+        else:
+            safe_cx = float(face_cx)
+            if 0.46 <= safe_cx <= 0.54:
+                safe_cx = 0.50
+            safe_cx = max(0.22, min(0.78, safe_cx))
+            crop_ratio_safe = max(0.0, min(1.0, (safe_cx - 0.158) / 0.684))
         filters.append(
             f"[0:v]crop=ih*9/16:ih:(iw-ih*9/16)*{crop_ratio_safe:.3f}:0,scale=1080:1920[layout_base]"
         )
@@ -3170,7 +3203,9 @@ def render_clip_to_mp4(
     default_cx = 0.85 if is_streamer else 0.50
     default_cy = 0.78 if is_streamer else 0.35
     face_box = {"found": False, "cx": default_cx, "cy": default_cy, "w": 0.22, "h": 0.25}
-    if enable_face_tracking or is_streamer:
+    if crop_x_percent is not None:
+        face_box = {"found": True, "cx": max(0.05, min(0.95, float(crop_x_percent) / 100.0)), "cy": default_cy, "w": 0.22, "h": 0.25}
+    elif enable_face_tracking or is_streamer:
         face_box = detect_speaker_face_box(
             video_path,
             facecam_position=facecam_position,
@@ -3186,7 +3221,8 @@ def render_clip_to_mp4(
         title_position=title_position,
         ass_subtitles_path=ass_subtitles_path,
         face_box=face_box,
-        title_y_percent=title_y_percent
+        title_y_percent=title_y_percent,
+        crop_x_percent=crop_x_percent
     )
 
     filter_chains = [filter_complex]
@@ -3519,7 +3555,14 @@ def extract_clip_frame(video_url: str, video_id: str, timestamp: float = 0.0, co
 
     # 2. Extract a tiny 1-second slice of format 18 (fast 360p mp4) using yt-dlp + ffmpeg
     try:
-        clean_url = video_url.strip() if video_url else f"https://www.youtube.com/watch?v={video_id}"
+        if video_url and is_twitch_url(video_url):
+            tw_info = extract_twitch_info(video_url)
+            clean_url = get_twitch_canonical_url(tw_info) if tw_info else video_url.strip()
+        elif is_twitch_url(video_id):
+            tw_info = extract_twitch_info(video_id)
+            clean_url = get_twitch_canonical_url(tw_info) if tw_info else video_id
+        else:
+            clean_url = video_url.strip() if video_url else f"https://www.youtube.com/watch?v={video_id}"
         with ephemeral_cookies_file(cookies_content) as temp_cookies:
             base_cmd = get_yt_dlp_base_cmd(include_cookies=True, cookies_path=temp_cookies)
             temp_slice = frames_dir / f"slice_{safe_id}_{sec}.mp4"

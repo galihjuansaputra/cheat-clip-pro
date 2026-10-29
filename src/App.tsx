@@ -41,7 +41,8 @@ import {
   ChevronRight,
   FileVideo,
   Film,
-  Scissors
+  Scissors,
+  Sparkles
 } from 'lucide-react';
 import type { AnalyzeResponse, ViralClip, RenderSettings, BatchRenderProgress } from './types';
 
@@ -57,7 +58,8 @@ export default function App() {
   const { t } = useLanguage();
   const [url, setUrl] = useState('');
   const [gdriveUrl, setGdriveUrl] = useState('');
-  const [sourceMode, setSourceMode] = useState<'youtube' | 'gdrive' | 'upload'>('youtube');
+  const [twitchUrl, setTwitchUrl] = useState('');
+  const [sourceMode, setSourceMode] = useState<'youtube' | 'twitch' | 'gdrive' | 'upload'>('youtube');
   const [uploadedVideoFile, setUploadedVideoFile] = useState<File | null>(null);
   const [uploadedVideoInfo, setUploadedVideoInfo] = useState<{
     videoId: string;
@@ -396,10 +398,10 @@ export default function App() {
   }, [result?.clips, markedClips]);
 
   const isCurrentVideoYouTube = useCallback(() => {
-    if (sourceMode === 'upload' || sourceMode === 'gdrive') return false;
-    if (result?.source_type === 'upload' || result?.source_type === 'gdrive') return false;
-    if (result?.video_id?.startsWith('upload_') || result?.video_id?.startsWith('gdrive_')) return false;
-    if (result?.video_url?.includes('/api/video/')) return false;
+    if (sourceMode === 'upload' || sourceMode === 'gdrive' || sourceMode === 'twitch') return false;
+    if (result?.source_type === 'upload' || result?.source_type === 'gdrive' || result?.source_type === 'twitch') return false;
+    if (result?.video_id?.startsWith('upload_') || result?.video_id?.startsWith('gdrive_') || result?.video_id?.startsWith('twitch_')) return false;
+    if (result?.video_url?.includes('/api/video/') || result?.video_url?.includes('twitch.tv')) return false;
     return true;
   }, [sourceMode, result?.source_type, result?.video_id, result?.video_url]);
 
@@ -806,7 +808,7 @@ export default function App() {
     analyzed_at: string;
     thumbnail: string;
     url: string;
-    source_type?: 'youtube' | 'upload' | 'gdrive';
+    source_type?: 'youtube' | 'upload' | 'gdrive' | 'twitch';
     video_url?: string;
     range_suffix?: string;
     summary?: string;
@@ -822,6 +824,7 @@ export default function App() {
   const [currentTime, setCurrentTime] = useState(0);
   const playerRef = useRef<any>(null);
   const directVideoPlayerRef = useRef<HTMLVideoElement | null>(null);
+  const twitchPlayerRef = useRef<any>(null);
   const trackingInterval = useRef<number | null>(null);
   const clipEndIntervalRef = useRef<number | null>(null);
   const loadingSectionRef = useRef<HTMLElement | null>(null);
@@ -1084,11 +1087,14 @@ export default function App() {
 
           const isGDrive = data.source_type === 'gdrive' || video_id.startsWith('gdrive_');
           const isUpload = data.source_type === 'upload' || video_id.startsWith('upload_');
-          const sourceType: 'youtube' | 'upload' | 'gdrive' = isGDrive ? 'gdrive' : (isUpload ? 'upload' : 'youtube');
+          const isTwitch = data.source_type === 'twitch' || video_id.startsWith('twitch_');
+          const sourceType: 'youtube' | 'upload' | 'gdrive' | 'twitch' = isTwitch ? 'twitch' : (isGDrive ? 'gdrive' : (isUpload ? 'upload' : 'youtube'));
 
           // Determine appropriate link and thumbnail
           let itemUrl = `https://www.youtube.com/watch?v=${video_id}`;
-          if (isGDrive) {
+          if (isTwitch) {
+            itemUrl = data.video_url || (video_id.startsWith('twitch_clip_') ? `https://clips.twitch.tv/${video_id.replace('twitch_clip_', '')}` : `https://www.twitch.tv/videos/${video_id.replace('twitch_', '')}`);
+          } else if (isGDrive) {
             const gdriveIdMatch = video_id.match(/gdrive_([a-zA-Z0-9_-]+)/);
             const gdriveId = gdriveIdMatch ? gdriveIdMatch[1] : '';
             itemUrl = gdriveId ? `https://drive.google.com/file/d/${gdriveId}/view` : (data.video_url || '');
@@ -1096,7 +1102,7 @@ export default function App() {
             itemUrl = data.video_url || `/api/video/${video_id}`;
           }
 
-          const thumb = (isGDrive || isUpload)
+          const thumb = (isGDrive || isUpload || isTwitch)
             ? `/api/frame/${encodeURIComponent(video_id)}?t=2`
             : `https://img.youtube.com/vi/${video_id}/mqdefault.jpg`;
 
@@ -1140,8 +1146,16 @@ export default function App() {
 
       const isGDrive = data.source_type === 'gdrive' || entry.source_type === 'gdrive' || entry.video_id.startsWith('gdrive_');
       const isUpload = data.source_type === 'upload' || entry.source_type === 'upload' || entry.video_id.startsWith('upload_');
+      const isTwitch = data.source_type === 'twitch' || entry.source_type === 'twitch' || entry.video_id.startsWith('twitch_');
 
-      if (isGDrive) {
+      if (isTwitch) {
+        setSourceMode('twitch');
+        setUrl(entry.url);
+        setTwitchUrl(entry.url);
+        setGdriveUrl('');
+        setUploadedVideoInfo(null);
+        setUploadedVideoFile(null);
+      } else if (isGDrive) {
         setSourceMode('gdrive');
         setUrl('');
         const gdriveIdMatch = entry.video_id.match(/gdrive_([a-zA-Z0-9_-]+)/);
@@ -1317,6 +1331,13 @@ export default function App() {
 
   const destroyPlayer = () => {
     stopTracking();
+    if (twitchPlayerRef.current) {
+      twitchPlayerRef.current = null;
+      const twContainer = document.getElementById('twitch-player-container');
+      if (twContainer) {
+        twContainer.innerHTML = '<div id="twitch-player"></div>';
+      }
+    }
     if (playerRef.current) {
       try {
         if (typeof playerRef.current.destroy === 'function') {
@@ -1333,8 +1354,66 @@ export default function App() {
     }
   };
 
+  const initTwitchPlayer = (videoId: string, forceRecreate = false) => {
+    const isClip = videoId.startsWith('twitch_clip_');
+    const rawId = isClip ? videoId.replace('twitch_clip_', '') : videoId.replace('twitch_', '');
+    const container = document.getElementById('twitch-player-container');
+    if (!container) {
+      setTimeout(() => initTwitchPlayer(videoId, forceRecreate), 100);
+      return;
+    }
+
+    if (twitchPlayerRef.current) {
+      twitchPlayerRef.current = null;
+      try {
+        container.innerHTML = '<div id="twitch-player"></div>';
+      } catch (_) {}
+    }
+
+    if ((window as any).Twitch && (window as any).Twitch.Player) {
+      if (!document.getElementById('twitch-player')) {
+        container.innerHTML = '<div id="twitch-player"></div>';
+      }
+      try {
+        const opts: any = {
+          width: '100%',
+          height: '100%',
+          autoplay: false,
+          parent: [window.location.hostname || 'localhost', 'localhost', '127.0.0.1']
+        };
+        if (isClip) {
+          opts.clip = rawId;
+        } else {
+          opts.video = rawId;
+        }
+        const player = new (window as any).Twitch.Player('twitch-player', opts);
+        twitchPlayerRef.current = player;
+        player.addEventListener((window as any).Twitch.Player.PLAY, () => {
+          startTracking();
+        });
+        player.addEventListener((window as any).Twitch.Player.PAUSE, () => {
+          stopTracking();
+          if (player.getCurrentTime) {
+            setCurrentTime(player.getCurrentTime());
+          }
+        });
+        player.addEventListener((window as any).Twitch.Player.READY, () => {
+          console.log('Twitch Player Ready');
+        });
+      } catch (err) {
+        console.error('Error instantiating Twitch Player:', err);
+      }
+    } else {
+      setTimeout(() => initTwitchPlayer(videoId, forceRecreate), 200);
+    }
+  };
+
   const initPlayer = (videoId: string, forceRecreate = false) => {
     if (!videoId || videoId.startsWith('upload_') || videoId.startsWith('gdrive_')) {
+      return;
+    }
+    if (videoId.startsWith('twitch_')) {
+      initTwitchPlayer(videoId, forceRecreate);
       return;
     }
     // If player already exists and we're not forcing recreate, try to load new video
@@ -1407,7 +1486,9 @@ export default function App() {
   const startTracking = () => {
     stopTracking();
     trackingInterval.current = window.setInterval(() => {
-      if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+      if (twitchPlayerRef.current && typeof twitchPlayerRef.current.getCurrentTime === 'function') {
+        setCurrentTime(twitchPlayerRef.current.getCurrentTime());
+      } else if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
         setCurrentTime(playerRef.current.getCurrentTime());
       }
     }, 200);
@@ -1438,6 +1519,14 @@ export default function App() {
       }
       return;
     }
+    if (twitchPlayerRef.current && typeof twitchPlayerRef.current.seek === 'function') {
+      twitchPlayerRef.current.seek(seconds);
+      setCurrentTime(seconds);
+      try {
+        twitchPlayerRef.current.play();
+      } catch (_) {}
+      return;
+    }
     if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
       playerRef.current.seekTo(seconds, true);
       setCurrentTime(seconds);
@@ -1464,6 +1553,15 @@ export default function App() {
         curr = directVideoPlayerRef.current.currentTime;
         if (curr >= clip.end_time) {
           directVideoPlayerRef.current.pause();
+          clearInterval(intervalId);
+          if (clipEndIntervalRef.current === intervalId) {
+            clipEndIntervalRef.current = null;
+          }
+        }
+      } else if (twitchPlayerRef.current && typeof twitchPlayerRef.current.getCurrentTime === 'function') {
+        curr = twitchPlayerRef.current.getCurrentTime();
+        if (curr >= clip.end_time) {
+          twitchPlayerRef.current.pause();
           clearInterval(intervalId);
           if (clipEndIntervalRef.current === intervalId) {
             clipEndIntervalRef.current = null;
@@ -1513,12 +1611,42 @@ export default function App() {
     return null;
   };
 
+  const isTwitchUrl = (urlStr: string): boolean => {
+    if (!urlStr) return false;
+    const trimmed = urlStr.trim();
+    return (
+      trimmed.includes('twitch.tv') ||
+      trimmed.startsWith('twitch_') ||
+      /(?:twitch\.tv\/videos\/|clips\.twitch\.tv\/|twitch\.tv\/[^/]+\/clip\/)/.test(trimmed)
+    );
+  };
+
+  const extractTwitchId = (urlStr: string): { type: 'vod' | 'clip'; id: string } | null => {
+    if (!urlStr) return null;
+    const trimmed = urlStr.trim();
+    const mVod = trimmed.match(/(?:twitch\.tv\/videos\/|twitch\.tv\/[a-zA-Z0-9_]+\/v\/|twitch_vod_|twitch_)(\d+)/);
+    if (mVod && mVod[1]) {
+      return { type: 'vod', id: mVod[1] };
+    }
+    const mClip = trimmed.match(/(?:clips\.twitch\.tv\/|twitch\.tv\/[^/]+\/clip\/|twitch_clip_)([a-zA-Z0-9_-]+)/);
+    if (mClip && mClip[1]) {
+      return { type: 'clip', id: mClip[1] };
+    }
+    return null;
+  };
+
   const extractVideoId = (urlStr: string): string | null => {
     if (!urlStr) return null;
     const trimmed = urlStr.trim();
     if (isGoogleDriveUrl(trimmed)) {
       const gId = extractGoogleDriveId(trimmed);
       return gId ? `gdrive_${gId}` : null;
+    }
+    if (isTwitchUrl(trimmed)) {
+      const tw = extractTwitchId(trimmed);
+      if (tw) {
+        return tw.type === 'vod' ? `twitch_${tw.id}` : `twitch_clip_${tw.id}`;
+      }
     }
     if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
       return trimmed;
@@ -1613,7 +1741,7 @@ export default function App() {
     const manualSuffix = subtitlesSource === 'manual' ? '_manual' : '';
 
     // Determine target video identifier
-    let targetAnalyzeUrl = sourceMode === 'gdrive' ? gdriveUrl.trim() : url.trim();
+    let targetAnalyzeUrl = sourceMode === 'gdrive' ? gdriveUrl.trim() : (sourceMode === 'twitch' ? (twitchUrl.trim() || url.trim()) : url.trim());
     let videoId = extractVideoId(targetAnalyzeUrl);
     let currentVideoInfo = uploadedVideoInfo;
 
@@ -3113,6 +3241,38 @@ Transcript:
                 {t.form.tabYoutube}
               </button>
 
+              {/* Twitch Tab */}
+              <button
+                type="button"
+                id="source-mode-twitch"
+                className={`source-tab-btn ${sourceMode === 'twitch' ? 'active' : ''}`}
+                onClick={() => {
+                  setSourceMode('twitch');
+                  setError(null);
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.5rem',
+                  padding: '0.55rem 1.1rem',
+                  borderRadius: 0,
+                  border: sourceMode === 'twitch' ? '1px solid #9146ff' : '1px solid #201e2c',
+                  background: sourceMode === 'twitch' ? 'rgba(145, 70, 255, 0.15)' : '#08080c',
+                  color: sourceMode === 'twitch' ? '#ffffff' : 'var(--text-secondary)',
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                  fontSize: '0.85rem',
+                  transition: 'all 0.2s ease',
+                  boxShadow: sourceMode === 'twitch' ? '0 0 15px rgba(145, 70, 255, 0.45)' : 'none'
+                }}
+              >
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style={{ color: '#9146ff' }}>
+                  <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z" />
+                </svg>
+                {t.form.tabTwitch}
+              </button>
+
+
               {/* Google Drive Tab */}
               <button
                 type="button"
@@ -3301,6 +3461,141 @@ Transcript:
                     )}
                   </button>
                 </div>
+              </div>
+            )}
+
+            {/* Twitch input mode */}
+            {sourceMode === 'twitch' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', width: '100%' }}>
+                <label style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-secondary)' }}>{t.form.twitchUrlLabel}</label>
+                <div className="form-main-input-row">
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'stretch',
+                      position: 'relative',
+                      flex: 1,
+                      height: '48px',
+                      background: '#060608',
+                      border: '1px solid rgba(145, 70, 255, 0.45)',
+                      boxShadow: '0 0 10px rgba(145, 70, 255, 0.2)',
+                      transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+                    }}
+                    className="hacker-api-key-container"
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        padding: '0 0.85rem',
+                        background: 'rgba(145, 70, 255, 0.12)',
+                        borderRight: '1px solid rgba(145, 70, 255, 0.3)',
+                        color: '#9146ff',
+                        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                        fontSize: '0.78rem',
+                        fontWeight: 700,
+                        letterSpacing: '0.05em',
+                        userSelect: 'none',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      TWITCH &gt;
+                    </div>
+                    <input
+                      id="twitch-url-input"
+                      type="text"
+                      value={twitchUrl || url}
+                      onChange={(e) => {
+                        setTwitchUrl(e.target.value);
+                        setUrl(e.target.value);
+                      }}
+                      disabled={loading}
+                      placeholder={t.form.twitchUrlPlaceholder}
+                      autoComplete="off"
+                      spellCheck={false}
+                      required={sourceMode === 'twitch'}
+                      style={{
+                        flex: 1,
+                        height: '100%',
+                        background: 'transparent',
+                        border: 'none',
+                        outline: 'none',
+                        padding: '0 0.85rem',
+                        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                        fontSize: '0.88rem',
+                        fontWeight: 400,
+                        color: '#ffffff',
+                        caretColor: '#9146ff',
+                      }}
+                    />
+                    {(twitchUrl || url) && !loading && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: '0 0.35rem',
+                          background: 'rgba(255, 255, 255, 0.02)',
+                          borderLeft: '1px solid rgba(255, 255, 255, 0.08)',
+                        }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => { setTwitchUrl(''); setUrl(''); }}
+                          title="Clear URL"
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'rgba(255, 255, 255, 0.4)',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            padding: '0.3rem 0.5rem',
+                            transition: 'color 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => (e.currentTarget.style.color = '#ff1e27')}
+                          onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)')}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    )}
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    disabled={loading || !(twitchUrl.trim() || url.trim())}
+                    style={{
+                      height: '48px',
+                      padding: '0 1.5rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      whiteSpace: 'nowrap',
+                      borderRadius: 0,
+                      background: 'rgba(145, 70, 255, 0.2)',
+                      border: '1px solid #9146ff',
+                      color: '#ffffff',
+                      boxShadow: '0 0 10px rgba(145, 70, 255, 0.3)'
+                    }}
+                  >
+                    {loading ? (
+                      <>
+                        <div className="spinner" />
+                        <span>{t.form.processing}</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={16} color="#9146ff" />
+                        <span>{t.form.hackClips}</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+                <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
+                  {t.form.twitchNotice}
+                </p>
               </div>
             )}
 
@@ -5113,6 +5408,10 @@ Transcript:
                               }
                             }}
                           />
+                        ) : (result.source_type === 'twitch' || result.video_id?.startsWith('twitch_')) ? (
+                          <div id="twitch-player-container" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}>
+                            <div id="twitch-player"></div>
+                          </div>
                         ) : (
                           <div id="youtube-player-container" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}>
                             <div id="youtube-player"></div>
@@ -5914,6 +6213,7 @@ Transcript:
               videoUrl={result.video_url || url}
               videoId={result.video_id}
               allClips={result.clips}
+              transcript={result.transcript || []}
               markedClips={markedClipsList}
               activeClip={activeClip}
               onStartRender={handleStartBatchRender}
@@ -6102,6 +6402,7 @@ Transcript:
           videoDuration={result?.duration || 0}
           transcript={result?.transcript}
           onClose={() => setTrimmerClip(null)}
+          onApply={handleApplyAdjustedClipToResults}
           onDownload={async (adjustedClip) => {
             handleApplyAdjustedClipToResults(adjustedClip);
             await handleDownloadRawClip(adjustedClip);

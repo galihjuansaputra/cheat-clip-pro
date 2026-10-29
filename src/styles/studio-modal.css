@@ -1279,13 +1279,13 @@
 /* Title Overlay in Wireframe */
 .wireframe-title-overlay {
   position: absolute;
-  left: 0;
-  right: 0;
-  text-align: center;
-  z-index: 10;
-  padding: 0 0.75rem;
-  transition: top 0.25s ease;
+  z-index: 35;
+  padding: 0 0.5rem;
+  transition: top 0.2s ease, left 0.15s ease, opacity 0.2s ease;
   pointer-events: none;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 .wireframe-title-text {
