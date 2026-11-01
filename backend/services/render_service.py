@@ -124,8 +124,7 @@ async def render_single_batch_clip(
                     title_font_name=settings.title_font or settings.caption_font or "Outfit",
                     title_font_size_px=settings.title_font_size_px,
                     title_text_case=settings.title_text_case or settings.text_case or "uppercase",
-                    title_x_percent=getattr(settings, "title_x_percent", 50.0),
-                subtitle_offset_seconds=getattr(settings, "subtitle_offset_seconds", 0.0)
+                    title_x_percent=getattr(settings, "title_x_percent", 50.0)
                 )
                 if rendered_overlay and os.path.exists(rendered_overlay):
                     title_overlay_path = rendered_overlay
