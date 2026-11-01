@@ -70,7 +70,13 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
     videoUrl?.startsWith('/api/video/') ||
     videoUrl?.startsWith('blob:')
   );
+  const isTwitch = Boolean(
+    sourceType === 'twitch' ||
+    videoId?.startsWith('twitch_') ||
+    videoUrl?.includes('twitch.tv')
+  );
   const directVideoRef = useRef<HTMLVideoElement | null>(null);
+  const twitchPlayerRef = useRef<any>(null);
 
   const origStart = clip?.start_time ?? 0;
   const origEnd = clip?.end_time ?? 0;
@@ -103,11 +109,18 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
       if (directVideoRef.current) {
         directVideoRef.current.muted = false;
         directVideoRef.current.volume = volume || 0.8;
+      } else if (isTwitch && twitchPlayerRef.current && typeof twitchPlayerRef.current.setMuted === 'function') {
+        twitchPlayerRef.current.setMuted(false);
+        if (typeof twitchPlayerRef.current.setVolume === 'function') {
+          twitchPlayerRef.current.setVolume(volume || 0.8);
+        }
       }
     } else {
       setIsMuted(true);
       if (directVideoRef.current) {
         directVideoRef.current.muted = true;
+      } else if (isTwitch && twitchPlayerRef.current && typeof twitchPlayerRef.current.setMuted === 'function') {
+        twitchPlayerRef.current.setMuted(true);
       }
     }
   };
@@ -163,9 +176,87 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
     setDownloadSuccess(false);
   }, [adjustedStart, adjustedEnd]);
 
+  // Setup Twitch interactive embed player for the modal preview
+  useEffect(() => {
+    if (!isOpen || !clip || !isTwitch) return;
+    let isMounted = true;
+    playerReadyRef.current = false;
+    setPlayerReady(false);
+
+    const isClip = videoId?.startsWith('twitch_clip_');
+    const rawId = isClip ? videoId.replace('twitch_clip_', '') : videoId.replace('twitch_', '');
+
+    const initTwitch = () => {
+      if (!isMounted) return;
+      const container = document.getElementById('trimmer-twitch-player-container');
+      if (!container) {
+        setTimeout(initTwitch, 150);
+        return;
+      }
+
+      if ((window as any).Twitch && (window as any).Twitch.Player) {
+        container.innerHTML = '<div id="trimmer-twitch-slot"></div>';
+        try {
+          const opts: any = {
+            width: '100%',
+            height: '100%',
+            autoplay: false,
+            parent: [window.location.hostname || 'localhost', 'localhost', '127.0.0.1']
+          };
+          if (isClip) opts.clip = rawId; else opts.video = rawId;
+          const p = new (window as any).Twitch.Player('trimmer-twitch-slot', opts);
+          twitchPlayerRef.current = p;
+          p.addEventListener((window as any).Twitch.Player.READY, () => {
+            if (!isMounted) return;
+            playerReadyRef.current = true;
+            setPlayerReady(true);
+            try {
+              p.seek(adjustedStart);
+              setCurrentTime(adjustedStart);
+            } catch (_) {}
+          });
+          p.addEventListener((window as any).Twitch.Player.PLAY, () => {
+            if (isMounted) setIsPlaying(true);
+          });
+          p.addEventListener((window as any).Twitch.Player.PAUSE, () => {
+            if (isMounted) setIsPlaying(false);
+          });
+        } catch (err) {
+          console.error('Error init twitch trimmer:', err);
+        }
+      } else {
+        setTimeout(initTwitch, 250);
+      }
+    };
+    initTwitch();
+
+    const interval = window.setInterval(() => {
+      if (!isMounted || isDraggingRef.current) return;
+      if (twitchPlayerRef.current && typeof twitchPlayerRef.current.getCurrentTime === 'function') {
+        const curr = twitchPlayerRef.current.getCurrentTime();
+        if (typeof curr === 'number' && !isNaN(curr)) {
+          setCurrentTime(curr);
+          if (curr >= boundsRef.current.end) {
+            twitchPlayerRef.current.seek(boundsRef.current.start);
+            twitchPlayerRef.current.pause();
+            setIsPlaying(false);
+          }
+        }
+      }
+    }, 150);
+
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+      if (twitchPlayerRef.current) {
+        twitchPlayerRef.current = null;
+      }
+    };
+  }, [isOpen, clip, isTwitch, videoId]);
+
   // Setup YouTube Iframe API player for the modal preview (only for YouTube videos)
   useEffect(() => {
-    if (!isOpen || !clip || isDirectVideo) {
+    if (!isOpen || !clip || isDirectVideo || isTwitch) {
       return;
     }
     let isMounted = true;
@@ -330,6 +421,10 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
         if (directVideoRef.current) {
           directVideoRef.current.currentTime = targetSec;
         }
+      } else if (isTwitch && twitchPlayerRef.current && typeof twitchPlayerRef.current.seek === 'function') {
+        try {
+          twitchPlayerRef.current.seek(targetSec);
+        } catch {}
       } else if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
         try {
           ytPlayerRef.current.seekTo(targetSec, false);
@@ -358,6 +453,14 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
           });
         }
       }
+    } else if (isTwitch && twitchPlayerRef.current && typeof twitchPlayerRef.current.seek === 'function') {
+      try {
+        twitchPlayerRef.current.seek(clamped);
+        if (play) {
+          twitchPlayerRef.current.play();
+          setIsPlaying(true);
+        }
+      } catch {}
     } else if (ytPlayerRef.current && typeof ytPlayerRef.current.seekTo === 'function') {
       try {
         ytPlayerRef.current.seekTo(clamped, true);
@@ -398,6 +501,20 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
           }
         }
       }
+    } else if (isTwitch && twitchPlayerRef.current) {
+      try {
+        if (isPlaying) {
+          twitchPlayerRef.current.pause();
+          setIsPlaying(false);
+        } else {
+          if (currentTime >= adjustedEnd || currentTime < adjustedStart) {
+            seekToTime(adjustedStart, true);
+          } else {
+            twitchPlayerRef.current.play();
+            setIsPlaying(true);
+          }
+        }
+      } catch {}
     } else if (ytPlayerRef.current) {
       try {
         if (isPlaying && typeof ytPlayerRef.current.pauseVideo === 'function') {
@@ -739,6 +856,21 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
                     onPlay={() => setIsPlaying(true)}
                     onPause={() => setIsPlaying(false)}
                   />
+                ) : isTwitch ? (
+                  <div
+                    id="trimmer-twitch-player-container"
+                    style={{
+                      width: '100%',
+                      height: '100%',
+                      position: 'relative',
+                      zIndex: 2,
+                      opacity: playerReady ? 1 : 0,
+                      transition: 'opacity 0.28s ease',
+                      pointerEvents: isDragging ? 'none' : 'auto'
+                    }}
+                  >
+                    <div id="trimmer-twitch-slot"></div>
+                  </div>
                 ) : (
                   <div
                     id="trimmer-yt-player-container"

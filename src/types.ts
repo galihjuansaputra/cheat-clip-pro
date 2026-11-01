@@ -34,7 +34,7 @@ export interface AnalyzeResponse {
   transcript?: TranscriptLine[];
   model?: string;
   video_url?: string;
-  source_type?: 'youtube' | 'upload' | 'gdrive';
+  source_type?: 'youtube' | 'upload' | 'gdrive' | 'twitch';
 }
 
 export type AspectRatioOption = '9:16' | '1:1' | '4:3' | '16:9' | '16:9_landscape';
@@ -120,7 +120,10 @@ export interface RenderSettings {
   fontSizePx?: number;
   textCase: TextCaseOption;
   titleYPercent?: number;
+  titleXPercent?: number;
+  cropXPercent?: number;
   subtitleYPercent?: number;
+  subtitleOffsetSeconds?: number;
   subtitlePositionMode?: SubtitlePositionMode;
   subtitleCenterYPercent?: number;
   selectedClips: ViralClip[];

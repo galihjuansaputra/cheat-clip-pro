@@ -38,7 +38,48 @@ import type {
   HardwareAccelOption,
   HardwareAccelInfo,
   FontItem,
+  TranscriptLine,
 } from '../types';
+
+interface CaptionWord {
+  text: string;
+  start: number;
+  end: number;
+}
+
+interface CaptionChunk {
+  words: CaptionWord[];
+  start: number;
+  end: number;
+}
+
+function cleanCaptionText(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\[.*?\]|\(.*?\)|[*].*?[*]/g, ' ')
+    .replace(/\b(laughter|applause|music|cheering|snickering|giggle|cough)\b/gi, ' ')
+    .replace(/^\s*[\.,…:;]+\s*/, '')
+    .replace(/\s*[\.,…:;]+\s*$/, '')
+    .replace(/[^\w\s.,%&$?]|_/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const CAPTION_STYLE_CONFIG: Record<CaptionStyle, { highlight: string; sample: [string, string] }> = {
+  viral_pop: { highlight: '#FFE600', sample: ['VIRAL', 'POP'] },
+  beast_punch: { highlight: '#00FF66', sample: ['UNREAL', 'HACK'] },
+  cyber_violet: { highlight: '#D946EF', sample: ['CYBER', 'PUNCH'] },
+  fire_red: { highlight: '#FF2E2E', sample: ['HOT', 'FIRE'] },
+  electric_cyan: { highlight: '#00F0FF', sample: ['ELECTRIC', 'CYAN'] },
+  golden_aura: { highlight: '#FFB800', sample: ['GOLDEN', 'MOMENT'] },
+  clean_minimal: { highlight: '#38BDF8', sample: ['CLEAN', 'SUBTITLE'] },
+  none: { highlight: '#FFFFFF', sample: ['', ''] },
+};
 
 interface ClipStudioSectionProps {
   videoUrl: string;
@@ -56,6 +97,7 @@ interface ClipStudioSectionProps {
   allowAppUpdates?: boolean;
   onOpenCookiesModal?: () => void;
   onBackToClips?: () => void;
+  transcript?: TranscriptLine[];
 }
 
 function getFriendlyErrorMessage(rawMsg: string): string {
@@ -209,6 +251,8 @@ export interface StudioPreferences {
   aspectRatio?: AspectRatioOption;
   backgroundStyle?: BackgroundStyle;
   enableFaceTracking?: boolean;
+  manualCropX?: number;
+  isManualCropX?: boolean;
   streamerPreset?: StreamerPreset;
   facecamPosition?: FacecamPosition;
   titlePosition?: TitlePosition;
@@ -226,7 +270,9 @@ export interface StudioPreferences {
   originalAudioVolume?: number;
   hardwareAccel?: HardwareAccelOption;
   titleYPercent?: number;
+  titleXPercent?: number;
   subtitleYPercent?: number;
+  subtitleOffsetSeconds?: number;
   subtitleCenterYPercent?: number;
   isCustomTitleY?: boolean;
   bgmVolume?: number;
@@ -242,6 +288,8 @@ export const DEFAULT_STUDIO_PREFS: Required<StudioPreferences> = {
   aspectRatio: '9:16',
   backgroundStyle: 'black',
   enableFaceTracking: true,
+  manualCropX: 50,
+  isManualCropX: false,
   streamerPreset: 'none',
   facecamPosition: 'auto',
   titlePosition: 'auto',
@@ -259,7 +307,9 @@ export const DEFAULT_STUDIO_PREFS: Required<StudioPreferences> = {
   originalAudioVolume: 100,
   hardwareAccel: 'browser_wasm',
   titleYPercent: 17,
+  titleXPercent: 50,
   subtitleYPercent: 21,
+  subtitleOffsetSeconds: 0.0,
   subtitleCenterYPercent: 50,
   isCustomTitleY: false,
   bgmVolume: 25,
@@ -298,9 +348,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   allowAppUpdates = false,
   onOpenCookiesModal,
   onBackToClips,
+  transcript = [],
 }) => {
   const { t } = useLanguage();
-  const isYouTube = !videoId?.startsWith('upload_') && !videoId?.startsWith('gdrive_') && !videoUrl?.includes('/api/video');
+  const isYouTube = !videoId?.startsWith('upload_') && !videoId?.startsWith('gdrive_') && !videoId?.startsWith('twitch_') && !videoUrl?.includes('/api/video') && !videoUrl?.includes('twitch.tv');
+  const isTwitch = Boolean(videoId?.startsWith('twitch_') || videoUrl?.includes('twitch.tv'));
   const [hasCookies, setHasCookies] = useState<boolean>(() => hasStoredCookies());
 
   useEffect(() => {
@@ -320,6 +372,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [aspectRatio, setAspectRatio] = useState<AspectRatioOption>(() => getSavedStudioPreferences().aspectRatio ?? DEFAULT_STUDIO_PREFS.aspectRatio);
   const [backgroundStyle, setBackgroundStyle] = useState<BackgroundStyle>(() => getSavedStudioPreferences().backgroundStyle ?? DEFAULT_STUDIO_PREFS.backgroundStyle);
   const [enableFaceTracking, setEnableFaceTracking] = useState<boolean>(() => getSavedStudioPreferences().enableFaceTracking ?? DEFAULT_STUDIO_PREFS.enableFaceTracking);
+  const [manualCropX, setManualCropX] = useState<number>(() => getSavedStudioPreferences().manualCropX ?? DEFAULT_STUDIO_PREFS.manualCropX);
+  const [isManualCropX, setIsManualCropX] = useState<boolean>(() => getSavedStudioPreferences().isManualCropX ?? DEFAULT_STUDIO_PREFS.isManualCropX);
   const [streamerPreset, setStreamerPreset] = useState<StreamerPreset>(() => getSavedStudioPreferences().streamerPreset ?? DEFAULT_STUDIO_PREFS.streamerPreset);
   const [facecamPosition, setFacecamPosition] = useState<FacecamPosition>(() => getSavedStudioPreferences().facecamPosition ?? DEFAULT_STUDIO_PREFS.facecamPosition);
   const [titlePrefix, setTitlePrefix] = useState<string>(() => getSavedStudioPreferences().titlePrefix ?? DEFAULT_STUDIO_PREFS.titlePrefix);
@@ -365,7 +419,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   // Manual Up/Down positioning for All Formats
   const [titleYPercent, setTitleYPercent] = useState<number>(() => getSavedStudioPreferences().titleYPercent ?? DEFAULT_STUDIO_PREFS.titleYPercent);
+  const [titleXPercent, setTitleXPercent] = useState<number>(() => getSavedStudioPreferences().titleXPercent ?? DEFAULT_STUDIO_PREFS.titleXPercent);
   const [subtitleYPercent, setSubtitleYPercent] = useState<number>(() => getSavedStudioPreferences().subtitleYPercent ?? DEFAULT_STUDIO_PREFS.subtitleYPercent);
+  const [subtitleOffsetSeconds, setSubtitleOffsetSeconds] = useState<number>(() => getSavedStudioPreferences().subtitleOffsetSeconds ?? DEFAULT_STUDIO_PREFS.subtitleOffsetSeconds);
   const [subtitlePositionMode, setSubtitlePositionMode] = useState<SubtitlePositionMode>(() => getSavedStudioPreferences().subtitlePositionMode ?? DEFAULT_STUDIO_PREFS.subtitlePositionMode);
   const [subtitleCenterYPercent, setSubtitleCenterYPercent] = useState<number>(() => getSavedStudioPreferences().subtitleCenterYPercent ?? DEFAULT_STUDIO_PREFS.subtitleCenterYPercent);
   const [isCustomTitleY, setIsCustomTitleY] = useState<boolean>(() => getSavedStudioPreferences().isCustomTitleY ?? DEFAULT_STUDIO_PREFS.isCustomTitleY);
@@ -584,6 +640,156 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const clipEnd = currentPreviewClip ? currentPreviewClip.end_time : 60;
   const clipDuration = Math.max(1, clipEnd - clipStart);
 
+  // Precompute and partition caption words/chunks for currentPreviewClip
+  const captionChunks = useMemo<CaptionChunk[]>(() => {
+    if (!currentPreviewClip) return [];
+    const clipStart = currentPreviewClip.start_time;
+    const clipEnd = currentPreviewClip.end_time;
+
+    const allWords: CaptionWord[] = [];
+
+    // 1. Primary: Extract from timestamped transcript lines
+    if (transcript && transcript.length > 0) {
+      const relevantLines = transcript.filter(line => {
+        const lStart = line.start;
+        const lEnd = (typeof line.end === 'number' && line.end > lStart) ? line.end : (lStart + ((line as any).duration || 2.0));
+        return lEnd >= clipStart - 0.5 && lStart <= clipEnd + 0.5;
+      });
+
+      for (const line of relevantLines) {
+        const cleaned = cleanCaptionText(line.text || '');
+        if (!cleaned) continue;
+        const lStart = line.start;
+        const lEnd = (typeof line.end === 'number' && line.end > lStart) ? line.end : (lStart + ((line as any).duration || 2.0));
+        const tokens = cleaned.split(/\s+/).filter(Boolean);
+        if (!tokens.length) continue;
+
+        // Natural speech duration calibration:
+        // Respect the actual sentence duration unless trailing silence is detected
+        const rawLineDur = Math.max(0.4, lEnd - lStart);
+        const maxPlausibleDur = tokens.length * 0.52 + 0.25;
+        const spokenDuration = Math.min(rawLineDur, maxPlausibleDur);
+
+        const tokenWeights = tokens.map(t => Math.max(2, t.replace(/[^a-zA-Z0-9]/g, '').length || t.length));
+        const totalWeight = tokenWeights.reduce((a, b) => a + b, 0);
+
+        let curTime = lStart;
+        tokens.forEach((tok, idx) => {
+          const ratio = tokenWeights[idx] / Math.max(1, totalWeight);
+          const wDur = Math.max(0.14, Math.min(0.60, spokenDuration * ratio));
+          const wStart = curTime;
+          const wEnd = wStart + wDur;
+          curTime = wEnd;
+
+          allWords.push({
+            text: tok,
+            start: wStart,
+            end: wEnd,
+          });
+        });
+      }
+    }
+
+    // 2. Fallback: If no transcript lines found, use currentPreviewClip.transcript (string)
+    if (allWords.length === 0 && currentPreviewClip.transcript) {
+      const cleaned = cleanCaptionText(currentPreviewClip.transcript);
+      const tokens = cleaned.split(/\s+/).filter(Boolean);
+      if (tokens.length > 0) {
+        const duration = Math.max(1, clipEnd - clipStart);
+        const maxPlausibleDur = tokens.length * 0.52 + 0.25;
+        const spokenDuration = Math.min(duration, maxPlausibleDur);
+        const tokenWeights = tokens.map(t => Math.max(2, t.replace(/[^a-zA-Z0-9]/g, '').length || t.length));
+        const totalWeight = tokenWeights.reduce((a, b) => a + b, 0);
+
+        let curTime = clipStart;
+        tokens.forEach((tok, idx) => {
+          const ratio = tokenWeights[idx] / Math.max(1, totalWeight);
+          const wDur = Math.max(0.14, Math.min(0.60, spokenDuration * ratio));
+          const wStart = curTime;
+          const wEnd = wStart + wDur;
+          curTime = wEnd;
+
+          allWords.push({
+            text: tok,
+            start: wStart,
+            end: wEnd,
+          });
+        });
+      }
+    }
+
+    if (allWords.length === 0) return [];
+
+    // Group words into punchy chunks of 1 to 3 words (max 18 chars), splitting on punctuation or pauses >= 0.28s
+    const chunks: CaptionChunk[] = [];
+    let currentWords: CaptionWord[] = [];
+    let currentChars = 0;
+
+    for (const w of allWords) {
+      const wLen = w.text.length;
+      const hasPause = currentWords.length > 0 && (w.start - currentWords[currentWords.length - 1].end >= 0.28);
+      const endsSentence = currentWords.length > 0 && /[.?!,]$/.test(currentWords[currentWords.length - 1].text);
+
+      if (currentWords.length >= 3 || hasPause || endsSentence || (currentWords.length > 0 && currentChars + wLen > 18)) {
+        chunks.push({
+          words: currentWords,
+          start: currentWords[0].start,
+          end: currentWords[currentWords.length - 1].end,
+        });
+        currentWords = [w];
+        currentChars = wLen;
+      } else {
+        currentWords.push(w);
+        currentChars += wLen + 1;
+      }
+    }
+    if (currentWords.length > 0) {
+      chunks.push({
+        words: currentWords,
+        start: currentWords[0].start,
+        end: currentWords[currentWords.length - 1].end,
+      });
+    }
+
+    return chunks;
+  }, [transcript, currentPreviewClip]);
+
+  // Compute active chunk and word index for currentTime with user-adjustable sync offset
+  const activeCaption = useMemo(() => {
+    if (!captionChunks.length) return null;
+
+    // Apply user-adjustable sync offset: positive means captions appear later; negative means earlier
+    const playhead = currentTime - subtitleOffsetSeconds;
+
+    const activeChunk = captionChunks.find(c => playhead >= (c.start - 0.06) && playhead <= (c.end + 0.25));
+    if (activeChunk) {
+      const activeIdx = activeChunk.words.findIndex(w => playhead >= w.start && playhead <= w.end);
+      const wordIndex = activeIdx !== -1 ? activeIdx : (playhead > activeChunk.words[activeChunk.words.length - 1].end ? activeChunk.words.length - 1 : 0);
+      return { chunk: activeChunk, activeWordIndex: wordIndex };
+    }
+
+    // When paused outside active speech, find closest chunk
+    if (!isPlaying) {
+      let closest: CaptionChunk | null = null;
+      let minDiff = Infinity;
+      for (const c of captionChunks) {
+        const diff = Math.min(Math.abs(playhead - c.start), Math.abs(playhead - c.end));
+        if (diff < minDiff) {
+          minDiff = diff;
+          closest = c;
+        }
+      }
+      if (closest && minDiff < 2.0) {
+        const wordIndex = playhead >= closest.end ? closest.words.length - 1 : 0;
+        return { chunk: closest, activeWordIndex: wordIndex };
+      }
+    }
+
+    return null;
+  }, [captionChunks, currentTime, subtitleOffsetSeconds, isPlaying]);
+
+
+
   // Fetch face/object detection coordinates
   useEffect(() => {
     if (!videoId) return;
@@ -618,6 +824,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   // Calculate horizontal crop percentage (0 = leftmost edge, 50 = center, 100 = rightmost edge)
   const previewCropPercent = useMemo(() => {
+    if (isManualCropX) {
+      return Math.max(0, Math.min(100, Math.round(manualCropX)));
+    }
     if (!enableFaceTracking || streamerPreset !== 'none') {
       return 50;
     }
@@ -644,7 +853,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       }
     }
     return 50;
-  }, [enableFaceTracking, aspectRatio, streamerPreset, facecamPosition, faceBox]);
+  }, [isManualCropX, manualCropX, enableFaceTracking, aspectRatio, streamerPreset, facecamPosition, faceBox]);
 
   // Helper duration formatter
   const formatDuration = (seconds: number) => {
@@ -662,6 +871,67 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     if (isDirect) {
       setPlayerReady(true);
       setCurrentTime(clipStart);
+      return;
+    }
+
+    if (isTwitch) {
+      if ((window as any).Twitch && (window as any).Twitch.Player) {
+        const container = document.getElementById('studio-preview-twitch-container');
+        if (!container) return;
+
+        if (previewPlayerRef.current) {
+          try {
+            previewPlayerRef.current = null;
+          } catch (e) {}
+        }
+
+        container.innerHTML = '<div id="studio-twitch-iframe-slot"></div>';
+
+        const isClip = videoId?.startsWith('twitch_clip_');
+        const rawId = isClip ? videoId.replace('twitch_clip_', '') : (videoId?.replace('twitch_', '') || '');
+
+        try {
+          const opts: any = {
+            width: '100%',
+            height: '100%',
+            autoplay: false,
+            parent: [window.location.hostname || 'localhost', 'localhost', '127.0.0.1']
+          };
+          if (isClip) opts.clip = rawId; else opts.video = rawId;
+          const player = new (window as any).Twitch.Player('studio-twitch-iframe-slot', opts);
+          previewPlayerRef.current = player;
+
+          player.addEventListener((window as any).Twitch.Player.READY, () => {
+            setPlayerReady(true);
+            try {
+              player.setMuted(true);
+              setIsMuted(true);
+              player.seek(clipStart);
+              setCurrentTime(clipStart);
+            } catch (e) {}
+          });
+
+          player.addEventListener((window as any).Twitch.Player.PLAY, () => {
+            setIsPlaying(true);
+            startTracking();
+          });
+
+          player.addEventListener((window as any).Twitch.Player.PAUSE, () => {
+            setIsPlaying(false);
+            stopTracking();
+            if (isLooping && currentPreviewClip) {
+              try {
+                player.seek(clipStart);
+                player.play();
+              } catch (e) {}
+            }
+          });
+        } catch (err) {
+          console.error('Error instantiating Twitch studio player:', err);
+        }
+      } else {
+        setTimeout(initPreviewPlayer, 250);
+      }
       return;
     }
 
@@ -754,9 +1024,17 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
               setCurrentTime(t);
               if (currentPreviewClip && t >= currentPreviewClip.end_time) {
                 if (isLooping) {
-                  previewPlayerRef.current.seekTo(currentPreviewClip.start_time, true);
+                  if (typeof previewPlayerRef.current.seek === 'function') {
+                    previewPlayerRef.current.seek(currentPreviewClip.start_time);
+                  } else if (typeof previewPlayerRef.current.seekTo === 'function') {
+                    previewPlayerRef.current.seekTo(currentPreviewClip.start_time, true);
+                  }
                 } else {
-                  previewPlayerRef.current.pauseVideo();
+                  if (typeof previewPlayerRef.current.pause === 'function') {
+                    previewPlayerRef.current.pause();
+                  } else if (typeof previewPlayerRef.current.pauseVideo === 'function') {
+                    previewPlayerRef.current.pauseVideo();
+                  }
                 }
               }
             }
@@ -781,7 +1059,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           }
         }
       } catch (e) {}
-    }, 150);
+    }, 75);
   };
 
   const stopTracking = () => {
@@ -820,7 +1098,16 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const togglePlayPause = () => {
     if (previewPlayerRef.current) {
       try {
-        if (isPlaying) {
+        if (typeof previewPlayerRef.current.play === 'function') {
+          if (isPlaying) {
+            previewPlayerRef.current.pause();
+          } else {
+            if (currentPreviewClip && (currentTime >= currentPreviewClip.end_time || currentTime < currentPreviewClip.start_time)) {
+              previewPlayerRef.current.seek(currentPreviewClip.start_time);
+            }
+            previewPlayerRef.current.play();
+          }
+        } else if (isPlaying) {
           previewPlayerRef.current.pauseVideo();
         } else {
           if (currentPreviewClip && (currentTime >= currentPreviewClip.end_time || currentTime < currentPreviewClip.start_time)) {
@@ -849,9 +1136,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   const handleSeek = (newTime: number) => {
     setCurrentTime(newTime);
-    if (previewPlayerRef.current && typeof previewPlayerRef.current.seekTo === 'function') {
+    if (previewPlayerRef.current) {
       try {
-        previewPlayerRef.current.seekTo(newTime, true);
+        if (typeof previewPlayerRef.current.seek === 'function') {
+          previewPlayerRef.current.seek(newTime);
+        } else if (typeof previewPlayerRef.current.seekTo === 'function') {
+          previewPlayerRef.current.seekTo(newTime, true);
+        }
       } catch (e) {}
     } else if (directVideoRef.current) {
       directVideoRef.current.currentTime = newTime;
@@ -861,10 +1152,15 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   const handleRestart = () => {
     setCurrentTime(clipStart);
-    if (previewPlayerRef.current && typeof previewPlayerRef.current.seekTo === 'function') {
+    if (previewPlayerRef.current) {
       try {
-        previewPlayerRef.current.seekTo(clipStart, true);
-        previewPlayerRef.current.playVideo();
+        if (typeof previewPlayerRef.current.seek === 'function') {
+          previewPlayerRef.current.seek(clipStart);
+          previewPlayerRef.current.play();
+        } else if (typeof previewPlayerRef.current.seekTo === 'function') {
+          previewPlayerRef.current.seekTo(clipStart, true);
+          previewPlayerRef.current.playVideo();
+        }
       } catch (e) {}
     } else if (directVideoRef.current) {
       directVideoRef.current.currentTime = clipStart;
@@ -877,7 +1173,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const toggleMute = () => {
     if (previewPlayerRef.current) {
       try {
-        if (isMuted) {
+        if (typeof previewPlayerRef.current.setMuted === 'function') {
+          previewPlayerRef.current.setMuted(!isMuted);
+          setIsMuted(!isMuted);
+        } else if (isMuted) {
           previewPlayerRef.current.unMute();
           setIsMuted(false);
         } else {
@@ -1456,8 +1755,26 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   // Safe clamped values for preview rendering
   const safeTitleY = Math.min(titleYPercent, maxTitleY);
+  const safeTitleX = Math.max(15, Math.min(85, titleXPercent));
   const safeSubtitleY = Math.min(subtitleYPercent, maxSubY);
   const safeSubCenterY = Math.max(minCenterY, Math.min(subtitleCenterYPercent, maxCenterY));
+
+  // Determine if title is within duration limit (5s, 10s, or entire clip)
+  const elapsedInClip = Math.max(0, currentTime - clipStart);
+  const isTitleVisible = titlePosition !== 'none' && (
+    titleDuration === 'entire' ||
+    (titleDuration === '5s' && elapsedInClip <= 5.0) ||
+    (titleDuration === '10s' && elapsedInClip <= 10.0)
+  );
+
+  const handleResetTitleHorizontal = () => {
+    setTitleXPercent(50);
+  };
+
+  const handleResetCropX = () => {
+    setManualCropX(50);
+    setIsManualCropX(false);
+  };
 
   // If user hasn't explicitly customized positions, auto-keep optimal default for ratio & lines
   useEffect(() => {
@@ -1486,6 +1803,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     const defaults = getDefaultPositions(aspectRatio, titleLineCount, streamerPreset);
     setSubtitleYPercent(defaults.subtitleY);
     setSubtitleCenterYPercent(defaults.subCenterY);
+    setSubtitleOffsetSeconds(0.0);
   };
 
   // Automatically persist studio customization preferences to localStorage
@@ -1494,6 +1812,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       aspectRatio,
       backgroundStyle,
       enableFaceTracking,
+      manualCropX,
+      isManualCropX,
       streamerPreset,
       facecamPosition,
       titlePosition,
@@ -1512,6 +1832,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       hardwareAccel,
       titleYPercent,
       subtitleYPercent,
+      subtitleOffsetSeconds,
       subtitleCenterYPercent,
       isCustomTitleY,
       bgmVolume,
@@ -1549,6 +1870,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     hardwareAccel,
     titleYPercent,
     subtitleYPercent,
+    subtitleOffsetSeconds,
     subtitleCenterYPercent,
     isCustomTitleY,
     bgmVolume,
@@ -1582,8 +1904,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     setOriginalAudioVolume(DEFAULT_STUDIO_PREFS.originalAudioVolume);
     setHardwareAccel(DEFAULT_STUDIO_PREFS.hardwareAccel);
     setTitleYPercent(DEFAULT_STUDIO_PREFS.titleYPercent);
+    setTitleXPercent(DEFAULT_STUDIO_PREFS.titleXPercent);
+    setManualCropX(DEFAULT_STUDIO_PREFS.manualCropX);
+    setIsManualCropX(DEFAULT_STUDIO_PREFS.isManualCropX);
     setSubtitleYPercent(DEFAULT_STUDIO_PREFS.subtitleYPercent);
     setSubtitleCenterYPercent(DEFAULT_STUDIO_PREFS.subtitleCenterYPercent);
+    setSubtitleOffsetSeconds(DEFAULT_STUDIO_PREFS.subtitleOffsetSeconds);
     setIsCustomTitleY(DEFAULT_STUDIO_PREFS.isCustomTitleY);
     setBgmVolume(DEFAULT_STUDIO_PREFS.bgmVolume);
     setHookSfxVolume(DEFAULT_STUDIO_PREFS.hookSfxVolume);
@@ -1638,7 +1964,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       fontSizePx,
       textCase,
       titleYPercent: safeTitleY,
+      titleXPercent: safeTitleX,
+      cropXPercent: isManualCropX ? manualCropX : undefined,
       subtitleYPercent: safeSubtitleY,
+      subtitleOffsetSeconds,
       subtitlePositionMode,
       subtitleCenterYPercent: safeSubCenterY,
       selectedClips: enrichedSelectedClips,
@@ -1879,7 +2208,92 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 </label>
               </div>
 
-              {enableFaceTracking && streamerPreset === 'none' && (
+              {/* Manual Camera Centering & Focal Point Controls */}
+              {aspectRatio !== '16:9_landscape' && streamerPreset === 'none' && (
+                <div className="manual-camera-framing-box" style={{ marginTop: '0.75rem', padding: '0.65rem 0.75rem', borderRadius: '6px', background: 'rgba(255,255,255,0.025)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem', flexWrap: 'wrap', gap: '0.35rem' }}>
+                    <span style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                      // {t.studio.manualCameraCentering || "Manual Camera Centering (Horizontal Crop):"}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                      <span className="badge" style={{ fontSize: '0.70rem', padding: '0.12rem 0.45rem', background: isManualCropX ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255,255,255,0.08)', color: isManualCropX ? '#38bdf8' : 'var(--text-muted)' }}>
+                        {isManualCropX ? `${manualCropX}% ${manualCropX === 50 ? '(Center)' : manualCropX < 50 ? '(Left)' : '(Right)'}` : (t.studio.aiAutoMode || "⚡ AI Auto Track")}
+                      </span>
+                      {isManualCropX && (
+                        <button
+                          type="button"
+                          className="reset-btn"
+                          onClick={handleResetCropX}
+                          style={{ fontSize: '0.70rem', padding: '0.12rem 0.4rem', border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '4px', cursor: 'pointer' }}
+                        >
+                          {t.studio.resetCrop || "↺ Auto AI"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="toggle-pill-group" style={{ marginBottom: '0.5rem', display: 'flex', gap: '0.4rem' }}>
+                    <button
+                      type="button"
+                      className={`pill-btn ${!isManualCropX ? 'active' : ''}`}
+                      onClick={() => setIsManualCropX(false)}
+                      style={{ fontSize: '0.74rem', padding: '0.25rem 0.55rem' }}
+                    >
+                      {t.studio.aiAutoMode || "⚡ AI Auto Track"}
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill-btn ${isManualCropX ? 'active' : ''}`}
+                      onClick={() => setIsManualCropX(true)}
+                      style={{ fontSize: '0.74rem', padding: '0.25rem 0.55rem' }}
+                    >
+                      {t.studio.manualCropMode || "🎯 Manual Crop"}
+                    </button>
+                  </div>
+
+                  {isManualCropX && (
+                    <div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="1"
+                        value={manualCropX}
+                        onChange={(e) => {
+                          setManualCropX(Number(e.target.value));
+                          setIsManualCropX(true);
+                        }}
+                        className="position-slider"
+                        style={{ '--slider-progress': `${manualCropX}%` } as React.CSSProperties}
+                      />
+                      <div className="quick-presets-row" style={{ display: 'flex', gap: '0.35rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                        {[
+                          { label: 'Far Left 15%', val: 15 },
+                          { label: 'Left 30%', val: 30 },
+                          { label: 'Center 50%', val: 50 },
+                          { label: 'Right 70%', val: 70 },
+                          { label: 'Far Right 85%', val: 85 }
+                        ].map(p => (
+                          <button
+                            key={p.val}
+                            type="button"
+                            className={`pill-btn ${manualCropX === p.val ? 'active' : ''}`}
+                            onClick={() => {
+                              setManualCropX(p.val);
+                              setIsManualCropX(true);
+                            }}
+                            style={{ fontSize: '0.70rem', padding: '0.12rem 0.4rem' }}
+                          >
+                            {p.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {enableFaceTracking && !isManualCropX && streamerPreset === 'none' && (
                 <div className="horizontal-framing-selector" style={{ marginTop: '0.65rem', paddingLeft: '1.6rem' }}>
                   <div style={{ fontSize: '0.78rem', color: 'var(--text-secondary)', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
                     <span>{t.studio.horizontalFramingLabel || 'Horizontal Framing / Focal Point:'}</span>
@@ -2412,6 +2826,70 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     </button>
                   </div>
                 </div>
+
+                {/* Title Horizontal Position Controls */}
+                <div className="studio-sub-toggle" style={{ marginTop: '0.85rem', flexDirection: 'column', alignItems: 'stretch' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                    <span className="sub-toggle-label" style={{ margin: 0 }}>
+                      {t.studio.titleXLabel || "// Headline Horizontal Position:"}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                      <span className="badge" style={{ fontSize: '0.74rem', padding: '0.15rem 0.45rem' }}>
+                        {safeTitleX}% {safeTitleX === 50 ? '(Center)' : safeTitleX < 50 ? '(Shift Left)' : '(Shift Right)'}
+                      </span>
+                      <button
+                        type="button"
+                        className="reset-btn"
+                        onClick={handleResetTitleHorizontal}
+                        style={{ fontSize: '0.72rem', padding: '0.15rem 0.4rem', border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '4px', cursor: 'pointer' }}
+                      >
+                        {t.studio.resetHorizontal || "↺ Reset Center"}
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min="15"
+                    max="85"
+                    step="1"
+                    value={safeTitleX}
+                    onChange={(e) => {
+                      setTitleXPercent(Number(e.target.value));
+                    }}
+                    className="position-slider"
+                    style={{ '--slider-progress': `${Math.max(0, Math.min(100, ((safeTitleX - 15) / 70) * 100))}%` } as React.CSSProperties}
+                  />
+                  <div className="quick-presets-row" style={{ display: 'flex', gap: '0.4rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className={`pill-btn ${safeTitleX === 30 ? 'active' : ''}`}
+                      onClick={() => {
+                        setTitleXPercent(30);
+                        }}
+                      style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                    >
+                      Left (30%)
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill-btn ${safeTitleX === 50 ? 'active' : ''}`}
+                      onClick={handleResetTitleHorizontal}
+                      style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                    >
+                      Center (50%)
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill-btn ${safeTitleX === 70 ? 'active' : ''}`}
+                      onClick={() => {
+                        setTitleXPercent(70);
+                        }}
+                      style={{ fontSize: '0.72rem', padding: '0.15rem 0.45rem' }}
+                    >
+                      Right (70%)
+                    </button>
+                  </div>
+                </div>
               </>
             )}
           </div>
@@ -2905,6 +3383,88 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     </div>
                   </div>
                 )}
+
+                {/* Subtitle Audio Sync Offset (Nudge Earlier / Later) */}
+                <div className="studio-sub-toggle" style={{ marginTop: '0.85rem', flexDirection: 'column', alignItems: 'stretch' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem', flexWrap: 'wrap', gap: '0.35rem' }}>
+                    <span className="sub-toggle-label" style={{ margin: 0 }}>
+                      {t.studio.subtitleSyncLabel || "// Subtitle Audio Sync Offset:"}
+                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                      <span className="badge" style={{ fontSize: '0.74rem', padding: '0.15rem 0.45rem', background: subtitleOffsetSeconds !== 0 ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255,255,255,0.08)', color: subtitleOffsetSeconds !== 0 ? '#38bdf8' : 'var(--text-muted)' }}>
+                        {subtitleOffsetSeconds > 0 ? `+${subtitleOffsetSeconds.toFixed(2)}s (Later)` : subtitleOffsetSeconds < 0 ? `${subtitleOffsetSeconds.toFixed(2)}s (Earlier)` : 'Exact Sync (0.00s)'}
+                      </span>
+                      {subtitleOffsetSeconds !== 0 && (
+                        <button
+                          type="button"
+                          className="reset-btn"
+                          onClick={() => setSubtitleOffsetSeconds(0)}
+                          title="Reset sync offset to 0.00s"
+                          style={{ fontSize: '0.72rem', padding: '0.15rem 0.4rem', border: '1px solid rgba(255,255,255,0.15)', background: 'transparent', color: 'var(--text-muted)', borderRadius: '4px', cursor: 'pointer' }}
+                        >
+                          {t.studio.resetSync || "↺ 0.00s"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <input
+                    type="range"
+                    min="-1.50"
+                    max="1.50"
+                    step="0.05"
+                    value={subtitleOffsetSeconds}
+                    onChange={(e) => setSubtitleOffsetSeconds(Number(e.target.value))}
+                    className="position-slider"
+                    style={{ '--slider-progress': `${Math.max(0, Math.min(100, ((subtitleOffsetSeconds - (-1.5)) / 3.0) * 100))}%` } as React.CSSProperties}
+                  />
+                  <div className="quick-presets-row" style={{ display: 'flex', gap: '0.35rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                    <button
+                      type="button"
+                      className={`pill-btn ${subtitleOffsetSeconds === -0.3 ? 'active' : ''}`}
+                      onClick={() => setSubtitleOffsetSeconds(-0.3)}
+                      style={{ fontSize: '0.70rem', padding: '0.15rem 0.45rem' }}
+                      title="Nudge captions 0.3s earlier (fixes lagging behind)"
+                    >
+                      -0.30s (Earlier)
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill-btn ${subtitleOffsetSeconds === -0.15 ? 'active' : ''}`}
+                      onClick={() => setSubtitleOffsetSeconds(-0.15)}
+                      style={{ fontSize: '0.70rem', padding: '0.15rem 0.45rem' }}
+                    >
+                      -0.15s
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill-btn ${subtitleOffsetSeconds === 0 ? 'active' : ''}`}
+                      onClick={() => setSubtitleOffsetSeconds(0)}
+                      style={{ fontSize: '0.70rem', padding: '0.15rem 0.45rem' }}
+                    >
+                      0.00s (Default)
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill-btn ${subtitleOffsetSeconds === 0.15 ? 'active' : ''}`}
+                      onClick={() => setSubtitleOffsetSeconds(0.15)}
+                      style={{ fontSize: '0.70rem', padding: '0.15rem 0.45rem' }}
+                    >
+                      +0.15s
+                    </button>
+                    <button
+                      type="button"
+                      className={`pill-btn ${subtitleOffsetSeconds === 0.3 ? 'active' : ''}`}
+                      onClick={() => setSubtitleOffsetSeconds(0.3)}
+                      style={{ fontSize: '0.70rem', padding: '0.15rem 0.45rem' }}
+                      title="Nudge captions 0.3s later (fixes coming too early)"
+                    >
+                      +0.30s (Later)
+                    </button>
+                  </div>
+                  <div style={{ marginTop: '0.35rem', fontSize: '0.72rem', color: 'var(--text-muted)' }}>
+                    {subtitleOffsetSeconds < 0 ? (t.studio.syncEarlierHint || "◀ Nudged earlier: fixes captions lagging behind audio") : subtitleOffsetSeconds > 0 ? (t.studio.syncLaterHint || "▶ Nudged later: fixes captions appearing before speaker speaks") : (t.studio.syncDefaultHint || "Audio sync alignment. Nudge earlier if lagging, or later if rushing ahead.")}
+                  </div>
+                </div>
               </>
             )}
           </div>
@@ -4228,6 +4788,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                             objectPosition: isLandscape ? 'center center' : `${previewCropPercent}% 50%`,
                             transition: 'object-position 0.3s ease-out'
                           }}
+                          onTimeUpdate={(e) => {
+                            setCurrentTime(e.currentTarget.currentTime);
+                          }}
                           onPlay={() => {
                             setIsPlaying(true);
                             startTracking();
@@ -4251,6 +4814,18 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                             }
                           }}
                         />
+                      ) : isTwitch ? (
+                        <div
+                          id="studio-preview-twitch-container"
+                          className="studio-yt-embed-slot"
+                          style={{
+                            opacity: playerReady ? 1 : 0,
+                            transition: 'opacity 0.25s ease',
+                            ['--preview-crop-pct' as any]: previewCropPercent,
+                          }}
+                        >
+                          <div id="studio-twitch-iframe-slot"></div>
+                        </div>
                       ) : (
                         <div
                           id="studio-preview-yt-container"
@@ -4302,14 +4877,20 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   </div>
                 </div>
 
-                {/* Title Overlay with Real-time Up/Down Position & Scaled Font */}
-                {titlePosition !== 'none' && (
+                {/* Title Overlay with Real-time Up/Down/Left/Right Position, Duration & Scaled Font */}
+                {isTitleVisible && (
                   <div
                     className="wireframe-title-overlay"
                     style={{
                       top: `${safeTitleY}%`,
+                      left: `${safeTitleX}%`,
+                      transform: 'translateX(-50%)',
+                      width: 'max-content',
+                      maxWidth: '92%',
                       zIndex: 35,
                       pointerEvents: 'none',
+                      display: 'flex',
+                      justifyContent: 'center',
                     }}
                   >
                     <span
@@ -4382,46 +4963,42 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         display: 'inline-block',
                       }}
                     >
-                      {captionStyle === 'viral_pop' && (
-                        <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('VIRAL', textCase)}</span>{' '}
-                          <span style={{ color: '#FFE600' }}>{applyLetterCase('POP', textCase)}</span>
-                        </>
-                      )}
-                      {captionStyle === 'beast_punch' && (
-                        <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('UNREAL', textCase)}</span>{' '}
-                          <span style={{ color: '#00FF66' }}>{applyLetterCase('HACK', textCase)}</span>
-                        </>
-                      )}
-                      {captionStyle === 'cyber_violet' && (
-                        <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('CYBER', textCase)}</span>{' '}
-                          <span style={{ color: '#D946EF' }}>{applyLetterCase('PUNCH', textCase)}</span>
-                        </>
-                      )}
-                      {captionStyle === 'fire_red' && (
-                        <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('HOT', textCase)}</span>{' '}
-                          <span style={{ color: '#FF2E2E' }}>{applyLetterCase('FIRE', textCase)}</span>
-                        </>
-                      )}
-                      {captionStyle === 'electric_cyan' && (
-                        <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('ELECTRIC', textCase)}</span>{' '}
-                          <span style={{ color: '#00F0FF' }}>{applyLetterCase('CYAN', textCase)}</span>
-                        </>
-                      )}
-                      {captionStyle === 'golden_aura' && (
-                        <>
-                          <span style={{ color: '#ffffff' }}>{applyLetterCase('GOLDEN', textCase)}</span>{' '}
-                          <span style={{ color: '#FFB800' }}>{applyLetterCase('MOMENT', textCase)}</span>
-                        </>
-                      )}
-                      {captionStyle === 'clean_minimal' && (
-                        <span style={{ color: '#ffffff' }}>
-                          {applyLetterCase('CLEAN SUBTITLE', textCase)}
-                        </span>
+                      {activeCaption ? (
+                        activeCaption.chunk.words.map((w, idx) => {
+                          const isActive = idx === activeCaption.activeWordIndex;
+                          const currentStyle = CAPTION_STYLE_CONFIG[captionStyle] || CAPTION_STYLE_CONFIG.viral_pop;
+                          const color = isActive ? currentStyle.highlight : '#ffffff';
+                          return (
+                            <React.Fragment key={idx}>
+                              {idx > 0 && ' '}
+                              <span
+                                style={{
+                                  color,
+                                  transform: isActive ? 'scale(1.08)' : 'scale(1)',
+                                  display: 'inline-block',
+                                  transition: 'transform 0.08s ease, color 0.08s ease',
+                                  textShadow: isActive
+                                    ? `0 0 3px #000, 0 1px 4px rgba(0,0,0,0.95), 0 0 8px ${currentStyle.highlight}88`
+                                    : '0 0 2px #000, 0 1px 3px rgba(0,0,0,0.95), 0 0 5px rgba(0,0,0,0.8)',
+                                }}
+                              >
+                                {applyLetterCase(w.text, textCase)}
+                              </span>
+                            </React.Fragment>
+                          );
+                        })
+                      ) : isPlaying ? (
+                        null
+                      ) : (
+                        (() => {
+                          const currentStyle = CAPTION_STYLE_CONFIG[captionStyle] || CAPTION_STYLE_CONFIG.viral_pop;
+                          return (
+                            <>
+                              <span style={{ color: '#ffffff' }}>{applyLetterCase(currentStyle.sample[0], textCase)}</span>{' '}
+                              <span style={{ color: currentStyle.highlight }}>{applyLetterCase(currentStyle.sample[1], textCase)}</span>
+                            </>
+                          );
+                        })()
                       )}
                     </span>
                   </div>

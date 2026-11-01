@@ -25,7 +25,10 @@ class RenderSettingsModel(BaseModel):
     text_case: str = "uppercase"
     title_text_case: Optional[str] = "uppercase"
     title_y_percent: Optional[float] = None
+    title_x_percent: Optional[float] = 50.0
+    crop_x_percent: Optional[float] = None
     subtitle_y_percent: Optional[float] = None
+    subtitle_offset_seconds: Optional[float] = 0.0
     subtitle_position_mode: Optional[str] = "bottom"
     subtitle_center_y_percent: Optional[float] = 50.0
     # Background Music
