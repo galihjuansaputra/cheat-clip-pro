@@ -680,7 +680,10 @@ export default function App() {
             text_case: settings.textCase,
             title_text_case: settings.titleTextCase || settings.textCase,
             title_y_percent: settings.titleYPercent,
+            title_x_percent: settings.titleXPercent !== undefined ? settings.titleXPercent : 50.0,
+            crop_x_percent: settings.cropXPercent !== undefined ? settings.cropXPercent : null,
             subtitle_y_percent: settings.subtitleYPercent,
+            subtitle_offset_seconds: settings.subtitleOffsetSeconds !== undefined ? settings.subtitleOffsetSeconds : 0.0,
             subtitle_position_mode: settings.subtitlePositionMode || 'bottom',
             subtitle_center_y_percent: settings.subtitleCenterYPercent !== undefined ? settings.subtitleCenterYPercent : 50.0,
             // Background Music

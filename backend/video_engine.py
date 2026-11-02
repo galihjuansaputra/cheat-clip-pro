@@ -3176,7 +3176,9 @@ def render_clip_to_mp4(
     original_audio_volume: float = 1.0,
     # Hardware acceleration selection ('auto', 'nvenc', 'amf', 'qsv', 'cpu')
     hardware_accel: Optional[str] = "auto",
-    title_y_percent: Optional[float] = None
+    title_y_percent: Optional[float] = None,
+    crop_x_percent: Optional[float] = None,
+    title_x_percent: Optional[float] = 50.0
 ) -> str:
     """
     Renders the final 1080x1920 short-form video with layout, aspect ratio, titles, subtitles,
