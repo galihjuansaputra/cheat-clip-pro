@@ -1,26 +1,25 @@
 import os
+import json
 import uuid
+from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import RedirectResponse
 
+from backend.config import EXPORTS_DIR, logger
+from backend.services.render_service import RENDER_BATCHES
 from backend.services.upload_service import (
     build_youtube_auth_url,
     exchange_youtube_code,
     save_token,
     get_token,
     delete_token,
-    build_tiktok_auth_url,
-    exchange_tiktok_code,
     create_job,
     get_job,
     suggest_time,
 )
-import os
-import json
-from backend.config import EXPORTS_DIR, logger
-from backend.services.render_service import RENDER_BATCHES
+
 try:
     from google import genai
 except Exception:
@@ -67,48 +66,13 @@ def youtube_disconnect():
     return {"status": "disconnected"}
 
 
-# ---------- TikTok OAuth ----------
-@router.get("/api/upload/tiktok/connect")
-def tiktok_connect():
-    client_key = os.environ.get("TIKTOK_CLIENT_KEY")
-    redirect_uri = os.environ.get("TIKTOK_REDIRECT_URI", "http://localhost:8000/api/upload/tiktok/callback")
-    if not client_key:
-        raise HTTPException(status_code=400, detail="TIKTOK_CLIENT_KEY not set")
-    state = uuid.uuid4().hex
-    url = build_tiktok_auth_url(client_key, redirect_uri, state)
-    return {"auth_url": url}
-
-
-@router.get("/api/upload/tiktok/callback")
-def tiktok_callback(code: str, state: Optional[str] = None):
-    client_key = os.environ.get("TIKTOK_CLIENT_KEY")
-    client_secret = os.environ.get("TIKTOK_CLIENT_SECRET")
-    redirect_uri = os.environ.get("TIKTOK_REDIRECT_URI", "http://localhost:8000/api/upload/tiktok/callback")
-    token = exchange_tiktok_code(client_key, client_secret, redirect_uri, code)
-    save_token("tiktok", token)
-    return RedirectResponse(url=f"{_frontend_url()}/?upload=tiktok_connected")
-
-
-@router.get("/api/upload/tiktok/status")
-def tiktok_status():
-    t = get_token("tiktok")
-    return {"connected": bool(t)}
-
-
-@router.post("/api/upload/tiktok/disconnect")
-def tiktok_disconnect():
-    delete_token("tiktok")
-    return {"status": "disconnected"}
-
-
 # ---------- Upload job ----------
 @router.post("/api/upload")
 def start_upload(body: dict):
-    platform = body.get("platform")
-    if platform not in ("youtube", "tiktok"):
-        raise HTTPException(status_code=400, detail="platform must be youtube or tiktok")
+    platform = body.get("platform", "youtube")
+    if platform != "youtube":
+        raise HTTPException(status_code=400, detail="Only YouTube auto-upload is supported. For TikTok, download and upload manually.")
 
-    # resolve file path
     file_path = body.get("file_path")
     batch_id = body.get("batch_id")
     clip_index = body.get("clip_index")
@@ -123,7 +87,7 @@ def start_upload(body: dict):
         file_path = c.get("output_path")
         if not file_path and c.get("download_url"):
             fname = c["download_url"].split("/")[-1]
-            file_path = str(__import__("pathlib").Path(__file__).resolve().parent.parent.parent / "exports" / fname)
+            file_path = str(Path(__file__).resolve().parent.parent.parent / "exports" / fname) if False else os.path.join(os.path.dirname(__file__), "..", "..", "exports", fname)
     if not file_path or not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="rendered file not found")
 
@@ -131,10 +95,10 @@ def start_upload(body: dict):
         "title": body.get("title", "Clip"),
         "description": body.get("description", ""),
         "tags": body.get("tags", []),
-        "privacy": body.get("privacy", "unlisted" if platform == "youtube" else "SELF_ONLY"),
+        "privacy": body.get("privacy", "unlisted"),
     }
     scheduled_at = body.get("scheduled_at")
-    job_id = create_job(platform, file_path, metadata, scheduled_at)
+    job_id = create_job("youtube", file_path, metadata, scheduled_at)
     return {"job_id": job_id, "status": "scheduled" if scheduled_at else "queued"}
 
 
@@ -146,9 +110,9 @@ def upload_status(job_id: str):
     return job
 
 
-@router.get("/api/upload/suggest-time/{platform}")
-def suggest_upload_time(platform: str):
-    return {"platform": platform, "suggestion": suggest_time(platform)}
+@router.get("/api/upload/suggest-time/youtube")
+def suggest_upload_time():
+    return {"platform": "youtube", "suggestion": suggest_time("youtube")}
 
 
 @router.get("/api/rendered-clips")
@@ -165,14 +129,12 @@ def ai_metadata(body: dict):
     api_key = (body.get("api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
     title = body.get("title", "")
     transcript = body.get("transcript", "")
-    platform = body.get("platform", "youtube")
     if not api_key or api_key.lower() == "mock":
-        # fallback simple
         return {
             "title": title or "Highlight Clip",
             "description": (transcript or "")[:200],
             "tags": ["shorts", "clip", "viral"],
-            "privacy": "unlisted" if platform == "youtube" else "SELF_ONLY",
+            "privacy": "unlisted",
         }
     if genai is None:
         raise HTTPException(status_code=500, detail="google-genai not installed")
@@ -180,14 +142,12 @@ def ai_metadata(body: dict):
         client = genai.Client(api_key=api_key)
         prompt = (
             "Generate social media upload metadata for a short video clip. "
-            f"Platform: {platform}. Source title: {title}. Transcript excerpt: {transcript[:1500]}. "
+            f"Platform: youtube. Source title: {title}. Transcript excerpt: {transcript[:1500]}. "
             "Return ONLY JSON with keys: title (<=90 chars), description (<=300 chars), "
-            "tags (array of 5-8 short hashtags without #), privacy (one of: public, unlisted, private for youtube; "
-            "PUBLIC_TO_EVERYONE, MUTUAL_FOLLOW_FRIENDS, SELF_ONLY for tiktok)."
+            "tags (array of 5-8 short hashtags without #), privacy (one of: public, unlisted, private)."
         )
         resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         text = resp.text or ""
-        # extract json
         import re as _re
         m = _re.search(r"\{.*\}", text, _re.S)
         if m:
@@ -198,7 +158,7 @@ def ai_metadata(body: dict):
             "title": data.get("title", title or "Highlight Clip"),
             "description": data.get("description", (transcript or "")[:200]),
             "tags": data.get("tags", ["shorts", "clip", "viral"]),
-            "privacy": data.get("privacy", "unlisted" if platform == "youtube" else "SELF_ONLY"),
+            "privacy": data.get("privacy", "unlisted"),
         }
     except Exception as e:
         logger.error(f"ai-metadata failed: {e}")
@@ -206,5 +166,5 @@ def ai_metadata(body: dict):
             "title": title or "Highlight Clip",
             "description": (transcript or "")[:200],
             "tags": ["shorts", "clip", "viral"],
-            "privacy": "unlisted" if platform == "youtube" else "SELF_ONLY",
+            "privacy": "unlisted",
         }

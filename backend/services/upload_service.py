@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import json
 import logging
 import os
@@ -33,7 +32,6 @@ def _load_tokens() -> Dict[str, Any]:
 
 def _save_tokens(data: Dict[str, Any]):
     _ensure_store_dir()
-    # shortcut: plaintext JSON for local MVP; encrypt before production
     TOKEN_STORE_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
@@ -82,7 +80,6 @@ def exchange_youtube_code(client_id: str, client_secret: str, redirect_uri: str,
     resp.raise_for_status()
     data = resp.json()
     if "refresh_token" not in data:
-        # keep existing refresh token if present
         existing = get_token("youtube") or {}
         if existing.get("refresh_token"):
             data["refresh_token"] = existing["refresh_token"]
@@ -114,7 +111,6 @@ def get_youtube_access_token() -> str:
         raise RuntimeError("YouTube not connected")
     client_id = os.environ.get("YOUTUBE_CLIENT_ID")
     client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET")
-    # refresh if expired (5 min buffer)
     if time.time() - token.get("obtained_at", 0) > token.get("expires_in", 3600) - 300:
         token = refresh_youtube_token(client_id, client_secret, token["refresh_token"])
         save_token("youtube", token)
@@ -133,7 +129,6 @@ def youtube_upload(file_path: str, title: str, description: str, privacy: str, t
         },
         "status": {"privacyStatus": privacy},
     }
-    # init resumable upload
     init_resp = requests.post(
         "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
         headers={
@@ -153,10 +148,7 @@ def youtube_upload(file_path: str, title: str, description: str, privacy: str, t
         data = f.read()
     up_resp = requests.put(
         upload_url,
-        headers={
-            "Content-Type": "video/mp4",
-            "Content-Length": str(file_size),
-        },
+        headers={"Content-Type": "video/mp4", "Content-Length": str(file_size)},
         data=data,
         timeout=600,
     )
@@ -165,122 +157,9 @@ def youtube_upload(file_path: str, title: str, description: str, privacy: str, t
     return result.get("id", "")
 
 
-# ---------- TikTok ----------
-def build_tiktok_auth_url(client_key: str, redirect_uri: str, state: str) -> str:
-    scope = "video.upload,video.publish"
-    return (
-        "https://www.tiktok.com/v2/auth/authorize/"
-        f"?client_key={client_key}"
-        f"&scope={requests.utils.quote(scope, safe='')}"
-        f"&response_type=code"
-        f"&redirect_uri={requests.utils.quote(redirect_uri, safe='')}"
-        f"&state={state}"
-    )
-
-
-def exchange_tiktok_code(client_key: str, client_secret: str, redirect_uri: str, code: str) -> Dict[str, Any]:
-    resp = requests.post(
-        "https://open.tiktokapis.com/v2/oauth/token/",
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data={
-            "client_key": client_key,
-            "client_secret": client_secret,
-            "code": code,
-            "grant_type": "authorization_code",
-            "redirect_uri": redirect_uri,
-        },
-        timeout=30,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    data["obtained_at"] = time.time()
-    return data
-
-
-def get_tiktok_access_token() -> str:
-    token = get_token("tiktok")
-    if not token:
-        raise RuntimeError("TikTok not connected")
-    # refresh if needed
-    if time.time() - token.get("obtained_at", 0) > token.get("expires_in", 86400) - 300:
-        resp = requests.post(
-            "https://open.tiktokapis.com/v2/oauth/token/",
-            headers={"Content-Type": "application/x-www-form-urlencoded"},
-            data={
-                "client_key": os.environ.get("TIKTOK_CLIENT_KEY"),
-                "client_secret": os.environ.get("TIKTOK_CLIENT_SECRET"),
-                "grant_type": "refresh_token",
-                "refresh_token": token.get("refresh_token"),
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        token = resp.json()
-        token["obtained_at"] = time.time()
-        save_token("tiktok", token)
-    return token["access_token"]
-
-
-def tiktok_upload(file_path: str, title: str, privacy: str) -> str:
-    access_token = get_tiktok_access_token()
-    # creator info
-    ci = requests.post(
-        "https://open.tiktokapis.com/v2/post/publish/creator_info/query/",
-        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json; charset=UTF-8"},
-        json={},
-        timeout=30,
-    )
-    ci.raise_for_status()
-    creator = ci.json().get("data", {})
-    max_dur = creator.get("max_video_post_duration_sec", 300)
-    import os as _os
-    # duration check skipped (would need ffprobe); rely on platform
-    # init upload (inbox)
-    init = requests.post(
-        "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/",
-        headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json; charset=UTF-8"},
-        json={
-            "post_info": {
-                "title": title[:2200],
-                "privacy_level": privacy,
-                "disable_duet": False,
-                "disable_comment": False,
-                "disable_stitch": False,
-            },
-            "source_info": {
-                "source": "FILE_UPLOAD",
-                "video_size": os.path.getsize(file_path),
-                "chunk_size": os.path.getsize(file_path),
-                "total_chunk_count": 1,
-            },
-        },
-        timeout=30,
-    )
-    init.raise_for_status()
-    data = init.json().get("data", {})
-    upload_url = data.get("upload_url")
-    publish_id = data.get("publish_id")
-    if not upload_url:
-        raise RuntimeError("No TikTok upload URL")
-    with open(file_path, "rb") as f:
-        content = f.read()
-    up = requests.put(
-        upload_url,
-        headers={"Content-Type": "video/mp4", "Content-Range": f"bytes 0-{len(content)-1}/{len(content)}"},
-        data=content,
-        timeout=600,
-    )
-    up.raise_for_status()
-    return publish_id or ""
-
-
-# ---------- Scheduling ----------
 def suggest_time(platform: str) -> str:
-    # static suggestions based on research (local time)
     if platform == "youtube":
         return "Upload 1-3 jam sebelum peak audience (cek YouTube Studio Heatmap). Untuk Shorts: Thu-Sat sore."
-    if platform == "tiktok":
-        return "Tue-Thu 14:00-18:00 (lokal audiens), 30-60 menit sebelum peak."
     return "N/A"
 
 
@@ -318,14 +197,6 @@ async def _run_job(job_id: str):
                 job["metadata"].get("tags", []),
             )
             job["result"] = {"video_id": vid, "url": f"https://youtu.be/{vid}"}
-        elif job["platform"] == "tiktok":
-            pid = await asyncio.to_thread(
-                tiktok_upload,
-                job["file_path"],
-                job["metadata"].get("title", "Clip"),
-                job["metadata"].get("privacy", "SELF_ONLY"),
-            )
-            job["result"] = {"publish_id": pid}
         job["status"] = "completed"
     except Exception as e:
         job["status"] = "failed"
