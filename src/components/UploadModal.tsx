@@ -17,6 +17,13 @@ const UploadModal: React.FC<UploadModalProps> = ({ batchId, clipIndex, clipTitle
   const [status, setStatus] = useState<string>('');
   const [error, setError] = useState<string>('');
   const [scheduledAt, setScheduledAt] = useState('');
+  const [showSetup, setShowSetup] = useState(false);
+
+  const redirectUri = platform === 'youtube'
+    ? 'http://localhost:8000/api/upload/youtube/callback'
+    : 'http://localhost:8000/api/upload/tiktok/callback';
+
+  const copy = (txt: string) => { navigator.clipboard?.writeText(txt); };
 
   const checkStatus = async () => {
     const res = await fetch(`/api/upload/${platform}/status`);
@@ -73,6 +80,39 @@ const UploadModal: React.FC<UploadModalProps> = ({ batchId, clipIndex, clipTitle
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
       <div style={{ background: '#1e1e2e', color: '#fff', padding: 24, borderRadius: 12, width: 420, maxWidth: '90%' }}>
         <h3>Upload Clip</h3>
+        <button onClick={() => setShowSetup(v => !v)} style={{ marginBottom: 8, fontSize: 12 }}>
+          {showSetup ? 'Hide setup guide' : 'Show setup guide (credentials & redirect)'}
+        </button>
+        {showSetup && (
+          <div style={{ background: '#111827', padding: 10, borderRadius: 8, marginBottom: 12, fontSize: 12, lineHeight: 1.5 }}>
+            <div><b>Redirect URI (copy):</b> {redirectUri} <button onClick={() => copy(redirectUri)}>Copy</button></div>
+            {platform === 'youtube' ? (
+              <>
+                <ol style={{ paddingLeft: 16, margin: '6px 0' }}>
+                  <li>Google Cloud Console → buat/select project.</li>
+                  <li>APIs & Services → Library → enable <b>YouTube Data API v3</b>.</li>
+                  <li>OAuth consent screen → External → tambah scope <b>youtube.upload</b> → tambah test user.</li>
+                  <li>Credentials → OAuth client ID (Web app) → Authorized redirect URIs: paste URI di atas.</li>
+                  <li>Copy Client ID/Secret → set di backend env.</li>
+                </ol>
+                <a href="https://console.cloud.google.com/" target="_blank" rel="noreferrer">Open Google Cloud Console</a>
+              </>
+            ) : (
+              <>
+                <ol style={{ paddingLeft: 16, margin: '6px 0' }}>
+                  <li>TikTok Developer → Create app → tambah product <b>Content Posting API</b>.</li>
+                  <li>App details → Redirect URI: paste URI di atas.</li>
+                  <li>Scopes: aktifkan <b>video.upload</b> (dan video.publish).</li>
+                  <li>Copy Client Key/Secret → set di backend env.</li>
+                </ol>
+                <a href="https://developers.tiktok.com/" target="_blank" rel="noreferrer">Open TikTok Developer</a>
+              </>
+            )}
+            <div style={{ marginTop: 6, color: '#9ca3af' }}>
+              Set env lalu restart backend. Backend env keys: {platform === 'youtube' ? 'YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_REDIRECT_URI' : 'TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_REDIRECT_URI'}.
+            </div>
+          </div>
+        )}
         <div style={{ marginBottom: 12 }}>
           <label>Platform: </label>
           <select value={platform} onChange={e => setPlatform(e.target.value as any)}>
