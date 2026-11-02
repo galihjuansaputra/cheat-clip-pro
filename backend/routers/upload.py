@@ -17,6 +17,8 @@ from backend.services.upload_service import (
     get_job,
     suggest_time,
 )
+import os
+from backend.config import EXPORTS_DIR
 from backend.services.render_service import RENDER_BATCHES
 
 router = APIRouter(tags=["Upload"])
@@ -142,3 +144,12 @@ def upload_status(job_id: str):
 @router.get("/api/upload/suggest-time/{platform}")
 def suggest_upload_time(platform: str):
     return {"platform": platform, "suggestion": suggest_time(platform)}
+
+
+@router.get("/api/rendered-clips")
+def list_rendered_clips():
+    items = []
+    if EXPORTS_DIR.exists():
+        for p in sorted(EXPORTS_DIR.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True)[:50]:
+            items.append({"name": p.name, "path": str(p), "modified": p.stat().st_mtime})
+    return {"clips": items}

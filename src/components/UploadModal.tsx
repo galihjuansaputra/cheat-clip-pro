@@ -1,15 +1,16 @@
 import React, { useState } from 'react';
 
 interface UploadModalProps {
-  batchId: string;
-  clipIndex: number;
-  clipTitle: string;
+  batchId?: string;
+  clipIndex?: number;
+  clipTitle?: string;
+  filePath?: string;
   onClose: () => void;
 }
 
-const UploadModal: React.FC<UploadModalProps> = ({ batchId, clipIndex, clipTitle, onClose }) => {
+const UploadModal: React.FC<UploadModalProps> = ({ batchId, clipIndex, clipTitle, filePath, onClose }) => {
   const [platform, setPlatform] = useState<'youtube' | 'tiktok'>('youtube');
-  const [title, setTitle] = useState(clipTitle);
+  const [title, setTitle] = useState(clipTitle || 'Clip');
   const [description, setDescription] = useState('');
   const [privacy, setPrivacy] = useState('unlisted');
   const [connected, setConnected] = useState<boolean | null>(null);
@@ -50,6 +51,7 @@ const UploadModal: React.FC<UploadModalProps> = ({ batchId, clipIndex, clipTitle
           platform,
           batch_id: batchId,
           clip_index: clipIndex,
+          file_path: filePath,
           title,
           description,
           privacy,
