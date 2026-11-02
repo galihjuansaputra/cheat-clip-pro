@@ -12,6 +12,7 @@ const UploadModal: React.FC<UploadModalProps> = ({ batchId, clipIndex, clipTitle
   const [platform, setPlatform] = useState<'youtube' | 'tiktok'>('youtube');
   const [title, setTitle] = useState(clipTitle || 'Clip');
   const [description, setDescription] = useState('');
+  const [tags, setTags] = useState('');
   const [privacy, setPrivacy] = useState('unlisted');
   const [connected, setConnected] = useState<boolean | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
@@ -19,6 +20,25 @@ const UploadModal: React.FC<UploadModalProps> = ({ batchId, clipIndex, clipTitle
   const [error, setError] = useState<string>('');
   const [scheduledAt, setScheduledAt] = useState('');
   const [showSetup, setShowSetup] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+
+  const generateAI = async () => {
+    setAiLoading(true);
+    try {
+      const apiKey = localStorage.getItem('cheat_clip_gemini_api_key') || '';
+      const res = await fetch('/api/ai-metadata', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: clipTitle || title, transcript: '', api_key: apiKey, platform }),
+      });
+      const data = await res.json();
+      if (data.title) setTitle(data.title);
+      if (data.description) setDescription(data.description);
+      if (Array.isArray(data.tags)) setTags(data.tags.join(', '));
+      if (data.privacy) setPrivacy(data.privacy);
+    } catch {}
+    setAiLoading(false);
+  };
 
   const redirectUri = platform === 'youtube'
     ? 'http://localhost:8000/api/upload/youtube/callback'
@@ -55,6 +75,7 @@ const UploadModal: React.FC<UploadModalProps> = ({ batchId, clipIndex, clipTitle
           title,
           description,
           privacy,
+          tags: tags.split(',').map(t => t.trim()).filter(Boolean),
           scheduled_at: scheduledAt || null,
         }),
       });
@@ -79,8 +100,8 @@ const UploadModal: React.FC<UploadModalProps> = ({ batchId, clipIndex, clipTitle
   };
 
   return (
-    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
-      <div style={{ background: '#1e1e2e', color: '#fff', padding: 24, borderRadius: 12, width: 420, maxWidth: '90%' }}>
+    <div className="custom-confirm-modal-overlay">
+      <div className="custom-confirm-modal-card" style={{ maxWidth: 480, textAlign: 'left', alignItems: 'stretch' }}>
         <h3>Upload Clip</h3>
         <button onClick={() => setShowSetup(v => !v)} style={{ marginBottom: 8, fontSize: 12 }}>
           {showSetup ? 'Hide setup guide' : 'Show setup guide (credentials & redirect)'}
@@ -135,6 +156,13 @@ const UploadModal: React.FC<UploadModalProps> = ({ batchId, clipIndex, clipTitle
         <div style={{ marginBottom: 8 }}>
           <label>Description</label>
           <textarea value={description} onChange={e => setDescription(e.target.value)} style={{ width: '100%' }} />
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <label>Tags (comma separated)</label>
+          <input value={tags} onChange={e => setTags(e.target.value)} style={{ width: '100%' }} />
+        </div>
+        <div style={{ marginBottom: 8 }}>
+          <button onClick={generateAI} disabled={aiLoading}>{aiLoading ? 'Generating...' : '✨ Generate with AI'}</button>
         </div>
         <div style={{ marginBottom: 8 }}>
           <label>Privacy</label>

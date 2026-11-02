@@ -18,8 +18,13 @@ from backend.services.upload_service import (
     suggest_time,
 )
 import os
-from backend.config import EXPORTS_DIR
+import json
+from backend.config import EXPORTS_DIR, logger
 from backend.services.render_service import RENDER_BATCHES
+try:
+    from google import genai
+except Exception:
+    genai = None
 
 router = APIRouter(tags=["Upload"])
 
@@ -153,3 +158,53 @@ def list_rendered_clips():
         for p in sorted(EXPORTS_DIR.glob("*.mp4"), key=lambda x: x.stat().st_mtime, reverse=True)[:50]:
             items.append({"name": p.name, "path": str(p), "modified": p.stat().st_mtime})
     return {"clips": items}
+
+
+@router.post("/api/ai-metadata")
+def ai_metadata(body: dict):
+    api_key = (body.get("api_key") or os.environ.get("GEMINI_API_KEY") or "").strip()
+    title = body.get("title", "")
+    transcript = body.get("transcript", "")
+    platform = body.get("platform", "youtube")
+    if not api_key or api_key.lower() == "mock":
+        # fallback simple
+        return {
+            "title": title or "Highlight Clip",
+            "description": (transcript or "")[:200],
+            "tags": ["shorts", "clip", "viral"],
+            "privacy": "unlisted" if platform == "youtube" else "SELF_ONLY",
+        }
+    if genai is None:
+        raise HTTPException(status_code=500, detail="google-genai not installed")
+    try:
+        client = genai.Client(api_key=api_key)
+        prompt = (
+            "Generate social media upload metadata for a short video clip. "
+            f"Platform: {platform}. Source title: {title}. Transcript excerpt: {transcript[:1500]}. "
+            "Return ONLY JSON with keys: title (<=90 chars), description (<=300 chars), "
+            "tags (array of 5-8 short hashtags without #), privacy (one of: public, unlisted, private for youtube; "
+            "PUBLIC_TO_EVERYONE, MUTUAL_FOLLOW_FRIENDS, SELF_ONLY for tiktok)."
+        )
+        resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
+        text = resp.text or ""
+        # extract json
+        import re as _re
+        m = _re.search(r"\{.*\}", text, _re.S)
+        if m:
+            data = json.loads(m.group(0))
+        else:
+            data = {}
+        return {
+            "title": data.get("title", title or "Highlight Clip"),
+            "description": data.get("description", (transcript or "")[:200]),
+            "tags": data.get("tags", ["shorts", "clip", "viral"]),
+            "privacy": data.get("privacy", "unlisted" if platform == "youtube" else "SELF_ONLY"),
+        }
+    except Exception as e:
+        logger.error(f"ai-metadata failed: {e}")
+        return {
+            "title": title or "Highlight Clip",
+            "description": (transcript or "")[:200],
+            "tags": ["shorts", "clip", "viral"],
+            "privacy": "unlisted" if platform == "youtube" else "SELF_ONLY",
+        }
