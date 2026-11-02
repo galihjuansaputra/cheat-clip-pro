@@ -277,7 +277,7 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
 
     const loadDirectIframe = (container: HTMLElement) => {
       if (!isMounted || playerReadyRef.current) return;
-      const embedUrl = `https://www.youtube.com/embed/${videoId}?start=${Math.floor(adjustedStart)}&controls=1&rel=0&playsinline=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`;
+      const embedUrl = `https://www.youtube.com/embed/${videoId}?start=${Math.floor(adjustedStart)}&controls=1&rel=0&showinfo=0&playsinline=1&enablejsapi=1&origin=${encodeURIComponent(window.location.origin)}`;
       container.innerHTML = `<iframe id="trimmer-direct-yt-iframe" src="${embedUrl}" style="width:100%!important;height:100%!important;border:none;display:block;position:absolute;top:0;left:0;" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>`;
       playerReadyRef.current = true;
       setPlayerReady(true);
@@ -323,6 +323,7 @@ export const ClipTrimmerModal: React.FC<ClipTrimmerModalProps> = ({
             controls: 1,
             modestbranding: 1,
             rel: 0,
+            showinfo: 0,
             playsinline: 1,
             enablejsapi: 1,
             origin: window.location.origin,
