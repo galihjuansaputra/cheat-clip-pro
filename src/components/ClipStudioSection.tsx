@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import UploadModal from './UploadModal';
 import { 
   AlertTriangle, 
   RefreshCw, 
@@ -65,7 +66,7 @@ function cleanCaptionText(text: string): string {
     .replace(/\b(laughter|applause|music|cheering|snickering|giggle|cough)\b/gi, ' ')
     .replace(/^\s*[\.,…:;]+\s*/, '')
     .replace(/\s*[\.,…:;]+\s*$/, '')
-    .replace(/[^\w\s.,%&$?]|_/g, '')
+    .replace(/[^\w\s.,%&$?]|_/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -354,6 +355,15 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const isYouTube = !videoId?.startsWith('upload_') && !videoId?.startsWith('gdrive_') && !videoId?.startsWith('twitch_') && !videoUrl?.includes('/api/video') && !videoUrl?.includes('twitch.tv');
   const isTwitch = Boolean(videoId?.startsWith('twitch_') || videoUrl?.includes('twitch.tv'));
   const [hasCookies, setHasCookies] = useState<boolean>(() => hasStoredCookies());
+  useEffect(() => {
+    fetch('/api/rendered-clips').then(r => r.json()).then(d => {
+      setRenderedClips(d.clips || []);
+      if (d.clips?.length) setSelectedRendered(d.clips[0].path);
+    }).catch(() => {});
+  }, []);
+  const [uploadClip, setUploadClip] = useState<{ batchId: string; clipIndex: number; title: string } | null>(null);
+  const [renderedClips, setRenderedClips] = useState<{ name: string; path: string }[]>([]);
+  const [selectedRendered, setSelectedRendered] = useState('');
 
   useEffect(() => {
     const handleCookieChange = () => setHasCookies(hasStoredCookies());
@@ -957,6 +967,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             controls: 0,
             modestbranding: 1,
             rel: 0,
+            showinfo: 0,
             disablekb: 1,
             fs: 0,
             playsinline: 1,
@@ -5346,6 +5357,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                               ⬇️ MP4
                             </a>
                           )}
+                          <button
+                            className="quick-dl-btn"
+                            onClick={() => setUploadClip({ batchId: batchProgress.batch_id, clipIndex: c.clip_index ?? i, title: finalClipName })}
+                            title={`Upload ${finalClipName}`}
+                          >
+                            ⬆ Upload
+                          </button>
                         </div>
                       );
                     })}
@@ -5825,6 +5843,32 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             </div>
           </div>
         </div>
+      )}
+      {renderedClips.length > 0 && (
+        <div style={{ marginTop: 12, padding: 10, border: '1px solid #333', borderRadius: 8 }}>
+          <div style={{ marginBottom: 6, fontWeight: 600 }}>Upload rendered clip</div>
+          <select value={selectedRendered} onChange={e => setSelectedRendered(e.target.value)} style={{ width: '100%', marginBottom: 6 }}>
+            {renderedClips.map(c => <option key={c.path} value={c.path}>{c.name}</option>)}
+          </select>
+          <button className="quick-dl-btn" onClick={() => setUploadClip({ batchId: '', clipIndex: 0, title: selectedRendered.split(/[\\\\/]/).pop()?.replace(/\.mp4$/i, '') || 'Clip' })} >
+            ⬆ Upload selected
+          </button>
+          {uploadClip?.batchId === '' && (
+            <UploadModal
+              filePath={selectedRendered}
+              clipTitle={uploadClip.title}
+              onClose={() => setUploadClip(null)}
+            />
+          )}
+        </div>
+      )}
+      {uploadClip && uploadClip.batchId !== '' && (
+        <UploadModal
+          batchId={uploadClip.batchId}
+          clipIndex={uploadClip.clipIndex}
+          clipTitle={uploadClip.title}
+          onClose={() => setUploadClip(null)}
+        />
       )}
     </section>
   );
