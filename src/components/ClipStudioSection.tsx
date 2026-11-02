@@ -65,7 +65,7 @@ function cleanCaptionText(text: string): string {
     .replace(/\b(laughter|applause|music|cheering|snickering|giggle|cough)\b/gi, ' ')
     .replace(/^\s*[\.,…:;]+\s*/, '')
     .replace(/\s*[\.,…:;]+\s*$/, '')
-    .replace(/[^\w\s.,%&$?]|_/g, '')
+    .replace(/[^\w\s.,%&$?]|_/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -957,6 +957,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             controls: 0,
             modestbranding: 1,
             rel: 0,
+            showinfo: 0,
             disablekb: 1,
             fs: 0,
             playsinline: 1,

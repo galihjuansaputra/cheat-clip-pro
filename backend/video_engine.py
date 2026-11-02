@@ -1295,7 +1295,7 @@ def clean_caption_text(text: str) -> str:
     t = re.sub(r'\s*[\.\,\…\:\;]+\s*$', '', t)
     # 4. Remove all symbols except . , % & $ ? (keep letters, digits, whitespace, . , % & $ ?)
     # Note: in Python regex \w includes '_', so we explicitly eliminate '_'
-    t = re.sub(r'[^\w\s.,%&$?]|_', '', t)
+    t = re.sub(r'[^\w\s.,%&$?]|_', ' ', t)
     # 5. Collapse multiple spaces and trim
     t = re.sub(r'\s+', ' ', t).strip()
     # If the string consists purely of punctuation, clear it
