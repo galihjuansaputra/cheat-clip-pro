@@ -16,6 +16,7 @@ from backend.routers import (
     media_router,
     render_router,
     system_router,
+    upload_router,
 )
 # Re-exports for backwards compatibility
 from backend.schemas.analyze import (
@@ -80,11 +81,15 @@ async def lifespan(app: FastAPI):
     # Startup: spawn auto-cleanup background task
     cleanup_task = asyncio.create_task(background_storage_cleanup_worker())
     logger.info("[Auto-Cleanup] Storage daemon active (Interval: 30m, TTL: 1h, Quota: 5GB).")
+    from backend.services.upload_service import scheduler_loop
+    upload_sched_task = asyncio.create_task(scheduler_loop())
     yield
     # Shutdown: cancel task cleanly
     cleanup_task.cancel()
+    upload_sched_task.cancel()
     try:
         await cleanup_task
+        await upload_sched_task
     except asyncio.CancelledError:
         pass
 
@@ -149,6 +154,7 @@ app.include_router(media_router)
 app.include_router(cookies_router)
 app.include_router(downloads_router)
 app.include_router(system_router)
+app.include_router(upload_router)
 
 # Mount built frontend in production container if dist/ exists
 from pathlib import Path

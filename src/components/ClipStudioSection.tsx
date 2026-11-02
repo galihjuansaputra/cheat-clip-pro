@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import UploadModal from './UploadModal';
 import { 
   AlertTriangle, 
   RefreshCw, 
@@ -354,6 +355,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const isYouTube = !videoId?.startsWith('upload_') && !videoId?.startsWith('gdrive_') && !videoId?.startsWith('twitch_') && !videoUrl?.includes('/api/video') && !videoUrl?.includes('twitch.tv');
   const isTwitch = Boolean(videoId?.startsWith('twitch_') || videoUrl?.includes('twitch.tv'));
   const [hasCookies, setHasCookies] = useState<boolean>(() => hasStoredCookies());
+  const [uploadClip, setUploadClip] = useState<{ batchId: string; clipIndex: number; title: string } | null>(null);
 
   useEffect(() => {
     const handleCookieChange = () => setHasCookies(hasStoredCookies());
@@ -5347,6 +5349,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                               ⬇️ MP4
                             </a>
                           )}
+                          <button
+                            className="quick-dl-btn"
+                            onClick={() => setUploadClip({ batchId: batchProgress.batch_id, clipIndex: c.clip_index ?? i, title: finalClipName })}
+                            title={`Upload ${finalClipName}`}
+                          >
+                            ⬆ Upload
+                          </button>
                         </div>
                       );
                     })}
@@ -5826,6 +5835,14 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             </div>
           </div>
         </div>
+      )}
+      {uploadClip && (
+        <UploadModal
+          batchId={uploadClip.batchId}
+          clipIndex={uploadClip.clipIndex}
+          clipTitle={uploadClip.title}
+          onClose={() => setUploadClip(null)}
+        />
       )}
     </section>
   );
