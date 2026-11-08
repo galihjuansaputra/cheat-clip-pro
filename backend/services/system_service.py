@@ -117,6 +117,14 @@ def clear_temp_files() -> dict:
     }
 
 
+def _is_within(path: Path, directory: Path) -> bool:
+    try:
+        path.resolve().relative_to(directory.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def is_protected_system_file(p: Path) -> bool:
     """Checks whether a given file/dir is protected (cookies, fonts, etc.)."""
     PROTECTED_COOKIE_NAMES = {"cookies.txt", ".cookies", "youtube_cookies.txt", "cookie.txt"}
@@ -156,7 +164,9 @@ def auto_cleanup_expired_files(
 ) -> dict:
     """
     Automated dual-mode cleanup engine:
-    1. Option 1 (Time-based TTL): Deletes temp/export/upload files older than max_age_seconds (default 1 hour).
+    1. Option 1 (Time-based TTL): Deletes intermediate temp files older than max_age_seconds
+       (default 1 hour). Rendered exports and uploaded source videos are kept so
+       render/analysis history stays usable across sessions and browsers.
     2. Option 2 (Storage Quota Ceiling): If total storage exceeds max_storage_bytes (default 5 GB),
        purges oldest files first (FIFO by mtime) down to target_reduction_ratio (default 80% = 4 GB).
     Strictly preserves cookies and custom fonts.
@@ -180,6 +190,10 @@ def auto_cleanup_expired_files(
             continue
         for item in list(target.rglob("*")):
             if item.is_file() and not is_protected_system_file(item):
+                # Keep rendered exports and uploaded source files; quota purge
+                # below still reclaims them when storage grows too large.
+                if _is_within(item, EXPORTS_DIR) or _is_within(item, UPLOADS_DIR):
+                    continue
                 try:
                     mtime = item.stat().st_mtime
                     if mtime < cutoff_time:

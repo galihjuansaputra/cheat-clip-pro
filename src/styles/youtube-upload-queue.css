@@ -1,0 +1,8 @@
+.youtube-upload-queue { display: grid; gap: .8rem; padding: 1rem; background: var(--bg-surface-elevated); }
+.youtube-upload-item { display: grid; gap: .4rem; padding: .7rem; border: 1px solid var(--border-color); background: var(--bg-surface); }
+.youtube-upload-item-head, .youtube-upload-meta { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.youtube-upload-item-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .8rem; }
+.youtube-upload-meta { color: var(--text-muted); font-size: .7rem; }
+.youtube-upload-meta a { display: inline-flex; align-items: center; gap: .25rem; color: var(--primary); }
+.youtube-upload-track { height: 5px; background: var(--bg-input); overflow: hidden; }
+.youtube-upload-track span { display: block; height: 100%; background: var(--primary); transition: width .3s ease; }

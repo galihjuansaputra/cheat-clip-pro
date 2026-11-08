@@ -22,6 +22,8 @@ export interface ViralClip {
   title_suggestion?: string;
   caption_suggestion?: string;
   hashtag_suggestion?: string;
+  /** Stable index inside AnalyzeResponse.clips; used to map rendered files back to metadata. */
+  source_index?: number;
 }
 
 export interface AnalyzeResponse {
@@ -34,7 +36,7 @@ export interface AnalyzeResponse {
   transcript?: TranscriptLine[];
   model?: string;
   video_url?: string;
-  source_type?: 'youtube' | 'upload' | 'gdrive' | 'twitch';
+  source_type?: 'youtube' | 'upload' | 'gdrive';
 }
 
 export type AspectRatioOption = '9:16' | '1:1' | '4:3' | '16:9' | '16:9_landscape';
@@ -120,10 +122,7 @@ export interface RenderSettings {
   fontSizePx?: number;
   textCase: TextCaseOption;
   titleYPercent?: number;
-  titleXPercent?: number;
-  cropXPercent?: number;
   subtitleYPercent?: number;
-  subtitleOffsetSeconds?: number;
   subtitlePositionMode?: SubtitlePositionMode;
   subtitleCenterYPercent?: number;
   selectedClips: ViralClip[];
@@ -159,6 +158,8 @@ export interface RenderSettings {
 
 export interface RenderClipStatus {
   clip_index: number;
+  /** Index of the clip inside AnalyzeResponse.clips. Kept stable even when only a subset is rendered. */
+  source_index?: number;
   title: string;
   base_title?: string;
   status: 'pending' | 'downloading' | 'transcribing' | 'tracking' | 'rendering' | 'completed' | 'error';
@@ -166,15 +167,22 @@ export interface RenderClipStatus {
   download_url?: string;
   error_message?: string;
   error?: string;
+  is_merged?: boolean;
+  segments_count?: number;
 }
 
 export interface BatchRenderProgress {
   batch_id: string;
+  video_id?: string;
   total_clips: number;
   current_clip_index: number;
   overall_status: 'running' | 'completed' | 'error';
+  created_at?: string;
+  updated_at?: string;
   zip_url?: string;
   error_message?: string;
   warning_message?: string;
+  /** True for batches reconstructed from previously exported files. */
+  recovered?: boolean;
   clips: RenderClipStatus[];
 }
