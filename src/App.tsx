@@ -17,6 +17,7 @@ import { useLanguage } from './locales';
 import { HackerApiKeyInput } from './components/HackerApiKeyInput';
 import { YouTubeUploadPage, type YouTubeUploadMetadata } from './components/YouTubeUploadPage';
 import type { YouTubeUploadItem } from './components/YouTubeUploadQueue';
+import { YouTubeUploadStatusBar } from './components/YouTubeUploadStatusBar';
 import { buildClipsMarkdown } from './utils/clipMarkdown';
 import {
   Play,
@@ -1194,6 +1195,18 @@ export default function App() {
       }, durationMs);
     }
   }, []);
+
+  // Track "clear after N ms" timers so a newer toast (for example a live
+  // upload progress message) is never wiped by an older timer.
+  const clearToastAfter = useCallback((ms: number) => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToastMessageState(null);
+      toastTimeoutRef.current = null;
+    }, ms);
+  }, []);
   const [isClearingGlobalTemp, setIsClearingGlobalTemp] = useState<boolean>(false);
   const [showGlobalClearModal, setShowGlobalClearModal] = useState<boolean>(false);
 
@@ -1205,15 +1218,15 @@ export default function App() {
       if (resp.ok) {
         const data = await resp.json();
         setToastMessage(data.message || t.header.clearedTempSuccess);
-        setTimeout(() => setToastMessage(null), 3500);
+        clearToastAfter(3500);
       } else {
         setToastMessage(t.header.clearedTempFailed);
-        setTimeout(() => setToastMessage(null), 3000);
+        clearToastAfter(3000);
       }
     } catch (e) {
       console.error('Failed to clear temp folder:', e);
       setToastMessage(t.header.clearedTempError);
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
     } finally {
       setIsClearingGlobalTemp(false);
       setShowGlobalClearModal(false);
@@ -1602,7 +1615,7 @@ export default function App() {
     }
     if (!raw) {
       setToastMessage(t.form.historyLoadFailed);
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
       return;
     }
     try {
@@ -1725,7 +1738,7 @@ export default function App() {
       }, 600);
     } catch (_) {
       setToastMessage(t.form.historyLoadFailed);
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
     }
   };
 
@@ -1739,7 +1752,7 @@ export default function App() {
     fetch(`/api/analysis-cache/entry?cache_key=${encodeURIComponent(cacheKey)}`, { method: 'DELETE' }).catch(() => undefined);
     void refreshHistory();
     setToastMessage(t.form.removedFromHistory(entry.title));
-    setTimeout(() => setToastMessage(null), 3000);
+    clearToastAfter(3000);
   };
 
   const clearAllHistory = () => {
@@ -1754,7 +1767,7 @@ export default function App() {
     fetch('/api/analysis-cache', { method: 'DELETE' }).catch(() => undefined);
     setHistory([]);
     setToastMessage(t.form.allHistoryCleared);
-    setTimeout(() => setToastMessage(null), 3000);
+    clearToastAfter(3000);
   };
 
   const handleDeselectActiveVideo = () => {
@@ -1772,7 +1785,7 @@ export default function App() {
       setWorkflowTab('source');
     }
     setToastMessage('Active video ditutup (deselected)');
-    setTimeout(() => setToastMessage(null), 3000);
+    clearToastAfter(3000);
   };
 
   const formatRelativeTime = (iso: string) => {
@@ -2873,7 +2886,7 @@ Transcript:
     const ts = `${formatSeconds(clip.start_time)} - ${formatSeconds(clip.end_time)}`;
     navigator.clipboard.writeText(ts).then(() => {
       setToastMessage(t.results.copiedTimestampToast(ts));
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
     });
   };
 
@@ -2924,7 +2937,7 @@ Transcript:
     }
 
     navigator.clipboard.writeText(text).then(() => {
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
     });
   };
 
@@ -3048,13 +3061,13 @@ Transcript:
     downloadAnchor.remove();
 
     setToastMessage(t.results.downloadedJsonToast);
-    setTimeout(() => setToastMessage(null), 3000);
+    clearToastAfter(3000);
   };
 
   const handleExportSRT = () => {
     if (!result || !result.transcript) {
       setToastMessage(t.results.noTranscriptToExport);
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
       return;
     }
 
@@ -3082,7 +3095,7 @@ Transcript:
     downloadAnchor.remove();
 
     setToastMessage(t.results.downloadedSrtToast);
-    setTimeout(() => setToastMessage(null), 3000);
+    clearToastAfter(3000);
   };
 
   const handleCopyAllMarkdown = () => {
@@ -3090,7 +3103,7 @@ Transcript:
     const md = buildClipsMarkdown(result);
     navigator.clipboard.writeText(md).then(() => {
       setToastMessage(t.results.copiedMarkdownToast);
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
     });
   };
 
@@ -3189,6 +3202,9 @@ Transcript:
 
   return (
     <>
+      {/* Always-visible upload progress, independent of the current tab */}
+      <YouTubeUploadStatusBar items={youtubeUploads} />
+
       {/* Toast Notification */}
       {toastMessage && (
         <div className="toast-msg" role="status" aria-live="polite">
@@ -4665,7 +4681,7 @@ Transcript:
                           const text = evt.target?.result as string;
                           setManualSubtitlesContent(text);
                           setToastMessage(t.form.subtitlesLoaded(file.name));
-                          setTimeout(() => setToastMessage(null), 3000);
+                          clearToastAfter(3000);
                         };
                         reader.readAsText(file);
                       }}

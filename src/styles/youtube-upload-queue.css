@@ -6,3 +6,47 @@
 .youtube-upload-meta a { display: inline-flex; align-items: center; gap: .25rem; color: var(--primary); }
 .youtube-upload-track { height: 5px; background: var(--bg-input); overflow: hidden; }
 .youtube-upload-track span { display: block; height: 100%; background: var(--primary); transition: width .3s ease; }
+
+/* Floating indicator: visible on every tab while an upload is active. */
+.youtube-upload-floating {
+  position: fixed;
+  left: 1rem;
+  bottom: 1rem;
+  z-index: 100001;
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  width: min(360px, calc(100vw - 2rem));
+  padding: .75rem .9rem;
+  background: var(--bg-surface-elevated);
+  border: 1px solid var(--primary);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .45), 0 0 14px rgba(16, 185, 129, .18);
+}
+.youtube-upload-floating-icon { display: flex; color: var(--primary); }
+.youtube-upload-floating-body { display: grid; gap: .2rem; flex: 1; min-width: 0; }
+.youtube-upload-floating-body strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: .78rem;
+}
+.youtube-upload-floating-body span {
+  font-family: var(--font-mono);
+  font-size: .68rem;
+  color: var(--text-muted);
+}
+.youtube-upload-floating-track { height: 4px; background: var(--bg-input); overflow: hidden; }
+.youtube-upload-floating-track span {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  transition: width .3s ease;
+}
+@media (max-width: 640px) {
+  .youtube-upload-floating {
+    left: .6rem;
+    right: .6rem;
+    bottom: 5.2rem;
+    width: auto;
+  }
+}
