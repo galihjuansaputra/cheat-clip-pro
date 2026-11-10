@@ -355,20 +355,26 @@ export default function App() {
     if (!hasActive) return;
     const timer = window.setInterval(() => {
       fetch('/api/youtube/upload-history').then(res => res.ok ? res.json() : null).then(data => {
-        if (data?.jobs) setYoutubeUploads(prev => data.jobs.map((job: any) => {
-          const existing = prev.find(item => item.id === job.job_id);
-          return {
-            id: job.job_id,
-            title: job.title || job.video_id || 'YouTube clip',
-            status: job.status,
-            progress: job.progress || 0,
-            url: job.url,
-            error: job.error,
-            note: job.note,
-            warning: job.warning,
-            retry: existing?.retry,
-          };
-        }));
+        if (data?.jobs) setYoutubeUploads(prev => {
+          const serverItems = data.jobs.map((job: any) => {
+            const existing = prev.find(item => item.id === job.job_id);
+            return {
+              id: job.job_id,
+              title: job.title || job.video_id || 'YouTube clip',
+              status: job.status,
+              progress: job.progress || 0,
+              url: job.url,
+              error: job.error,
+              note: job.note,
+              warning: job.warning,
+              retry: existing?.retry,
+            };
+          });
+          // A job that is still being prepared in this browser has not reached
+          // the server yet, so keep its local queue entry visible.
+          const localItems = prev.filter(item => item.id.startsWith('local_'));
+          return [...localItems, ...serverItems];
+        });
       }).catch(() => undefined);
     }, 4000);
     return () => window.clearInterval(timer);
@@ -1033,13 +1039,29 @@ export default function App() {
     sourceClip?: ViralClip,
     override?: YouTubeUploadMetadata,
   ) => {
-    if (!clip.download_url) return;
-    setToastMessage('Mengunggah klip ke YouTube...');
+    if (!clip.download_url) {
+      setToastMessage('File hasil render tidak tersedia. Render ulang klip ini dulu.');
+      return;
+    }
+    const uploadTitle = (override?.title || sourceClip?.title_suggestion || clip.title || 'Cheat Clip').slice(0, 100);
+    const localUploadId = `local_${Date.now()}`;
+    // Show the job immediately. Reading a large MP4 and sending it to the
+    // backend can take minutes on a Tailscale/slow link, and previously the
+    // only feedback was a toast that expired after 4 seconds.
+    setYoutubeUploads(prev => [{
+      id: localUploadId,
+      title: uploadTitle || 'YouTube clip',
+      status: 'preparing',
+      progress: 0,
+      note: 'Menyiapkan file...',
+    }, ...prev]);
+    let queueId = localUploadId;
+    const patchUpload = (patch: Partial<YouTubeUploadItem>) => setYoutubeUploads(prev => prev.map(item => item.id === queueId ? { ...item, ...patch } : item));
+    setToastMessage('Menyiapkan upload YouTube...', 0);
     try {
       const fileResponse = await fetch(clip.download_url);
       if (!fileResponse.ok) throw new Error('File hasil render tidak tersedia');
       const form = new FormData();
-      const uploadTitle = (override?.title || sourceClip?.title_suggestion || clip.title || 'Cheat Clip').slice(0, 100);
       form.append('video', await fileResponse.blob(), `${uploadTitle || 'clip'}.mp4`);
       const rawTags = override?.tags?.length
         ? override.tags
@@ -1056,14 +1078,43 @@ export default function App() {
         made_for_kids: override?.madeForKids ?? false,
       }));
       if (override?.thumbnail) form.append('thumbnail', override.thumbnail, override.thumbnail.name);
-      const response = await fetch('/api/youtube/upload', { method: 'POST', body: form });
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail || 'Upload gagal');
+
+      patchUpload({ note: 'Mengirim file ke server...' });
+      setToastMessage('Mengirim file ke server...', 0);
+      // XHR gives upload progress for the browser -> backend transfer, which
+      // fetch() cannot report. This is the phase that looks "stuck" on slow
+      // connections before a job id exists.
+      const data = await new Promise<Record<string, any>>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/youtube/upload');
+        xhr.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return;
+          const pct = Math.min(100, Math.round((event.loaded / event.total) * 100));
+          patchUpload({ progress: pct, note: `Mengirim file... ${pct}%` });
+          setToastMessage(`Mengirim file ke server... ${pct}%`, 0);
+        };
+        xhr.onload = () => {
+          let payload: Record<string, any> = {};
+          try {
+            payload = JSON.parse(xhr.responseText || '{}');
+          } catch {
+            payload = {};
+          }
+          if (xhr.status >= 200 && xhr.status < 300) resolve(payload);
+          else reject(new Error(payload.detail || `Upload gagal (${xhr.status})`));
+        };
+        xhr.onerror = () => reject(new Error('Gagal menghubungi server upload'));
+        xhr.onabort = () => reject(new Error('Upload dibatalkan'));
+        xhr.send(form);
+      });
+
       const uploadId = data.job_id as string;
+      if (!uploadId) throw new Error('Server tidak mengembalikan ID upload');
+      queueId = uploadId;
       const setUpload = (patch: Partial<YouTubeUploadItem>) => setYoutubeUploads(prev => prev.map(item => item.id === uploadId ? { ...item, ...patch } : item));
       youtubeRetryRef.current[uploadId] = () => { void handleUploadToYouTube(clip, sourceClip, override); };
-      setYoutubeUploads(prev => [{ id: uploadId, title: uploadTitle || 'YouTube clip', status: 'queued', progress: 0 }, ...prev]);
-      setToastMessage('Upload YouTube dimulai...');
+      patchUpload({ id: uploadId, status: 'queued', progress: 0, note: 'Menunggu antrean YouTube...' });
+      setToastMessage('Upload YouTube dimulai...', 0);
       let status = data;
       const deadline = Date.now() + 30 * 60 * 1000;
       while (Date.now() < deadline && status.status !== 'completed' && status.status !== 'failed') {
@@ -1082,15 +1133,17 @@ export default function App() {
         });
         if (status.status === 'failed') throw new Error(status.error || 'Upload YouTube gagal');
         if (status.status !== 'completed') {
-          setToastMessage(status.note || `Upload YouTube: ${status.progress || 0}%`, 2500);
+          setToastMessage(status.note || `Upload YouTube: ${status.progress || 0}%`, 0);
         }
       }
       if (status.status !== 'completed') {
         throw new Error('Upload masih berjalan di server. Buka tab YouTube Upload lagi untuk memantau statusnya.');
       }
-      setToastMessage(`Berhasil diupload: ${status.url}`);
+      setToastMessage(`Berhasil diupload: ${status.url}`, 8000);
     } catch (err) {
-      setToastMessage(err instanceof Error ? err.message : 'Upload YouTube gagal');
+      const message = err instanceof Error ? err.message : 'Upload YouTube gagal';
+      patchUpload({ status: 'failed', error: message, note: undefined });
+      setToastMessage(message, 8000);
     }
   };
 

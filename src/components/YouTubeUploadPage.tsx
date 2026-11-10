@@ -232,7 +232,7 @@ export function YouTubeUploadPage({
       .map(cleanTag)
       .filter(Boolean);
     return {
-      title: (draft.title || clip.title || 'YouTube clip').slice(0, 100),
+      title: (draft.title.trim() || clip.title || 'YouTube clip').slice(0, 100),
       description: draft.description.slice(0, 5000),
       tags,
       privacyStatus: privacy,

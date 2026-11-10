@@ -12,6 +12,15 @@ export interface YouTubeUploadItem {
   retry?: () => void;
 }
 
+const STATUS_LABELS: Record<string, string> = {
+  preparing: 'Menyiapkan',
+  queued: 'Menunggu',
+  uploading: 'Mengunggah',
+  processing: 'Memproses',
+  completed: 'Selesai',
+  failed: 'Gagal',
+};
+
 export function YouTubeUploadQueue({ items }: { items: YouTubeUploadItem[] }) {
   if (!items.length) return null;
   return (
@@ -25,7 +34,7 @@ export function YouTubeUploadQueue({ items }: { items: YouTubeUploadItem[] }) {
           </div>
           <div className="youtube-upload-track"><span style={{ width: `${item.progress}%` }} /></div>
           <div className="youtube-upload-meta">
-            <span>{item.status} · {item.progress}%</span>
+            <span>{STATUS_LABELS[item.status] || item.status} · {item.progress}%</span>
             {item.url && <a href={item.url} target="_blank" rel="noreferrer">Open video <ExternalLink size={12} /></a>}
             {item.status === 'failed' && item.retry && <button type="button" className="copy-title-btn" onClick={item.retry}>Retry</button>}
           </div>
