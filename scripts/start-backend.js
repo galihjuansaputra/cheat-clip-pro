@@ -138,10 +138,10 @@ function findPythonCandidates() {
 function testPython(candidate) {
   try {
     const testEnv = getSanitizedEnv(candidate.exe);
-    // Thorough test: verify uvicorn, fastapi, and full backend config import
+    // Thorough test: verify core dependencies and backend config import
     const res = spawnSync(
       candidate.exe,
-      [...candidate.args, '-c', 'import sys, uvicorn, fastapi; import backend.config; print("OK")'],
+      [...candidate.args, '-c', 'import sys, uvicorn, fastapi, cv2, PIL, numpy, yt_dlp, httpx; import backend.config; print("OK")'],
       {
         cwd: rootDir,
         timeout: 10000,
