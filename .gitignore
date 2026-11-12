@@ -14,9 +14,10 @@ dist/
 dist-ssr/
 *.local
 
-# Build artifacts
+# Build artifacts & runtime state
 .vite/
 .cache/
+.runtime/
 
 # Logs
 logs/
