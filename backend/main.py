@@ -9,13 +9,10 @@ from fastapi.middleware.cors import CORSMiddleware
 # Initialize environment and configuration
 import backend.config
 from backend.config import logger
-from backend.routers.youtube_auth import router as youtube_auth_router
-from backend.routers.youtube_upload import router as youtube_upload_router
 from backend.routers import (
     analyze_router,
     cookies_router,
     downloads_router,
-    history_router,
     media_router,
     render_router,
     system_router,
@@ -49,7 +46,6 @@ from backend.services.render_service import (
     RENDER_BATCHES,
 )
 from backend.services.system_service import auto_cleanup_expired_files
-from backend.services.upload_store import fail_stale_jobs
 
 
 async def background_storage_cleanup_worker():
@@ -81,16 +77,6 @@ from fastapi.responses import JSONResponse
 async def lifespan(app: FastAPI):
     # Ensure all logger handlers (including Uvicorn) have the security masking filter attached
     install_security_logging()
-    # Background upload threads do not survive a restart. Clear anything that
-    # was mid-flight so the UI does not show a permanent "uploading 5%" job.
-    try:
-        stale = fail_stale_jobs(
-            "Upload terputus karena server restart. Silakan upload ulang video ini."
-        )
-        if stale:
-            logger.warning(f"[YouTube] Marked {stale} interrupted upload job(s) as failed.")
-    except Exception as exc:
-        logger.warning(f"[YouTube] Could not clean interrupted upload jobs: {exc}")
     # Startup: spawn auto-cleanup background task
     cleanup_task = asyncio.create_task(background_storage_cleanup_worker())
     logger.info("[Auto-Cleanup] Storage daemon active (Interval: 30m, TTL: 1h, Quota: 5GB).")
@@ -159,12 +145,9 @@ async def sanitized_exception_handler(request: Request, exc: Exception):
 # Include Modular Routers
 app.include_router(analyze_router)
 app.include_router(render_router)
-app.include_router(youtube_auth_router)
-app.include_router(youtube_upload_router)
 app.include_router(media_router)
 app.include_router(cookies_router)
 app.include_router(downloads_router)
-app.include_router(history_router)
 app.include_router(system_router)
 
 # Mount built frontend in production container if dist/ exists

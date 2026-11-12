@@ -30,68 +30,42 @@ export async function getFFmpeg(onLoadProgress?: (ratio: number) => void): Promi
     return loadPromise;
   }
 
-  // Prefer the ffmpeg core shipped with the app. Loading the 30 MB wasm from
-  // a CDN is unreliable on slow/restricted connections and a truncated
-  // download makes the worker fail with a confusing "failed to import
-  // ffmpeg-core.js" error. Local assets keep client rendering dependable.
-  const sources = [
-    { core: '/ffmpeg/ffmpeg-core.js', wasm: '/ffmpeg/ffmpeg-core.wasm' },
-    {
-      core: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.js',
-      wasm: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm',
-    },
-    {
-      core: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-      wasm: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
-    },
-  ];
-
   loadPromise = (async () => {
-    let lastError: unknown = null;
+    const ffmpeg = new FFmpeg();
 
-    for (let attempt = 0; attempt < sources.length; attempt++) {
-      const source = sources[attempt];
-      if (attempt > 0) {
-        console.warn(`FFmpeg core source ${attempt} failed, trying fallback ${attempt + 1}...`, lastError);
+    ffmpeg.on('log', ({ message }) => {
+      console.debug('[FFmpeg-WASM]', message);
+    });
+
+    ffmpeg.on('progress', ({ progress }) => {
+      const pct = Math.min(100, Math.max(0, Math.round(progress * 100)));
+      if (onLoadProgress) {
+        onLoadProgress(pct);
       }
+    });
 
-      // A failed load can leave the instance unusable, so start fresh.
-      const ffmpeg = new FFmpeg();
-
-      ffmpeg.on('log', ({ message }) => {
-        console.debug('[FFmpeg-WASM]', message);
+    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
+    
+    try {
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
       });
-
-      ffmpeg.on('progress', ({ progress }) => {
-        const pct = Math.min(100, Math.max(0, Math.round(progress * 100)));
-        if (onLoadProgress) {
-          onLoadProgress(pct);
-        }
+      isLoaded = true;
+      ffmpegInstance = ffmpeg;
+      return ffmpeg;
+    } catch (err) {
+      console.warn('Primary ESM FFmpeg WASM load failed, trying standard core fallback...', err);
+      const fallbackBase = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd';
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${fallbackBase}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${fallbackBase}/ffmpeg-core.wasm`, 'application/wasm'),
       });
-
-      try {
-        await ffmpeg.load({
-          coreURL: await toBlobURL(source.core, 'text/javascript'),
-          wasmURL: await toBlobURL(source.wasm, 'application/wasm'),
-        });
-        isLoaded = true;
-        ffmpegInstance = ffmpeg;
-        return ffmpeg;
-      } catch (err) {
-        lastError = err;
-        try { ffmpeg.terminate(); } catch { /* ignore */ }
-      }
+      isLoaded = true;
+      ffmpegInstance = ffmpeg;
+      return ffmpeg;
     }
-
-    throw lastError instanceof Error ? lastError : new Error('Failed to load FFmpeg WASM core');
   })();
-
-  // Allow a later retry instead of caching the rejection for the whole session.
-  loadPromise.catch(() => {
-    loadPromise = null;
-    ffmpegInstance = null;
-    isLoaded = false;
-  });
 
   return loadPromise;
 }

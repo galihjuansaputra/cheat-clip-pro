@@ -33,6 +33,10 @@ from backend.utils.text import (
     extract_video_id,
     detect_transcript_language,
     validate_transcript_language,
+    is_twitch_url,
+    extract_twitch_info,
+    get_twitch_canonical_url,
+    canonical_video_url,
 )
 
 
@@ -261,8 +265,13 @@ def fetch_video_metadata(url: str, custom_proxy: Optional[str] = None, cookies_c
     """Fetches video title, duration, and viewer retention heatmap using yt-dlp with oEmbed title fallback."""
     is_vercel = bool(os.environ.get("VERCEL") or os.environ.get("AWS_LAMBDA_FUNCTION_NAME"))
     proxy = custom_proxy or get_proxy_url()
-    video_id = extract_video_id(url)
-    target_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else url
+    if is_twitch_url(url):
+        tw = extract_twitch_info(url)
+        target_url = get_twitch_canonical_url(tw) if tw else url
+        video_id = f"twitch_{tw['id']}" if (tw and tw.get('type') == 'vod') else (f"twitch_clip_{tw['id']}" if tw else None)
+    else:
+        video_id = extract_video_id(url)
+        target_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else url
     
     attempts = [proxy, None] if (is_vercel and proxy) else [None, proxy] if proxy else [None]
     
@@ -288,13 +297,13 @@ def fetch_video_metadata(url: str, custom_proxy: Optional[str] = None, cookies_c
                     if not info:
                         raise Exception("yt-dlp returned empty info dict")
                     title = info.get('title')
-                    if not title or title.lower() == 'unknown youtube video':
-                        if video_id:
+                    if not title or title.lower() in ('unknown youtube video', 'unknown twitch video'):
+                        if not is_twitch_url(url) and video_id:
                             title = get_youtube_oembed_title(video_id) or title
                     audio_lang_raw = (info.get('audio_language') or info.get('language') or '').lower().split('-')[0]
                     audio_lang = 'id' if audio_lang_raw == 'in' else (audio_lang_raw if audio_lang_raw in ('id', 'en') else '')
                     return {
-                        "title": title or 'Unknown YouTube Video',
+                        "title": title or ('Unknown Twitch Video' if is_twitch_url(url) else 'Unknown YouTube Video'),
                         "channel": info.get('channel') or info.get('uploader') or info.get('creator') or '',
                         "duration": float(info.get('duration') or 0.0),
                         "heatmap": info.get('heatmap') or [],
@@ -640,6 +649,37 @@ def download_youtube_audio_file(
         if cand.is_file() and cand.stat().st_size > 10000:
             logger.info(f"Using cached YouTube audio file: {cand}")
             return cand
+
+    if is_twitch_url(video_id):
+        tw = extract_twitch_info(video_id)
+        target_url = get_twitch_canonical_url(tw) if tw else video_id
+        safe_vid = f"twitch_{tw['id']}" if (tw and tw.get('type') == 'vod') else (f"twitch_clip_{tw['id']}" if tw else video_id)
+        for cand in target_dir.glob(f"twitch_audio_{safe_vid}.*"):
+            if cand.is_file() and cand.stat().st_size > 10000:
+                logger.info(f"Using cached Twitch audio file: {cand}")
+                return cand
+        if on_progress:
+            on_progress("Downloading Twitch Audio", "Downloading Twitch audio stream for Whisper speech transcription...", 35)
+        ydl_opts = {
+            'format': 'Audio_Only/bestaudio[ext=m4a]/bestaudio/best[height<=360]/best',
+            'outtmpl': str(target_dir / f"twitch_audio_{safe_vid}.%(ext)s"),
+            'quiet': True,
+            'no_warnings': True,
+            'nocheckcertificate': True,
+            'proxy': proxy or get_proxy_url(),
+            'socket_timeout': 15,
+            'retries': 3,
+        }
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ydl.download([target_url])
+            for cand in target_dir.glob(f"twitch_audio_{safe_vid}.*"):
+                if cand.is_file() and cand.stat().st_size > 5000:
+                    logger.info(f"Twitch audio downloaded successfully: {cand} ({cand.stat().st_size} bytes)")
+                    return cand
+        except Exception as e:
+            logger.warning(f"Twitch audio download failed: {e}")
+            return None
 
     if on_progress:
         on_progress("Downloading Audio Track", "Downloading audio stream for Whisper speech transcription...", 35)

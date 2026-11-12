@@ -62,6 +62,10 @@ from backend.utils.text import (
     lowercase_hashtags_in_string,
     parse_manual_subtitles,
     sanitize_first_person_title,
+    is_twitch_url,
+    extract_twitch_info,
+    get_twitch_canonical_url,
+    canonical_video_url,
 )
 
 
@@ -536,6 +540,202 @@ async def analyze_video(request: AnalyzeRequest):
                     else:
                         yield _sse({"error": f"Whisper transcription failed: {str(e)}", "status": 500})
                         return
+
+        elif is_twitch_url(req_clean):
+            # ── Twitch extraction path ──────────────────────────────────────
+            source_type = "twitch"
+            video_url = None
+            tw_info = extract_twitch_info(req_clean)
+            if not tw_info:
+                yield _sse({"error": "Invalid Twitch URL. Please provide a valid Twitch VOD (e.g. https://www.twitch.tv/videos/12345678) or Clip link.", "status": 400})
+                return
+            
+            canonical_url = get_twitch_canonical_url(tw_info)
+            video_id = f"twitch_{tw_info['id']}" if tw_info["type"] == "vod" else f"twitch_clip_{tw_info['id']}"
+
+            yield _sse({
+                "step": 1,
+                "step_progress": 30,
+                "overall_progress": 8,
+                "stage": "Connecting to Twitch",
+                "detail": f"Connecting to Twitch & fetching {'VOD' if tw_info['type'] == 'vod' else 'Clip'} metadata...",
+                "message": "Connecting to Twitch — fetching video title and duration..."
+            })
+
+            try:
+                metadata = await asyncio.to_thread(fetch_video_metadata, canonical_url, request.proxy, request.cookies)
+                title    = metadata["title"]
+                channel  = metadata.get("channel", "Twitch Streamer")
+                duration = metadata["duration"]
+                heatmap  = metadata.get("heatmap") or []
+                is_live  = metadata.get("is_live", False)
+                live_status = metadata.get("live_status", "not_live")
+                
+                yield _sse({
+                    "step": 1,
+                    "step_progress": 100,
+                    "overall_progress": 25,
+                    "stage": "Twitch Video Verified",
+                    "detail": f"Loaded metadata for \"{title[:45]}\" ({int(duration)}s)",
+                    "message": f"Connected to Twitch — \"{title[:45]}\" ({int(duration)}s)"
+                })
+            except Exception as e:
+                msg = e.detail if isinstance(e, HTTPException) else str(e)
+                yield _sse({"error": f"Failed to fetch Twitch video details: {msg}", "status": 500})
+                return
+
+            logger.info(f"Twitch metadata fetched: title='{title}', duration={duration}s, heatmap_pts={len(heatmap)}")
+
+            # ── Step 2: Heatmap ──────────────────────────────────────────────
+            yield _sse({
+                "step": 2,
+                "step_progress": 100,
+                "overall_progress": 50,
+                "stage": "Dialogue Fallback",
+                "detail": "No native replay telemetry for Twitch — relying on Whisper AI dialogue & audio peak analysis.",
+                "message": "No replay telemetry for Twitch — analyzing transcript content..."
+            })
+
+            # ── Step 3: Transcription (Whisper AI or Manual) ────────────────
+            if request.subtitles:
+                yield _sse({
+                    "step": 3,
+                    "step_progress": 30,
+                    "overall_progress": 55,
+                    "stage": "Parsing Subtitles",
+                    "detail": "Parsing custom SRT/TXT subtitle timestamps...",
+                    "message": "Parsing manual subtitles..."
+                })
+                try:
+                    transcript_lines = parse_manual_subtitles(request.subtitles, duration)
+                    if not transcript_lines:
+                        raise Exception("Custom subtitles parsed into empty array.")
+                    check_man = validate_transcript_language(transcript_lines, expected_video_lang=None, title=title)
+                    if not check_man['is_supported']:
+                        yield _sse({
+                            "error": f"Bahasa subtitle tidak didukung: terdeteksi {check_man['name']}. Cheat Clip Pro hanya memproses bahasa Indonesia dan Inggris.",
+                            "status": 400
+                        })
+                        return
+                    yield _sse({
+                        "step": 3,
+                        "step_progress": 100,
+                        "overall_progress": 70,
+                        "stage": "Subtitles Ready",
+                        "detail": f"Custom subtitles parsed — {len(transcript_lines)} timestamped lines loaded ({check_man['name']}).",
+                        "message": f"Custom subtitles parsed — {len(transcript_lines)} lines loaded successfully ({check_man['name']})."
+                    })
+                except Exception as e:
+                    yield _sse({"error": f"Failed to parse manual subtitles: {str(e)}", "status": 400})
+                    return
+            else:
+                loop = asyncio.get_running_loop()
+                whisper_audio_queue = asyncio.Queue()
+                def audio_dl_progress(stage: str, detail: str, step_pct: int = 40):
+                    loop.call_soon_threadsafe(whisper_audio_queue.put_nowait, {
+                        "step": 3,
+                        "step_progress": step_pct,
+                        "overall_progress": min(62, 54 + int(step_pct * 0.12)),
+                        "stage": stage,
+                        "detail": detail,
+                        "message": detail
+                    })
+
+                yield _sse({
+                    "step": 3,
+                    "step_progress": 25,
+                    "overall_progress": 55,
+                    "stage": "Downloading Audio Track",
+                    "detail": "Downloading Twitch audio stream for Whisper speech transcription...",
+                    "message": "Downloading Twitch audio stream..."
+                })
+
+                audio_path = None
+                try:
+                    audio_dl_task = asyncio.create_task(
+                        asyncio.to_thread(download_youtube_audio_file, video_id, None, request.proxy, request.cookies, audio_dl_progress)
+                    )
+                    while not audio_dl_task.done():
+                        try:
+                            evt = await asyncio.wait_for(whisper_audio_queue.get(), timeout=0.2)
+                            yield _sse(evt)
+                        except asyncio.TimeoutError:
+                            pass
+                    while not whisper_audio_queue.empty():
+                        yield _sse(whisper_audio_queue.get_nowait())
+
+                    audio_path = await audio_dl_task
+                except Exception as dl_err:
+                    logger.warning(f"Twitch audio download for Whisper failed: {dl_err}")
+
+                if not audio_path or not Path(audio_path).exists():
+                    yield _sse({"error": "Failed to download Twitch audio track for transcription. Please check the URL or try again.", "status": 500})
+                    return
+
+                # Compute acoustic energy heatmap from the audio track
+                try:
+                    heatmap = await asyncio.to_thread(compute_audio_energy_heatmap, audio_path, duration)
+                except Exception as e:
+                    logger.warning(f"Twitch acoustic heatmap error: {e}")
+                    heatmap = []
+
+                yield _sse({
+                    "step": 3,
+                    "step_progress": 60,
+                    "overall_progress": 60,
+                    "stage": "Transcribing with Whisper",
+                    "detail": "Running OpenAI Whisper neural speech model on Twitch audio track...",
+                    "message": "Transcribing dialogue with Whisper AI..."
+                })
+
+                whisper_trans_queue = asyncio.Queue()
+                def whisper_trans_progress(stage: str, detail: str, step_pct: int = 50):
+                    loop.call_soon_threadsafe(whisper_trans_queue.put_nowait, {
+                        "step": 3,
+                        "step_progress": step_pct,
+                        "overall_progress": min(68, 58 + int(step_pct * 0.12)),
+                        "stage": stage,
+                        "detail": detail,
+                        "message": detail
+                    })
+
+                expected_video_lang = None
+                req_lang = (request.transcript_language or "").lower().strip()
+                if req_lang in ("id", "in"):
+                    expected_video_lang = "id"
+                elif req_lang == "en":
+                    expected_video_lang = "en"
+
+                try:
+                    w_task = asyncio.create_task(
+                        asyncio.to_thread(transcribe_local_video_file, audio_path, whisper_trans_progress, expected_video_lang)
+                    )
+                    while not w_task.done():
+                        try:
+                            evt = await asyncio.wait_for(whisper_trans_queue.get(), timeout=0.2)
+                            yield _sse(evt)
+                        except asyncio.TimeoutError:
+                            pass
+                    while not whisper_trans_queue.empty():
+                        yield _sse(whisper_trans_queue.get_nowait())
+
+                    transcript_lines = await w_task
+                except Exception as e:
+                    yield _sse({"error": f"Whisper speech transcription failed: {str(e)}", "status": 500})
+                    return
+
+                if not transcript_lines:
+                    yield _sse({"error": "No spoken dialogue detected in this Twitch video by Whisper AI.", "status": 400})
+                    return
+
+                yield _sse({
+                    "step": 3,
+                    "step_progress": 100,
+                    "overall_progress": 70,
+                    "stage": "Subtitles Ready",
+                    "detail": f"Subtitles generated by Whisper AI — {len(transcript_lines)} dialogue sentences with timestamps ready.",
+                    "message": f"Whisper AI speech transcription complete — {len(transcript_lines)} lines parsed."
+                })
 
         else:
             # ── YouTube extraction path ──────────────────────────────────────

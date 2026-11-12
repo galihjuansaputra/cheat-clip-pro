@@ -5,7 +5,6 @@ import re
 import subprocess
 import zipfile
 from typing import Any, Dict, List, Optional
-from urllib.parse import quote
 
 from backend.config import (
     EXPORTS_DIR,
@@ -20,19 +19,12 @@ from backend.config import (
     transcribe_clip_words,
 )
 from backend.schemas.render import RenderBatchRequest, RenderSettingsModel
-from backend.services.app_store import save_render_batch
+from backend.utils.text import is_twitch_url, extract_twitch_info, get_twitch_canonical_url, canonical_video_url
 
 RENDER_BATCHES: Dict[str, Dict[str, Any]] = {}
 BATCH_REQUESTS: Dict[str, RenderBatchRequest] = {}
 # Concurrency gate: serialize video rendering (1 active render job at a time) to prevent CPU starvation on low-spec servers
 _RENDER_SEMAPHORE = asyncio.Semaphore(1)
-
-
-def _safe_output_basename(raw: str, fallback: str) -> str:
-    """Turn clip metadata into a filesystem-safe, human-readable basename."""
-    cleaned = re.sub(r'[\\/*?:"<>|]', "", raw or "").strip()
-    cleaned = re.sub(r"\s+", " ", cleaned).strip().strip(".")
-    return cleaned[:70].strip() or fallback
 
 
 async def render_single_batch_clip(
@@ -131,7 +123,8 @@ async def render_single_batch_clip(
                     streamer_preset=settings.streamer_preset or "none",
                     title_font_name=settings.title_font or settings.caption_font or "Outfit",
                     title_font_size_px=settings.title_font_size_px,
-                    title_text_case=settings.title_text_case or settings.text_case or "uppercase"
+                    title_text_case=settings.title_text_case or settings.text_case or "uppercase",
+                    title_x_percent=getattr(settings, "title_x_percent", 50.0)
                 )
                 if rendered_overlay and os.path.exists(rendered_overlay):
                     title_overlay_path = rendered_overlay
@@ -188,17 +181,16 @@ async def render_single_batch_clip(
                 title_font_name=settings.title_font or settings.caption_font or "Outfit",
                 font_size_px=settings.font_size_px,
                 title_font_size_px=settings.title_font_size_px,
-                title_text_case=settings.title_text_case or settings.text_case or "uppercase"
+                title_text_case=settings.title_text_case or settings.text_case or "uppercase",
+                title_x_percent=getattr(settings, "title_x_percent", 50.0),
+                subtitle_offset_seconds=getattr(settings, "subtitle_offset_seconds", 0.0)
             )
 
         # 3. Render Final Vertical MP4
         clip_status["status"] = "rendering"
         clip_status["progress_percent"] = 70
 
-        fn_pfx = re.sub(r'[\\/*?:"<>|]', "", settings.file_name_prefix or "")
-        fn_sfx = re.sub(r'[\\/*?:"<>|]', "", settings.file_name_suffix or "")
-        metadata_name = _safe_output_basename(f"{fn_pfx}{base_title}{fn_sfx}", f"clip_{idx+1}")
-        out_filename = f"{metadata_name}_{idx+1}_{batch_id[-6:]}.mp4"
+        out_filename = f"clip_{idx+1}_{batch_id}.mp4"
         out_path = str(EXPORTS_DIR / out_filename)
 
         await asyncio.to_thread(
@@ -233,7 +225,9 @@ async def render_single_batch_clip(
             hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
             original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0),
             hardware_accel=settings.hardware_accel or "auto",
-            title_y_percent=settings.title_y_percent
+            title_y_percent=settings.title_y_percent,
+            crop_x_percent=getattr(settings, "crop_x_percent", None),
+            title_x_percent=getattr(settings, "title_x_percent", 50.0)
         )
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):
@@ -241,8 +235,7 @@ async def render_single_batch_clip(
 
         clip_status["status"] = "completed"
         clip_status["progress_percent"] = 100
-        display_name = f"{fn_pfx}{base_title}{fn_sfx}".strip() or metadata_name
-        clip_status["download_url"] = f"/api/download-rendered/{out_filename}?title={quote(display_name)}"
+        clip_status["download_url"] = f"/api/download-rendered/{out_filename}"
         clip_status["output_path"] = out_path
 
     except Exception as e:
@@ -317,13 +310,6 @@ def update_batch_summary_and_zip(batch_id: str, settings: RenderSettingsModel):
     else:
         batch["overall_status"] = "completed"
         batch["warning_message"] = None
-
-    # Persist the finished (or failed) batch so it can be restored after a
-    # browser reload or backend restart without rendering everything again.
-    try:
-        save_render_batch(batch)
-    except Exception as exc:
-        logger.warning(f"Failed to persist render batch {batch_id}: {exc}")
 
 
 async def render_merged_batch_clips(
@@ -464,7 +450,8 @@ async def render_merged_batch_clips(
                     streamer_preset=settings.streamer_preset or "none",
                     title_font_name=settings.title_font or settings.caption_font or "Outfit",
                     title_font_size_px=settings.title_font_size_px,
-                    title_text_case=settings.title_text_case or settings.text_case or "uppercase"
+                    title_text_case=settings.title_text_case or settings.text_case or "uppercase",
+                    title_x_percent=getattr(settings, "title_x_percent", 50.0)
                 )
                 if rendered_overlay and os.path.exists(rendered_overlay):
                     title_overlay_path = rendered_overlay
@@ -543,7 +530,9 @@ async def render_merged_batch_clips(
             hook_sfx_volume=float((settings.hook_sfx_volume if settings.hook_sfx_volume is not None else 100.0) / 100.0),
             original_audio_volume=float((settings.original_audio_volume if settings.original_audio_volume is not None else 100.0) / 100.0),
             hardware_accel=settings.hardware_accel or "auto",
-            title_y_percent=settings.title_y_percent
+            title_y_percent=settings.title_y_percent,
+            crop_x_percent=getattr(settings, "crop_x_percent", None),
+            title_x_percent=getattr(settings, "title_x_percent", 50.0)
         )
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):
@@ -551,8 +540,7 @@ async def render_merged_batch_clips(
 
         clip_status["status"] = "completed"
         clip_status["progress_percent"] = 100
-        merged_title = (clip_status.get("base_title") or clean_safe_title or "highlight_compilation").strip()
-        clip_status["download_url"] = f"/api/download-rendered/{out_filename}?title={quote(merged_title)}"
+        clip_status["download_url"] = f"/api/download-rendered/{out_filename}"
         clip_status["output_path"] = out_path
 
     except Exception as e:
@@ -594,6 +582,12 @@ async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
         elif request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
             if not target_url.startswith("/api/video/"):
                 target_url = f"/api/video/{request.video_id}"
+        elif request.video_id and is_twitch_url(request.video_id):
+            tw_info = extract_twitch_info(request.video_id)
+            target_url = get_twitch_canonical_url(tw_info) if tw_info else request.video_id
+        elif target_url and is_twitch_url(target_url):
+            tw_info = extract_twitch_info(target_url)
+            target_url = get_twitch_canonical_url(tw_info) if tw_info else target_url
         elif not target_url:
             if request.video_id:
                 target_url = f"https://www.youtube.com/watch?v={request.video_id}"
@@ -627,10 +621,6 @@ async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
                     cookies_content=cookies_content
                 )
                 batch["current_clip_index"] = idx + 1
-                try:
-                    save_render_batch(batch)
-                except Exception:
-                    pass
 
         update_batch_summary_and_zip(batch_id, settings)
 
@@ -687,9 +677,5 @@ async def process_batch_retry(batch_id: str, clip_indices: List[int]):
                         total_clips=len(clips),
                         cookies_content=cookies_content
                     )
-                    try:
-                        save_render_batch(batch)
-                    except Exception:
-                        pass
 
         update_batch_summary_and_zip(batch_id, settings)

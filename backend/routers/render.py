@@ -22,7 +22,6 @@ from backend.schemas.render import (
     RenderSettingsModel,
     RetryBatchRequest,
 )
-from backend.services.app_store import save_render_batch
 from backend.services.render_service import (
     BATCH_REQUESTS,
     RENDER_BATCHES,
@@ -54,7 +53,6 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
         full_comp_title = f"{pfx}{raw_comp_title}{sfx}".strip() if (pfx or sfx) else raw_comp_title
         clips_status.append({
             "clip_index": 0,
-            "source_index": request.clips[0].get("source_index", 0) if request.clips else 0,
             "title": full_comp_title,
             "base_title": raw_comp_title,
             "status": "pending",
@@ -64,7 +62,6 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
         })
         RENDER_BATCHES[batch_id] = {
             "batch_id": batch_id,
-            "video_id": request.video_id,
             "total_clips": 1,
             "current_clip_index": 0,
             "overall_status": "running",
@@ -79,7 +76,6 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
             full_t = f"{pfx}{base_t}{sfx}".strip() if (pfx or sfx) else base_t
             clips_status.append({
                 "clip_index": idx,
-                "source_index": c.get("source_index", idx),
                 "title": full_t,
                 "base_title": base_t,
                 "status": "pending",
@@ -87,7 +83,6 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
             })
         RENDER_BATCHES[batch_id] = {
             "batch_id": batch_id,
-            "video_id": request.video_id,
             "total_clips": len(request.clips),
             "current_clip_index": 0,
             "overall_status": "running",
@@ -97,10 +92,6 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
         }
 
     BATCH_REQUESTS[batch_id] = request
-    try:
-        save_render_batch(RENDER_BATCHES[batch_id])
-    except Exception as exc:
-        logger.warning(f"Failed to persist new render batch {batch_id}: {exc}")
 
     background_tasks.add_task(process_batch_rendering, batch_id, request)
     return {"batch_id": batch_id, "total_clips": 1 if is_merged else len(request.clips), "is_merged": is_merged}
@@ -225,7 +216,7 @@ def download_batch_zip(batch_id: str):
                     for c in job["clips"]:
                         c_out = c.get("output_path")
                         if not c_out and c.get("download_url"):
-                            fname = c["download_url"].split("?")[0].split("/")[-1]
+                            fname = c["download_url"].split("/")[-1]
                             c_out = str(EXPORTS_DIR / fname)
                         if c_out and os.path.exists(c_out):
                             raw_title = (c.get("title") or "").strip()

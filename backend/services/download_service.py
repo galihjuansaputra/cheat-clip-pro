@@ -9,6 +9,7 @@ import urllib.parse
 from typing import Dict, Optional
 from urllib.parse import quote
 
+from backend.utils.text import canonical_video_url
 from backend.config import (
     ACTIVE_ENCODER_ARGS,
     ACTIVE_ENCODER_NAME,
@@ -97,6 +98,7 @@ async def run_raw_clip_download_job(
     clean_title = re.sub(r'[\\/*?:"<>|]', "", (title or "clip").strip())
     if not clean_title:
         clean_title = f"clip_{int(start_time)}_{int(end_time)}"
+    v_url = v_url or canonical_video_url(video_id)
     download_title = f"{clean_title} (raw)"
     safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', video_id or "clip")
     seg_filename = f"{safe_id}_clip_{int(start_time)}_{int(end_time)}_{int(time.time())}_raw.mp4"

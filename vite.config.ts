@@ -5,16 +5,24 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: true,
-    allowedHosts: ['.smpn3kotaserang.sch.id', 'clipper.smpn3kotaserang.sch.id'],
-    cors: true,
     watch: {
-      ignored: ['**/dist_app/**', '**/dist_installer/**', '**/build/**', '**/venv/**', '**/.runtime/**', '**/temp_clips/**', '**/exports/**', '**/logs/**']
+      ignored: ['**/dist_app/**', '**/dist_installer/**', '**/build/**', '**/venv/**']
     },
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on('error', (_err, _req, res: any) => {
+            if (res && !res.headersSent && typeof res.writeHead === 'function') {
+              res.writeHead(503, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                error: 'Backend API server on port 8000 is not running. Start the backend with `npm run dev` or `python -m uvicorn backend.main:app --port 8000`.',
+                status: 503
+              }));
+            }
+          });
+        }
       },
       '/docs': {
         target: 'http://127.0.0.1:8000',
@@ -31,3 +39,4 @@ export default defineConfig({
     }
   }
 })
+

@@ -32,47 +32,11 @@ const LanguageContext = createContext<LanguageContextType | undefined>(undefined
 
 export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [language, setLanguageState] = useState<Language>(getInitialLanguage);
-  const [hydrated, setHydrated] = useState(false);
 
   const setLanguage = (newLang: Language) => {
     setLanguageState(newLang);
     localStorage.setItem(STORAGE_KEY, newLang);
   };
-
-  // Restore the language stored on the server so switching browsers keeps the
-  // same interface language on this installation.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const response = await fetch('/api/app-settings');
-        if (!response.ok) return;
-        const payload = await response.json().catch(() => null);
-        const saved = payload?.settings?.language;
-        if (!cancelled && (saved === 'en' || saved === 'id')) {
-          setLanguageState(saved);
-          try { localStorage.setItem(STORAGE_KEY, saved); } catch { /* ignore */ }
-        }
-      } catch {
-        // Keep the browser-local language when the backend is unavailable.
-      } finally {
-        if (!cancelled) setHydrated(true);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    if (!hydrated) return;
-    const timer = window.setTimeout(() => {
-      fetch('/api/app-settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings: { language } }),
-      }).catch(() => undefined);
-    }, 500);
-    return () => window.clearTimeout(timer);
-  }, [language, hydrated]);
 
   // Sync state if another tab updates the preference
   useEffect(() => {
