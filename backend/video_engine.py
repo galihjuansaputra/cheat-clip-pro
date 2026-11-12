@@ -16,8 +16,6 @@ import threading
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Union, Callable
 from PIL import Image, ImageDraw, ImageFont
-from backend.utils.text import is_twitch_url, extract_twitch_info, get_twitch_canonical_url, canonical_video_url
-
 logger = logging.getLogger("cheat-clip-pro.video-engine")
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -26,6 +24,7 @@ EXPORTS_DIR = BASE_DIR / "exports"
 FONTS_DIR = BASE_DIR / "fonts"
 COOKIES_PATH = BASE_DIR / "cookies.txt"
 ROOT_COOKIES_PATH = BASE_DIR.parent / "cookies.txt"
+
 
 
 def normalize_to_netscape(raw_content: str) -> str:
@@ -914,6 +913,7 @@ def download_clip_segment(
 
     # Guard: if it was a Google Drive or Upload request, never send to YouTube
     # Exception: if it was a YouTube audio cache file (e.g. /api/video/yt_audio_iLijjSEI_40.mp4), resolve back to original YouTube video
+    from backend.utils.text import is_twitch_url, extract_twitch_info, get_twitch_canonical_url
     yt_audio_match = re.search(r'yt_audio_([a-zA-Z0-9_-]{11})', clean_raw)
     tw_audio_match = re.search(r'twitch_audio_(twitch_\d+|twitch_clip_[a-zA-Z0-9_-]+|\d+|[a-zA-Z0-9_-]+)', clean_raw)
     if yt_audio_match:
@@ -1196,6 +1196,7 @@ def download_full_raw_video(
             progress_callback({"percent": 100.0, "downloaded": "Complete", "total": "Complete", "speed": "", "eta": ""})
         return str(output_path)
 
+    from backend.utils.text import is_twitch_url, extract_twitch_info, get_twitch_canonical_url
     clean_url = video_url.strip()
     if is_twitch_url(clean_url):
         tw_info = extract_twitch_info(clean_url)
@@ -1358,7 +1359,6 @@ def transcribe_clip_words(
                 "fp16": False,
                 "verbose": False,
                 "condition_on_previous_text": False,  # Prevents repetition loops and hallucinations across silence
-                "hallucination_silence_threshold": 1.5,
                 "initial_prompt": initial_prompt,
             }
             if target_language in ("id", "en"):
@@ -1440,7 +1440,7 @@ def transcribe_clip_words(
                 l_end = l_start + max(1.8, words_cnt * 0.38)
 
             if clip_end_time > clip_start_time:
-                if l_end < clip_start_time - 0.2 or l_start > clip_end_time + 0.2:
+                if l_end < clip_start_time - 0.5 or l_start > clip_end_time + 0.5:
                     continue
                 rel_start = max(0.0, l_start - clip_start_time)
                 rel_end = max(rel_start + 0.15, l_end - clip_start_time)
@@ -2287,6 +2287,12 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 if nxt_s < split_pt:
                     chunk_bounds[i + 1] = (split_pt, max(split_pt + 0.28, nxt_e))
 
+        # Anchor opening chunk to 0.00s if speech starts near the beginning (<= 3.5s)
+        # This guarantees captions/subtitles are immediately visible from frame 0 rather than delayed
+        if chunk_bounds and chunk_bounds[0][0] <= 3.5:
+            c_s, c_e = chunk_bounds[0]
+            chunk_bounds[0] = (0.0, max(c_e, 0.40))
+
         # Step D: Partition each chunk into strictly contiguous active-word time slices
         for chunk_idx, chunk in enumerate(chunks):
             c_start, c_end = chunk_bounds[chunk_idx]
@@ -2815,6 +2821,8 @@ def build_ffmpeg_filtergraph(
     Canvas is always 1080x1920 (9:16).
     """
     filters = []
+    # Guarantee video presentation timestamp strictly begins at 0.000 to eliminate initial subtitle offset / delay
+    filters.append("[0:v]setpts=PTS-STARTPTS[v_pts]")
 
     face_cx = float(face_box.get("cx", face_center_ratio)) if face_box else face_center_ratio
     face_cy = float(face_box.get("cy", 0.78 if streamer_preset in ["split_top_cam", "pip_corner"] else 0.35)) if face_box else 0.35
@@ -2828,14 +2836,14 @@ def build_ffmpeg_filtergraph(
             cam_x = f"max(0, min(iw-ow, iw*{face_cx:.3f}-ow/2))"
             cam_y = f"max(0, min(ih-oh, ih*{face_cy:.3f}-oh/2))"
             filters.append(
-                f"[0:v]split=2[cam_raw][game_raw];"
+                f"[v_pts]split=2[cam_raw][game_raw];"
                 f"[cam_raw]crop='{cam_w}':'{cam_h}':'{cam_x}':'{cam_y}',scale=1080:608[cam_box];"
                 f"[game_raw]crop='min(iw,ih*16/9)':'min(ih,iw*9/16)':'(iw-min(iw,ih*16/9))/2':'(ih-min(ih,iw*9/16))/2',scale=1080:608[game_box];"
                 f"[cam_box][game_box]vstack=inputs=2[both_split]"
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[v_pts]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=0:352[layout_base]"
                 )
             else:
@@ -2848,14 +2856,14 @@ def build_ffmpeg_filtergraph(
             cam_x = f"max(0, min(iw-ow, iw*{face_cx:.3f}-ow/2))"
             cam_y = f"max(0, min(ih-oh, ih*{face_cy:.3f}-oh/2))"
             filters.append(
-                f"[0:v]split=2[cam_raw][game_raw];"
+                f"[v_pts]split=2[cam_raw][game_raw];"
                 f"[cam_raw]crop='{cam_w}':'{cam_h}':'{cam_x}':'{cam_y}',scale=960:960[cam_box];"
                 f"[game_raw]crop='min(iw,ih)':'min(iw,ih)':'(iw-min(iw,ih))/2':'(ih-min(ih,iw))/2',scale=960:960[game_box];"
                 f"[cam_box][game_box]vstack=inputs=2[both_split]"
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[v_pts]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=60:0[layout_base]"
                 )
             else:
@@ -2868,14 +2876,14 @@ def build_ffmpeg_filtergraph(
             cam_x = f"max(0, min(iw-ow, iw*{face_cx:.3f}-ow/2))"
             cam_y = f"max(0, min(ih-oh, ih*{face_cy:.3f}-oh/2))"
             filters.append(
-                f"[0:v]split=2[cam_raw][game_raw];"
+                f"[v_pts]split=2[cam_raw][game_raw];"
                 f"[cam_raw]crop='{cam_w}':'{cam_h}':'{cam_x}':'{cam_y}',scale=1080:810[cam_box];"
                 f"[game_raw]crop='min(iw,ih*4/3)':'min(ih,iw*3/4)':'(iw-min(iw,ih*4/3))/2':'(ih-min(ih,iw*3/4))/2',scale=1080:810[game_box];"
                 f"[cam_box][game_box]vstack=inputs=2[both_split]"
             )
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
+                    f"[v_pts]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[bg_blurred][both_split]overlay=0:150[layout_base]"
                 )
             else:
@@ -2894,7 +2902,7 @@ def build_ffmpeg_filtergraph(
             game_y = "(ih-oh)/2"
 
             filters.append(
-                f"[0:v]split=2[cam_raw][game_raw];"
+                f"[v_pts]split=2[cam_raw][game_raw];"
                 f"[cam_raw]crop='{cam_w}':'{cam_h}':'{cam_x}':'{cam_y}',scale=1080:810[cam_box];"
                 f"[game_raw]crop='{game_w}':'{game_h}':'{game_x}':'{game_y}',scale=1080:1110[game_box];"
                 f"[cam_box][game_box]vstack=inputs=2[layout_base]"
@@ -2915,7 +2923,7 @@ def build_ffmpeg_filtergraph(
             pip_x, pip_y = 736, 444
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
+                    f"[v_pts]split=3[bg_raw][main_raw][pip_raw];"
                     f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[main_raw]{crop_main}[fg_square];"
                     f"[bg_blurred][fg_square]overlay=0:420[main_base];"
@@ -2924,7 +2932,7 @@ def build_ffmpeg_filtergraph(
                 )
             else:
                 filters.append(
-                    f"[0:v]split=2[main_raw][pip_raw];"
+                    f"[v_pts]split=2[main_raw][pip_raw];"
                     f"[main_raw]{crop_main},pad=1080:1920:0:420:black[main_base];"
                     f"{pip_crop}"
                     f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
@@ -2935,7 +2943,7 @@ def build_ffmpeg_filtergraph(
             pip_x, pip_y = 736, 579
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
+                    f"[v_pts]split=3[bg_raw][main_raw][pip_raw];"
                     f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[main_raw]{crop_main}[fg_43];"
                     f"[bg_blurred][fg_43]overlay=0:555[main_base];"
@@ -2944,7 +2952,7 @@ def build_ffmpeg_filtergraph(
                 )
             else:
                 filters.append(
-                    f"[0:v]split=2[main_raw][pip_raw];"
+                    f"[v_pts]split=2[main_raw][pip_raw];"
                     f"[main_raw]{crop_main},pad=1080:1920:0:555:black[main_base];"
                     f"{pip_crop}"
                     f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
@@ -2954,7 +2962,7 @@ def build_ffmpeg_filtergraph(
             crop_main = "crop='min(iw,ih*16/9)':'min(ih,iw*9/16)':'(iw-min(iw,ih*16/9))/2':'(ih-min(ih,iw*9/16))/2',scale=1920:1080"
             pip_x, pip_y = 1550, 780
             filters.append(
-                f"[0:v]split=2[main_raw][pip_raw];"
+                f"[v_pts]split=2[main_raw][pip_raw];"
                 f"[main_raw]{crop_main}[main_base];"
                 f"{pip_crop}"
                 f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
@@ -2965,7 +2973,7 @@ def build_ffmpeg_filtergraph(
             pip_x, pip_y = 736, 676
             if background_style == "blurred":
                 filters.append(
-                    f"[0:v]split=3[bg_raw][main_raw][pip_raw];"
+                    f"[v_pts]split=3[bg_raw][main_raw][pip_raw];"
                     f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                     f"[main_raw]{crop_main}[fg_169];"
                     f"[bg_blurred][fg_169]overlay=0:656[main_base];"
@@ -2974,7 +2982,7 @@ def build_ffmpeg_filtergraph(
                 )
             else:
                 filters.append(
-                    f"[0:v]split=2[main_raw][pip_raw];"
+                    f"[v_pts]split=2[main_raw][pip_raw];"
                     f"[main_raw]{crop_main},pad=1080:1920:0:656:black[main_base];"
                     f"{pip_crop}"
                     f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
@@ -2991,7 +2999,7 @@ def build_ffmpeg_filtergraph(
                 crop_ratio_safe = max(0.0, min(1.0, (safe_cx - 0.158) / 0.684))
             pip_x, pip_y = 736, 120
             filters.append(
-                f"[0:v]split=2[main_raw][pip_raw];"
+                f"[v_pts]split=2[main_raw][pip_raw];"
                 f"[main_raw]crop=ih*9/16:ih:(iw-ih*9/16)*{crop_ratio_safe:.3f}:0,scale=1080:1920[main_base];"
                 f"{pip_crop}"
                 f"[main_base][pip_box]overlay=x={pip_x}:y={pip_y}[layout_base]"
@@ -3010,7 +3018,7 @@ def build_ffmpeg_filtergraph(
             safe_cx = max(0.22, min(0.78, safe_cx))
             crop_ratio_safe = max(0.0, min(1.0, (safe_cx - 0.158) / 0.684))
         filters.append(
-            f"[0:v]crop=ih*9/16:ih:(iw-ih*9/16)*{crop_ratio_safe:.3f}:0,scale=1080:1920[layout_base]"
+            f"[v_pts]crop=ih*9/16:ih:(iw-ih*9/16)*{crop_ratio_safe:.3f}:0,scale=1080:1920[layout_base]"
         )
         current_v = "[layout_base]"
 
@@ -3023,14 +3031,14 @@ def build_ffmpeg_filtergraph(
         crop_11 = f"crop='min(iw,ih)':'min(iw,ih)':'max(0,min(iw-ih,iw*{safe_cx:.3f}-ih/2))':'(ih-min(iw,ih))/2',scale=1080:1080"
         if background_style == "blurred":
             filters.append(
-                f"[0:v]split=2[bg_raw][fg_raw];"
+                f"[v_pts]split=2[bg_raw][fg_raw];"
                 f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                 f"[fg_raw]{crop_11}[fg_square];"
                 f"[bg_blurred][fg_square]overlay=0:420[layout_base]"
             )
         else:
             filters.append(
-                f"[0:v]{crop_11},pad=1080:1920:0:420:black[layout_base]"
+                f"[v_pts]{crop_11},pad=1080:1920:0:420:black[layout_base]"
             )
         current_v = "[layout_base]"
 
@@ -3043,14 +3051,14 @@ def build_ffmpeg_filtergraph(
         crop_43 = f"crop='min(iw,ih*4/3)':'min(ih,iw*3/4)':'max(0,min(iw-ih*4/3,iw*{safe_cx:.3f}-(ih*4/3)/2))':'(ih-min(ih,iw*3/4))/2',scale=1080:810"
         if background_style == "blurred":
             filters.append(
-                f"[0:v]split=2[bg_raw][fg_raw];"
+                f"[v_pts]split=2[bg_raw][fg_raw];"
                 f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                 f"[fg_raw]{crop_43}[fg_43];"
                 f"[bg_blurred][fg_43]overlay=0:555[layout_base]"
             )
         else:
             filters.append(
-                f"[0:v]{crop_43},pad=1080:1920:0:555:black[layout_base]"
+                f"[v_pts]{crop_43},pad=1080:1920:0:555:black[layout_base]"
             )
         current_v = "[layout_base]"
 
@@ -3062,7 +3070,7 @@ def build_ffmpeg_filtergraph(
         safe_cx = max(0.15, min(0.85, safe_cx))
         crop_169_land = f"crop='min(iw,ih*16/9)':'min(ih,iw*9/16)':'max(0,min(iw-ih*16/9,iw*{safe_cx:.3f}-(ih*16/9)/2))':'(ih-min(ih,iw*9/16))/2',scale=1920:1080"
         filters.append(
-            f"[0:v]{crop_169_land}[layout_base]"
+            f"[v_pts]{crop_169_land}[layout_base]"
         )
         current_v = "[layout_base]"
 
@@ -3075,14 +3083,14 @@ def build_ffmpeg_filtergraph(
         crop_169 = f"crop='min(iw,ih*16/9)':'min(ih,iw*9/16)':'max(0,min(iw-ih*16/9,iw*{safe_cx:.3f}-(ih*16/9)/2))':'(ih-min(ih,iw*9/16))/2',scale=1080:608"
         if background_style == "blurred":
             filters.append(
-                f"[0:v]split=2[bg_raw][fg_raw];"
+                f"[v_pts]split=2[bg_raw][fg_raw];"
                 f"[bg_raw]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=12:2,scale=1080:1920,eq=saturation=1.2:contrast=1.05[bg_blurred];"
                 f"[fg_raw]{crop_169}[fg_169];"
                 f"[bg_blurred][fg_169]overlay=0:656[layout_base]"
             )
         else:
             filters.append(
-                f"[0:v]{crop_169},pad=1080:1920:0:656:black[layout_base]"
+                f"[v_pts]{crop_169},pad=1080:1920:0:656:black[layout_base]"
             )
         current_v = "[layout_base]"
 
@@ -3328,10 +3336,11 @@ def render_clip_to_mp4(
     if has_orig_audio:
         orig_vol = max(0.0, min(2.0, float(original_audio_volume)))
         if abs(orig_vol - 1.0) > 0.01:
-            filter_chains.append(f"[0:a:0]volume={orig_vol:.3f}[v_orig_boosted]")
+            filter_chains.append(f"[0:a:0]asetpts=PTS-STARTPTS,volume={orig_vol:.3f}[v_orig_boosted]")
             audio_inputs_to_mix.append("[v_orig_boosted]")
         else:
-            audio_inputs_to_mix.append("[0:a:0]")
+            filter_chains.append("[0:a:0]asetpts=PTS-STARTPTS[v_orig_pts]")
+            audio_inputs_to_mix.append("[v_orig_pts]")
 
     dur = max(1.0, float(clip_duration))
 
@@ -3557,6 +3566,7 @@ def extract_clip_frame(video_url: str, video_id: str, timestamp: float = 0.0, co
 
     # 2. Extract a tiny 1-second slice of format 18 (fast 360p mp4) using yt-dlp + ffmpeg
     try:
+        from backend.utils.text import is_twitch_url, extract_twitch_info, get_twitch_canonical_url
         if video_url and is_twitch_url(video_url):
             tw_info = extract_twitch_info(video_url)
             clean_url = get_twitch_canonical_url(tw_info) if tw_info else video_url.strip()
