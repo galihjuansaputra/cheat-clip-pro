@@ -29,3 +29,7 @@
 
 /* Modals & Precision Tools */
 @import "./styles/trimmer-modal.css";
+
+@import "./styles/youtube-upload-page.css";
+@import "./styles/youtube-upload-queue.css";
+@import "./styles/modern-ui.css";

@@ -4,14 +4,19 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "postinstall": "node scripts/copy-ffmpeg-core.js",
     "dev": "concurrently --prefix \"[{name}]\" --names \"frontend,backend\" -c \"cyan,magenta\" \"npm run dev-frontend\" \"npm run dev-backend\"",
     "dev-frontend": "vite",
     "dev-backend": "node scripts/start-backend.js",
+    "start-background": "node scripts/start-background.js",
+    "start-hidden": "wscript.exe scripts/start-hidden.vbs",
+    "stop-background": "node scripts/stop-background.js",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@ffmpeg/core": "^0.12.6",
     "@ffmpeg/ffmpeg": "^0.12.15",
     "@ffmpeg/util": "^0.12.2",
     "lucide-react": "^1.61.0",

@@ -1,10 +1,10 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
 import { HeatmapTimeline } from './components/HeatmapTimeline';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
-import { ClipStudioSection } from './components/ClipStudioSection';
+const ClipStudioSection = lazy(() => import('./components/ClipStudioSection').then(module => ({ default: module.ClipStudioSection })));
 import { CookiesModal } from './components/CookiesModal';
 import { CookieWarningModal } from './components/CookieWarningModal';
-import { ClipTrimmerModal } from './components/ClipTrimmerModal';
+const ClipTrimmerModal = lazy(() => import('./components/ClipTrimmerModal').then(module => ({ default: module.ClipTrimmerModal })));
 import { AppUpdateModal } from './components/AppUpdateModal';
 import { resilientFetch } from './utils/api';
 import { getStoredCookies, hasStoredCookies } from './utils/cookieUtils';
@@ -15,6 +15,10 @@ import { isMobileDevice, requestWakeLock, releaseWakeLock } from './utils/device
 import { LayoutMetricsSync } from './utils/layoutMetricsSync';
 import { useLanguage } from './locales';
 import { HackerApiKeyInput } from './components/HackerApiKeyInput';
+import { YouTubeUploadPage, type YouTubeUploadMetadata } from './components/YouTubeUploadPage';
+import type { YouTubeUploadItem } from './components/YouTubeUploadQueue';
+import { YouTubeUploadStatusBar } from './components/YouTubeUploadStatusBar';
+import { buildClipsMarkdown } from './utils/clipMarkdown';
 import {
   Play,
   Download,
@@ -41,10 +45,9 @@ import {
   ChevronRight,
   FileVideo,
   Film,
-  Scissors,
-  Sparkles
+  Scissors
 } from 'lucide-react';
-import type { AnalyzeResponse, ViralClip, RenderSettings, BatchRenderProgress } from './types';
+import type { AnalyzeResponse, ViralClip, RenderSettings, BatchRenderProgress, RenderClipStatus } from './types';
 
 // Declare YT global variables for TypeScript
 declare global {
@@ -58,8 +61,7 @@ export default function App() {
   const { t } = useLanguage();
   const [url, setUrl] = useState('');
   const [gdriveUrl, setGdriveUrl] = useState('');
-  const [twitchUrl, setTwitchUrl] = useState('');
-  const [sourceMode, setSourceMode] = useState<'youtube' | 'twitch' | 'gdrive' | 'upload'>('youtube');
+  const [sourceMode, setSourceMode] = useState<'youtube' | 'gdrive' | 'upload'>('youtube');
   const [uploadedVideoFile, setUploadedVideoFile] = useState<File | null>(null);
   const [uploadedVideoInfo, setUploadedVideoInfo] = useState<{
     videoId: string;
@@ -103,6 +105,10 @@ export default function App() {
     return false;
   });
   const [hasCookies, setHasCookies] = useState<boolean>(() => hasStoredCookies());
+  const [youtubeStatus, setYoutubeStatus] = useState<{ connected: boolean; configured: boolean; channel_title?: string }>({ connected: false, configured: false });
+  const [youtubeUploads, setYoutubeUploads] = useState<YouTubeUploadItem[]>([]);
+  const youtubeRetryRef = useRef<Record<string, () => void>>({});
+  const [youtubePlaylists, setYoutubePlaylists] = useState<Array<{ id: string; title: string }>>([]);
   const [cookieWarningState, setCookieWarningState] = useState<{
     isOpen: boolean;
     actionType: 'render' | 'download';
@@ -167,9 +173,88 @@ export default function App() {
     if (saved === 'id' || saved === 'en') return saved;
     return 'en';
   });
-  const [workflowTab, setWorkflowTab] = useState<'source' | 'clips' | 'clipper'>('source');
+  const [workflowTab, setWorkflowTab] = useState<'source' | 'clips' | 'clipper' | 'upload'>('source');
   const [showLanguageConfirmModal, setShowLanguageConfirmModal] = useState<boolean>(false);
   const [skipLanguageConfirm, setSkipLanguageConfirm] = useState<boolean>(false);
+  const [settingsHydrated, setSettingsHydrated] = useState(false);
+
+  // Settings live in the server-side app store so they survive cache clears
+  // and are shared between browsers on the same installation.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch('/api/app-settings');
+        if (!response.ok) return;
+        const payload = await response.json().catch(() => null);
+        const server = payload?.settings;
+        if (!server || typeof server !== 'object' || cancelled) return;
+
+        const applyString = (value: unknown, setter: (value: string) => void, localKey: string) => {
+          if (typeof value !== 'string') return;
+          setter(value);
+          try { localStorage.setItem(localKey, value); } catch { /* ignore */ }
+        };
+        applyString(server.api_provider, value => setApiProvider(value === 'openrouter' ? 'openrouter' : 'gemini'), 'cheat_clip_api_provider');
+        applyString(server.gemini_api_key, setApiKey, 'cheat_clip_gemini_api_key');
+        applyString(server.openrouter_key, setOpenRouterKey, 'cheat_clip_openrouter_key');
+        applyString(server.openrouter_model, setOpenRouterModel, 'cheat_clip_openrouter_model');
+        applyString(server.selected_model, setSelectedModel, 'cheat_clip_selected_model');
+        applyString(server.duration_pref, value => {
+          if (value === '15s' || value === '30s' || value === '60s' || value === 'auto') setDurationPref(value);
+        }, 'cheat_clip_duration_pref');
+        applyString(server.clip_count_mode, value => {
+          if (value === 'auto' || value === 'custom') setClipCountMode(value);
+        }, 'cheat_clip_clip_count_mode');
+        applyString(server.transcript_language, value => {
+          if (value === 'id' || value === 'en') setTranscriptLanguage(value);
+        }, 'cheat_clip_transcript_language');
+        if (typeof server.target_clip_count === 'number' && Number.isFinite(server.target_clip_count)) {
+          setTargetClipCount(server.target_clip_count);
+          try { localStorage.setItem('cheat_clip_target_clip_count', String(server.target_clip_count)); } catch { /* ignore */ }
+        }
+      } catch {
+        // Keep using the local values when the backend is unavailable.
+      } finally {
+        if (!cancelled) setSettingsHydrated(true);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!settingsHydrated) return;
+    const timer = window.setTimeout(() => {
+      const settings = {
+        api_provider: apiProvider,
+        gemini_api_key: apiKey,
+        openrouter_key: openRouterKey,
+        openrouter_model: openRouterModel,
+        selected_model: selectedModel,
+        duration_pref: durationPref,
+        clip_count_mode: clipCountMode,
+        transcript_language: transcriptLanguage,
+        target_clip_count: targetClipCount,
+      };
+      fetch('/api/app-settings', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ settings }),
+      }).catch(() => undefined);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [
+    settingsHydrated,
+    apiProvider,
+    apiKey,
+    openRouterKey,
+    openRouterModel,
+    selectedModel,
+    durationPref,
+    clipCountMode,
+    transcriptLanguage,
+    targetClipCount,
+  ]);
 
   const parseTimeToSeconds = (val: string): number | null => {
     const clean = val.trim();
@@ -252,6 +337,62 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!youtubeStatus.configured) return;
+    if (youtubeStatus.connected) {
+      fetch('/api/youtube/playlists').then(res => res.ok ? res.json() : null).then(data => {
+        if (data?.playlists) setYoutubePlaylists(data.playlists);
+      }).catch(() => undefined);
+    }
+    fetch('/api/youtube/upload-history').then(res => res.ok ? res.json() : null).then(data => {
+      if (data?.jobs) setYoutubeUploads(data.jobs.map((job: any) => ({ id: job.job_id, title: job.title || job.video_id || 'YouTube clip', status: job.status, progress: job.progress || 0, url: job.url, error: job.error, note: job.note, warning: job.warning })));
+    }).catch(() => undefined);
+  }, [youtubeStatus.configured, youtubeStatus.connected]);
+
+  // Keep the queue in sync with server-side upload jobs, including jobs that
+  // were started in another browser or survived a page reload.
+  useEffect(() => {
+    const hasActive = youtubeUploads.some(item => item.status === 'queued' || item.status === 'uploading' || item.status === 'processing');
+    if (!hasActive) return;
+    const timer = window.setInterval(() => {
+      fetch('/api/youtube/upload-history').then(res => res.ok ? res.json() : null).then(data => {
+        if (data?.jobs) setYoutubeUploads(prev => {
+          const serverItems = data.jobs.map((job: any) => {
+            const existing = prev.find(item => item.id === job.job_id);
+            return {
+              id: job.job_id,
+              title: job.title || job.video_id || 'YouTube clip',
+              status: job.status,
+              progress: job.progress || 0,
+              url: job.url,
+              error: job.error,
+              note: job.note,
+              warning: job.warning,
+              retry: existing?.retry,
+            };
+          });
+          // A job that is still being prepared in this browser has not reached
+          // the server yet, so keep its local queue entry visible.
+          const localItems = prev.filter(item => item.id.startsWith('local_'));
+          return [...localItems, ...serverItems];
+        });
+      }).catch(() => undefined);
+    }, 4000);
+    return () => window.clearInterval(timer);
+  }, [youtubeUploads]);
+
+  useEffect(() => {
+    fetch('/api/youtube/status')
+      .then(res => res.ok ? res.json() : null)
+      .then(data => data && setYoutubeStatus(data))
+      .catch(() => undefined);
+  }, []);
+
+  const disconnectYouTube = async () => {
+    await fetch('/api/youtube/disconnect', { method: 'POST' }).catch(() => undefined);
+    setYoutubeStatus({ connected: false, configured: youtubeStatus.configured });
+  };
+
   // Query server update permissions (disabled on remote VPS/Docker for security)
   useEffect(() => {
     fetch('/api/system/version')
@@ -312,6 +453,9 @@ export default function App() {
   const [batchProgress, setBatchProgress] = useState<BatchRenderProgress | null>(null);
   const [isLaunchingRender, setIsLaunchingRender] = useState(false);
   const batchEventSourceRef = useRef<EventSource | null>(null);
+  // Keep the settings of the last browser-side render so the Retry action can
+  // re-run it without asking the server (client batches do not exist there).
+  const lastClientRenderSettingsRef = useRef<RenderSettings | null>(null);
 
   const listenToBatchProgress = useCallback((batchId: string) => {
     if (batchEventSourceRef.current) {
@@ -397,11 +541,16 @@ export default function App() {
     return result.clips.filter(c => !!markedClips[`${c.start_time}_${c.end_time}`]);
   }, [result?.clips, markedClips]);
 
+  const completedRenderClips = useMemo(
+    () => (batchProgress?.clips || []).filter(clip => clip.status === 'completed' && Boolean(clip.download_url)),
+    [batchProgress?.clips],
+  );
+
   const isCurrentVideoYouTube = useCallback(() => {
-    if (sourceMode === 'upload' || sourceMode === 'gdrive' || sourceMode === 'twitch') return false;
-    if (result?.source_type === 'upload' || result?.source_type === 'gdrive' || result?.source_type === 'twitch') return false;
-    if (result?.video_id?.startsWith('upload_') || result?.video_id?.startsWith('gdrive_') || result?.video_id?.startsWith('twitch_')) return false;
-    if (result?.video_url?.includes('/api/video/') || result?.video_url?.includes('twitch.tv')) return false;
+    if (sourceMode === 'upload' || sourceMode === 'gdrive') return false;
+    if (result?.source_type === 'upload' || result?.source_type === 'gdrive') return false;
+    if (result?.video_id?.startsWith('upload_') || result?.video_id?.startsWith('gdrive_')) return false;
+    if (result?.video_url?.includes('/api/video/')) return false;
     return true;
   }, [sourceMode, result?.source_type, result?.video_id, result?.video_url]);
 
@@ -428,33 +577,49 @@ export default function App() {
     const isClientMode = !isMobileDevice() && (settings.hardwareAccel === 'browser_wasm' || settings.renderEngine === 'client' || (sourceMode === 'upload' && Boolean(uploadedVideoFile)));
 
     if (isClientMode) {
-      try {
-        const batchId = `client_${Date.now()}`;
-        const selectedClips = settings.selectedClips;
+      lastClientRenderSettingsRef.current = settings;
+      const batchId = `client_${Date.now()}`;
+      const selectedClips = settings.selectedClips;
+      const initialClips: RenderClipStatus[] = selectedClips.map((c, i) => {
+        const base = (c.title_suggestion || c.title || `Clip #${i + 1}`).trim();
+        const pfx = settings.titlePrefix || '';
+        const sfx = settings.titleSuffix || '';
+        const fullTitle = (pfx || sfx) ? `${pfx}${base}${sfx}`.trim() : base;
+        return {
+          clip_index: i,
+          source_index: c.source_index ?? i,
+          title: fullTitle,
+          base_title: base,
+          status: i === 0 ? 'rendering' : 'pending',
+          progress_percent: 0,
+        };
+      });
+      const clientClips: RenderClipStatus[] = initialClips.map(c => ({ ...c }));
+      let currentIndex = 0;
 
+      const persistClientBatch = (batch: BatchRenderProgress) => {
+        void fetch('/api/render-history', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(batch),
+        }).catch(() => undefined);
+      };
+
+      try {
         setBatchProgress({
           batch_id: batchId,
+          video_id: result.video_id,
           total_clips: selectedClips.length,
           current_clip_index: 0,
           overall_status: 'running',
-          clips: selectedClips.map((c, i) => {
-            const base = (c.title_suggestion || c.title || `Clip #${i + 1}`).trim();
-            const pfx = settings.titlePrefix || '';
-            const sfx = settings.titleSuffix || '';
-            const fullTitle = (pfx || sfx) ? `${pfx}${base}${sfx}`.trim() : base;
-            return {
-              clip_index: i,
-              title: fullTitle,
-              base_title: base,
-              status: i === 0 ? 'rendering' : 'pending',
-              progress_percent: 0,
-            };
-          })
+          clips: initialClips,
         });
 
         setIsLaunchingRender(false);
 
         for (let i = 0; i < selectedClips.length; i++) {
+          currentIndex = i;
+          clientClips[i] = { ...clientClips[i], status: 'downloading', progress_percent: 5 };
           const clip = selectedClips[i];
           const base = (clip.title_suggestion || clip.title || `Clip #${i + 1}`).trim();
           const pfx = (settings.fileNamePrefix || '').replace(/[\\/*?:"<>|]/g, '');
@@ -610,32 +775,84 @@ export default function App() {
           const downloadBlobUrl = URL.createObjectURL(blob);
           triggerBrowserDownload(blob, `${filename}.mp4`);
 
+          // Step 4: Persist the rendered file on the server so the render
+          // history and download links survive reloads and browser switches.
+          const titlePfx = settings.titlePrefix || '';
+          const titleSfx = settings.titleSuffix || '';
+          const fullTitle = (titlePfx || titleSfx) ? `${titlePfx}${base}${titleSfx}`.trim() : base;
+          let durableDownloadUrl = downloadBlobUrl;
+          try {
+            const form = new FormData();
+            form.append('video', blob, `${filename}.mp4`);
+            form.append('batch_id', batchId);
+            form.append('video_id', result.video_id || '');
+            form.append('clip_index', String(i));
+            form.append('source_index', String(clip.source_index ?? i));
+            form.append('title', fullTitle);
+            form.append('base_title', base);
+            const saveResponse = await fetch('/api/render-history/client-clip', { method: 'POST', body: form });
+            if (saveResponse.ok) {
+              const saved = await saveResponse.json().catch(() => null);
+              if (saved?.download_url) durableDownloadUrl = saved.download_url;
+            }
+          } catch {
+            // Keep the blob URL if the local save endpoint is unavailable.
+          }
+
+          clientClips[i] = {
+            ...clientClips[i],
+            title: fullTitle,
+            status: 'completed',
+            progress_percent: 100,
+            download_url: durableDownloadUrl,
+          };
+
           setBatchProgress(prev => {
             if (!prev) return prev;
             return {
               ...prev,
               clips: prev.clips.map((c, idx) => idx === i ? {
                 ...c,
+                title: fullTitle,
                 status: 'completed',
                 progress_percent: 100,
-                download_url: downloadBlobUrl
+                download_url: durableDownloadUrl
               } : c)
             };
           });
         }
 
-        setBatchProgress(prev => prev ? { ...prev, overall_status: 'completed' } : null);
+        const completedBatch: BatchRenderProgress = {
+          batch_id: batchId,
+          video_id: result.video_id,
+          total_clips: selectedClips.length,
+          current_clip_index: Math.max(0, selectedClips.length - 1),
+          overall_status: clientClips.every(c => c.status === 'completed') ? 'completed' : 'error',
+          clips: clientClips,
+        };
+        setBatchProgress(completedBatch);
+        persistClientBatch(completedBatch);
         return;
       } catch (clientErr: any) {
         console.error('Client rendering failed:', clientErr);
-        setBatchProgress(prev => {
-          if (!prev) return prev;
-          return {
-            ...prev,
-            overall_status: 'error',
-            error_message: clientErr.message || 'Client-side rendering error'
+        if (clientClips[currentIndex]) {
+          clientClips[currentIndex] = {
+            ...clientClips[currentIndex],
+            status: 'error',
+            error_message: clientErr.message || 'Client-side rendering error',
           };
-        });
+        }
+        const failedBatch: BatchRenderProgress = {
+          batch_id: batchId,
+          video_id: result.video_id,
+          total_clips: selectedClips.length,
+          current_clip_index: currentIndex,
+          overall_status: 'error',
+          error_message: clientErr.message || 'Client-side rendering error',
+          clips: clientClips,
+        };
+        setBatchProgress(failedBatch);
+        persistClientBatch(failedBatch);
         return;
       } finally {
         setIsLaunchingRender(false);
@@ -680,10 +897,7 @@ export default function App() {
             text_case: settings.textCase,
             title_text_case: settings.titleTextCase || settings.textCase,
             title_y_percent: settings.titleYPercent,
-            title_x_percent: settings.titleXPercent !== undefined ? settings.titleXPercent : 50.0,
-            crop_x_percent: settings.cropXPercent !== undefined ? settings.cropXPercent : null,
             subtitle_y_percent: settings.subtitleYPercent,
-            subtitle_offset_seconds: settings.subtitleOffsetSeconds !== undefined ? settings.subtitleOffsetSeconds : 0.0,
             subtitle_position_mode: settings.subtitlePositionMode || 'bottom',
             subtitle_center_y_percent: settings.subtitleCenterYPercent !== undefined ? settings.subtitleCenterYPercent : 50.0,
             // Background Music
@@ -762,6 +976,25 @@ export default function App() {
   const handleRetryBatchClip = async (clipIndex?: number) => {
     if (!batchProgress?.batch_id) return;
     const batchId = batchProgress.batch_id;
+
+    // Client-side batches only exist in the browser, so retry them locally.
+    if (batchId.startsWith('client_')) {
+      const lastSettings = lastClientRenderSettingsRef.current;
+      if (!lastSettings) {
+        alert('Pengaturan render sebelumnya tidak tersedia. Klik tombol Render lagi untuk mengulang.');
+        return;
+      }
+      const retryIndexes = batchProgress.clips
+        .filter(clip => clipIndex === undefined ? clip.status === 'error' : clip.clip_index === clipIndex)
+        .map(clip => clip.clip_index);
+      const clipsToRender = retryIndexes.length
+        ? retryIndexes.map(index => lastSettings.selectedClips[index]).filter(Boolean)
+        : lastSettings.selectedClips;
+      if (!clipsToRender.length) return;
+      await handleStartBatchRender({ ...lastSettings, selectedClips: clipsToRender }, true);
+      return;
+    }
+
     try {
       // Optimistically update the UI to show 'pending' / retrying state for selected clip(s)
       setBatchProgress(prev => {
@@ -802,8 +1035,122 @@ export default function App() {
     }
   };
 
+  const handleUploadToYouTube = async (
+    clip: RenderClipStatus,
+    sourceClip?: ViralClip,
+    override?: YouTubeUploadMetadata,
+  ) => {
+    if (!clip.download_url) {
+      setToastMessage('File hasil render tidak tersedia. Render ulang klip ini dulu.');
+      return;
+    }
+    const uploadTitle = (override?.title || sourceClip?.title_suggestion || clip.title || 'Cheat Clip').slice(0, 100);
+    const localUploadId = `local_${Date.now()}`;
+    // Show the job immediately. Reading a large MP4 and sending it to the
+    // backend can take minutes on a Tailscale/slow link, and previously the
+    // only feedback was a toast that expired after 4 seconds.
+    setYoutubeUploads(prev => [{
+      id: localUploadId,
+      title: uploadTitle || 'YouTube clip',
+      status: 'preparing',
+      progress: 0,
+      note: 'Menyiapkan file...',
+    }, ...prev]);
+    let queueId = localUploadId;
+    const patchUpload = (patch: Partial<YouTubeUploadItem>) => setYoutubeUploads(prev => prev.map(item => item.id === queueId ? { ...item, ...patch } : item));
+    setToastMessage('Menyiapkan upload YouTube...', 0);
+    try {
+      const fileResponse = await fetch(clip.download_url);
+      if (!fileResponse.ok) throw new Error('File hasil render tidak tersedia');
+      const form = new FormData();
+      form.append('video', await fileResponse.blob(), `${uploadTitle || 'clip'}.mp4`);
+      const rawTags = override?.tags?.length
+        ? override.tags
+        : (sourceClip?.hashtag_suggestion || '#shorts #cheatclip').split(/[\s,]+/);
+      const tags = rawTags.filter(Boolean).map(tag => tag.startsWith('#') ? tag.slice(1) : tag);
+      form.append('metadata', JSON.stringify({
+        title: uploadTitle,
+        description: override?.description
+          ?? [sourceClip?.caption_suggestion, result?.summary].filter(Boolean).join('\n\n'),
+        tags: tags.length ? tags : ['shorts', 'cheatclip'],
+        privacy_status: override?.privacyStatus || 'private',
+        publish_at: override?.publishAt,
+        playlist_id: override?.playlistId,
+        made_for_kids: override?.madeForKids ?? false,
+      }));
+      if (override?.thumbnail) form.append('thumbnail', override.thumbnail, override.thumbnail.name);
+
+      patchUpload({ note: 'Mengirim file ke server...' });
+      setToastMessage('Mengirim file ke server...', 0);
+      // XHR gives upload progress for the browser -> backend transfer, which
+      // fetch() cannot report. This is the phase that looks "stuck" on slow
+      // connections before a job id exists.
+      const data = await new Promise<Record<string, any>>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', '/api/youtube/upload');
+        xhr.upload.onprogress = (event) => {
+          if (!event.lengthComputable) return;
+          const pct = Math.min(100, Math.round((event.loaded / event.total) * 100));
+          patchUpload({ progress: pct, note: `Mengirim file... ${pct}%` });
+          setToastMessage(`Mengirim file ke server... ${pct}%`, 0);
+        };
+        xhr.onload = () => {
+          let payload: Record<string, any> = {};
+          try {
+            payload = JSON.parse(xhr.responseText || '{}');
+          } catch {
+            payload = {};
+          }
+          if (xhr.status >= 200 && xhr.status < 300) resolve(payload);
+          else reject(new Error(payload.detail || `Upload gagal (${xhr.status})`));
+        };
+        xhr.onerror = () => reject(new Error('Gagal menghubungi server upload'));
+        xhr.onabort = () => reject(new Error('Upload dibatalkan'));
+        xhr.send(form);
+      });
+
+      const uploadId = data.job_id as string;
+      if (!uploadId) throw new Error('Server tidak mengembalikan ID upload');
+      queueId = uploadId;
+      const setUpload = (patch: Partial<YouTubeUploadItem>) => setYoutubeUploads(prev => prev.map(item => item.id === uploadId ? { ...item, ...patch } : item));
+      youtubeRetryRef.current[uploadId] = () => { void handleUploadToYouTube(clip, sourceClip, override); };
+      patchUpload({ id: uploadId, status: 'queued', progress: 0, note: 'Menunggu antrean YouTube...' });
+      setToastMessage('Upload YouTube dimulai...', 0);
+      let status = data;
+      const deadline = Date.now() + 30 * 60 * 1000;
+      while (Date.now() < deadline && status.status !== 'completed' && status.status !== 'failed') {
+        await new Promise(resolve => window.setTimeout(resolve, 2000));
+        const statusResponse = await fetch(`/api/youtube/upload/${data.job_id}`);
+        if (!statusResponse.ok) continue;
+        status = await statusResponse.json();
+        setUpload({
+          status: status.status,
+          progress: status.progress || 0,
+          url: status.url,
+          error: status.error,
+          warning: status.warning,
+          note: status.note,
+          retry: status.status === 'failed' ? youtubeRetryRef.current[uploadId] : undefined,
+        });
+        if (status.status === 'failed') throw new Error(status.error || 'Upload YouTube gagal');
+        if (status.status !== 'completed') {
+          setToastMessage(status.note || `Upload YouTube: ${status.progress || 0}%`, 0);
+        }
+      }
+      if (status.status !== 'completed') {
+        throw new Error('Upload masih berjalan di server. Buka tab YouTube Upload lagi untuk memantau statusnya.');
+      }
+      setToastMessage(`Berhasil diupload: ${status.url}`, 8000);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Upload YouTube gagal';
+      patchUpload({ status: 'failed', error: message, note: undefined });
+      setToastMessage(message, 8000);
+    }
+  };
+
   // History feature: previously analyzed videos from localStorage
   interface HistoryEntry {
+    cache_key: string;
     video_id: string;
     title: string;
     duration_pref: string;
@@ -811,7 +1158,7 @@ export default function App() {
     analyzed_at: string;
     thumbnail: string;
     url: string;
-    source_type?: 'youtube' | 'upload' | 'gdrive' | 'twitch';
+    source_type?: 'youtube' | 'upload' | 'gdrive';
     video_url?: string;
     range_suffix?: string;
     summary?: string;
@@ -822,12 +1169,13 @@ export default function App() {
   const [showHistory, setShowHistory] = useState(true);
   const [historySearchQuery, setHistorySearchQuery] = useState('');
   const [confirmClearAll, setConfirmClearAll] = useState(false);
+  const [renderHistory, setRenderHistory] = useState<BatchRenderProgress[]>([]);
+  const [showRenderHistory, setShowRenderHistory] = useState(true);
 
   // Audio/video playback state tracking
   const [currentTime, setCurrentTime] = useState(0);
   const playerRef = useRef<any>(null);
   const directVideoPlayerRef = useRef<HTMLVideoElement | null>(null);
-  const twitchPlayerRef = useRef<any>(null);
   const trackingInterval = useRef<number | null>(null);
   const clipEndIntervalRef = useRef<number | null>(null);
   const loadingSectionRef = useRef<HTMLElement | null>(null);
@@ -847,6 +1195,18 @@ export default function App() {
       }, durationMs);
     }
   }, []);
+
+  // Track "clear after N ms" timers so a newer toast (for example a live
+  // upload progress message) is never wiped by an older timer.
+  const clearToastAfter = useCallback((ms: number) => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToastMessageState(null);
+      toastTimeoutRef.current = null;
+    }, ms);
+  }, []);
   const [isClearingGlobalTemp, setIsClearingGlobalTemp] = useState<boolean>(false);
   const [showGlobalClearModal, setShowGlobalClearModal] = useState<boolean>(false);
 
@@ -858,15 +1218,15 @@ export default function App() {
       if (resp.ok) {
         const data = await resp.json();
         setToastMessage(data.message || t.header.clearedTempSuccess);
-        setTimeout(() => setToastMessage(null), 3500);
+        clearToastAfter(3500);
       } else {
         setToastMessage(t.header.clearedTempFailed);
-        setTimeout(() => setToastMessage(null), 3000);
+        clearToastAfter(3000);
       }
     } catch (e) {
       console.error('Failed to clear temp folder:', e);
       setToastMessage(t.header.clearedTempError);
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
     } finally {
       setIsClearingGlobalTemp(false);
       setShowGlobalClearModal(false);
@@ -1063,9 +1423,57 @@ export default function App() {
     localStorage.setItem(`marked_clips_${result.video_id}`, JSON.stringify(updated));
   };
 
-  // Scan localStorage and build the history list from cache keys
-  const refreshHistory = () => {
-    const entries: HistoryEntry[] = [];
+  const buildHistoryEntry = (
+    cacheKey: string,
+    data: AnalyzeResponse,
+    analyzedAt: string,
+    durationPref: string,
+    rangeSuffix: string,
+  ): HistoryEntry => {
+    const video_id = data.video_id;
+    const clip_titles = (data.clips || []).map((c: any) => c.title || '').filter(Boolean);
+    const key_quotes = (data.clips || []).flatMap((c: any) => c.key_quotes || []).filter(Boolean);
+
+    const isGDrive = data.source_type === 'gdrive' || video_id.startsWith('gdrive_');
+    const isUpload = data.source_type === 'upload' || video_id.startsWith('upload_');
+    const sourceType: 'youtube' | 'upload' | 'gdrive' = isGDrive ? 'gdrive' : (isUpload ? 'upload' : 'youtube');
+
+    let itemUrl = `https://www.youtube.com/watch?v=${video_id}`;
+    if (isGDrive) {
+      const gdriveIdMatch = video_id.match(/gdrive_([a-zA-Z0-9_-]+)/);
+      const gdriveId = gdriveIdMatch ? gdriveIdMatch[1] : '';
+      itemUrl = gdriveId ? `https://drive.google.com/file/d/${gdriveId}/view` : (data.video_url || '');
+    } else if (isUpload) {
+      itemUrl = data.video_url || `/api/video/${video_id}`;
+    }
+
+    const thumb = (isGDrive || isUpload)
+      ? `/api/frame/${encodeURIComponent(video_id)}?t=2`
+      : `https://img.youtube.com/vi/${video_id}/mqdefault.jpg`;
+
+    return {
+      cache_key: cacheKey,
+      video_id,
+      title: data.title,
+      duration_pref: durationPref,
+      clip_count: data.clips?.length || 0,
+      analyzed_at: analyzedAt,
+      thumbnail: thumb,
+      url: itemUrl,
+      source_type: sourceType,
+      video_url: data.video_url,
+      range_suffix: rangeSuffix,
+      summary: data.summary || '',
+      clip_titles,
+      key_quotes
+    };
+  };
+
+  // Scan localStorage and merge with server-side history so switching
+  // browsers still shows the same analyzed videos.
+  const refreshHistory = async () => {
+    const localDataByKey = new Map<string, AnalyzeResponse>();
+    const localEntries: HistoryEntry[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key && key.startsWith('cheat_clip_cache_')) {
@@ -1073,92 +1481,150 @@ export default function App() {
           const raw = localStorage.getItem(key);
           if (!raw) continue;
           const data: AnalyzeResponse = JSON.parse(raw);
-
           if (!data || !data.video_id) continue;
 
-          const video_id = data.video_id;
           const rest = key.substring('cheat_clip_cache_'.length);
-          const suffix = rest.substring(video_id.length + 1); // skip video_id and trailing '_'
+          const suffix = rest.substring(data.video_id.length + 1);
           const duration_pref = suffix.split('_')[0];
           const range_suffix = suffix.substring(duration_pref.length);
-
-          // Try reading cached timestamp stored separately
-          const tsKey = `cheat_clip_ts_${video_id}_${duration_pref}${range_suffix}`;
+          const tsKey = `cheat_clip_ts_${data.video_id}_${duration_pref}${range_suffix}`;
           const analyzed_at = localStorage.getItem(tsKey) || new Date().toISOString();
-          const clip_titles = (data.clips || []).map((c: any) => c.title || '').filter(Boolean);
-          const key_quotes = (data.clips || []).flatMap((c: any) => c.key_quotes || []).filter(Boolean);
 
-          const isGDrive = data.source_type === 'gdrive' || video_id.startsWith('gdrive_');
-          const isUpload = data.source_type === 'upload' || video_id.startsWith('upload_');
-          const isTwitch = data.source_type === 'twitch' || video_id.startsWith('twitch_');
-          const sourceType: 'youtube' | 'upload' | 'gdrive' | 'twitch' = isTwitch ? 'twitch' : (isGDrive ? 'gdrive' : (isUpload ? 'upload' : 'youtube'));
-
-          // Determine appropriate link and thumbnail
-          let itemUrl = `https://www.youtube.com/watch?v=${video_id}`;
-          if (isTwitch) {
-            itemUrl = data.video_url || (video_id.startsWith('twitch_clip_') ? `https://clips.twitch.tv/${video_id.replace('twitch_clip_', '')}` : `https://www.twitch.tv/videos/${video_id.replace('twitch_', '')}`);
-          } else if (isGDrive) {
-            const gdriveIdMatch = video_id.match(/gdrive_([a-zA-Z0-9_-]+)/);
-            const gdriveId = gdriveIdMatch ? gdriveIdMatch[1] : '';
-            itemUrl = gdriveId ? `https://drive.google.com/file/d/${gdriveId}/view` : (data.video_url || '');
-          } else if (isUpload) {
-            itemUrl = data.video_url || `/api/video/${video_id}`;
-          }
-
-          const thumb = (isGDrive || isUpload || isTwitch)
-            ? `/api/frame/${encodeURIComponent(video_id)}?t=2`
-            : `https://img.youtube.com/vi/${video_id}/mqdefault.jpg`;
-
-          entries.push({
-            video_id,
-            title: data.title,
-            duration_pref,
-            clip_count: data.clips?.length || 0,
-            analyzed_at,
-            thumbnail: thumb,
-            url: itemUrl,
-            source_type: sourceType,
-            video_url: data.video_url,
-            range_suffix,
-            summary: data.summary || '',
-            clip_titles,
-            key_quotes
-          });
+          localDataByKey.set(key, data);
+          localEntries.push(buildHistoryEntry(key, data, analyzed_at, duration_pref, range_suffix));
         } catch (_) {
           // Skip malformed entries
         }
       }
     }
-    // Sort by most recent first
+
+    let serverEntries: HistoryEntry[] = [];
+    try {
+      const response = await fetch('/api/analysis-cache?limit=200');
+      if (response.ok) {
+        const payload = await response.json();
+        if (Array.isArray(payload?.entries)) serverEntries = payload.entries;
+      }
+    } catch (_) {
+      // Offline or backend unavailable: fall back to local entries.
+    }
+
+    const merged = new Map<string, HistoryEntry>();
+    serverEntries.forEach(entry => {
+      if (entry?.cache_key) merged.set(entry.cache_key, entry);
+    });
+    localEntries.forEach(entry => merged.set(entry.cache_key, entry));
+
+    // One-time migration: push local-only entries to the server.
+    const serverKeys = new Set(serverEntries.map(entry => entry.cache_key));
+    localEntries.forEach(entry => {
+      if (serverKeys.has(entry.cache_key)) return;
+      const data = localDataByKey.get(entry.cache_key);
+      if (!data) return;
+      fetch('/api/analysis-cache', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cache_key: entry.cache_key,
+          video_id: entry.video_id,
+          analyzed_at: entry.analyzed_at,
+          duration_pref: entry.duration_pref,
+          range_suffix: entry.range_suffix || '',
+          data,
+        }),
+      }).catch(() => undefined);
+    });
+
+    const entries = Array.from(merged.values());
     entries.sort((a, b) => new Date(b.analyzed_at).getTime() - new Date(a.analyzed_at).getTime());
     setHistory(entries);
   };
 
+  const refreshRenderHistory = async () => {
+    try {
+      const response = await fetch('/api/render-history?limit=50');
+      if (!response.ok) return;
+      const payload = await response.json().catch(() => null);
+      if (Array.isArray(payload?.batches)) setRenderHistory(payload.batches);
+    } catch {
+      // Render history is optional; keep the current list on failure.
+    }
+  };
+
   // Load history on mount
   useEffect(() => {
-    refreshHistory();
+    void refreshHistory();
   }, []);
 
-  const loadFromHistory = (entry: HistoryEntry) => {
+  useEffect(() => {
+    void refreshRenderHistory();
+  }, [workflowTab, batchProgress?.overall_status, batchProgress?.batch_id]);
+
+  // Restore the latest render batch for the active video so finished clips
+  // (and their download links) survive a page reload, browser switch, or
+  // backend restart.
+  useEffect(() => {
+    const videoId = result?.video_id;
+    if (!videoId) return;
+    let cancelled = false;
+    fetch(`/api/render-history?limit=1&video_id=${encodeURIComponent(videoId)}`)
+      .then(res => res.ok ? res.json() : null)
+      .then(payload => {
+        if (cancelled) return;
+        const latest = payload?.batches?.[0] as BatchRenderProgress | undefined;
+        if (!latest?.batch_id) {
+          setBatchProgress(null);
+          return;
+        }
+        if (latest.overall_status === 'running') {
+          const stamp = new Date(latest.updated_at || latest.created_at || 0).getTime();
+          // Do not resurrect a batch that was interrupted long ago.
+          if (!stamp || Date.now() - stamp > 30 * 60 * 1000) {
+            setBatchProgress(null);
+            return;
+          }
+        }
+        setBatchProgress(latest);
+        if (latest.overall_status === 'running') listenToBatchProgress(latest.batch_id);
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [result?.video_id]);
+
+  const loadFromHistory = async (entry: HistoryEntry) => {
     const rangeSuffix = entry.range_suffix || '';
-    const cacheKey = `cheat_clip_cache_${entry.video_id}_${entry.duration_pref}${rangeSuffix}`;
-    const raw = localStorage.getItem(cacheKey);
-    if (!raw) return;
+    const cacheKey = entry.cache_key || `cheat_clip_cache_${entry.video_id}_${entry.duration_pref}${rangeSuffix}`;
+    let raw = localStorage.getItem(cacheKey);
+    if (!raw) {
+      try {
+        const response = await fetch(`/api/analysis-cache/entry?cache_key=${encodeURIComponent(cacheKey)}`);
+        if (response.ok) {
+          const payload = await response.json();
+          raw = JSON.stringify(payload.data);
+          try {
+            localStorage.setItem(cacheKey, raw);
+            localStorage.setItem(`cheat_clip_ts_${entry.video_id}_${entry.duration_pref}${rangeSuffix}`, entry.analyzed_at || new Date().toISOString());
+          } catch {
+            // Local quota is not critical; server remains the source of truth.
+          }
+        }
+      } catch (_) {
+        // Fall through to the error toast below.
+      }
+    }
+    if (!raw) {
+      setToastMessage(t.form.historyLoadFailed);
+      clearToastAfter(3000);
+      return;
+    }
     try {
       const data: AnalyzeResponse = JSON.parse(raw);
 
       const isGDrive = data.source_type === 'gdrive' || entry.source_type === 'gdrive' || entry.video_id.startsWith('gdrive_');
       const isUpload = data.source_type === 'upload' || entry.source_type === 'upload' || entry.video_id.startsWith('upload_');
-      const isTwitch = data.source_type === 'twitch' || entry.source_type === 'twitch' || entry.video_id.startsWith('twitch_');
 
-      if (isTwitch) {
-        setSourceMode('twitch');
-        setUrl(entry.url);
-        setTwitchUrl(entry.url);
-        setGdriveUrl('');
-        setUploadedVideoInfo(null);
-        setUploadedVideoFile(null);
-      } else if (isGDrive) {
+      if (isGDrive) {
         setSourceMode('gdrive');
         setUrl('');
         const gdriveIdMatch = entry.video_id.match(/gdrive_([a-zA-Z0-9_-]+)/);
@@ -1272,20 +1738,21 @@ export default function App() {
       }, 600);
     } catch (_) {
       setToastMessage(t.form.historyLoadFailed);
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
     }
   };
 
   const deleteHistoryEntry = (entry: HistoryEntry, e: React.MouseEvent) => {
     e.stopPropagation();
     const rangeSuffix = entry.range_suffix || '';
-    const cacheKey = `cheat_clip_cache_${entry.video_id}_${entry.duration_pref}${rangeSuffix}`;
+    const cacheKey = entry.cache_key || `cheat_clip_cache_${entry.video_id}_${entry.duration_pref}${rangeSuffix}`;
     const tsKey = `cheat_clip_ts_${entry.video_id}_${entry.duration_pref}${rangeSuffix}`;
     localStorage.removeItem(cacheKey);
     localStorage.removeItem(tsKey);
-    refreshHistory();
+    fetch(`/api/analysis-cache/entry?cache_key=${encodeURIComponent(cacheKey)}`, { method: 'DELETE' }).catch(() => undefined);
+    void refreshHistory();
     setToastMessage(t.form.removedFromHistory(entry.title));
-    setTimeout(() => setToastMessage(null), 3000);
+    clearToastAfter(3000);
   };
 
   const clearAllHistory = () => {
@@ -1297,9 +1764,10 @@ export default function App() {
       }
     }
     toRemove.forEach(k => localStorage.removeItem(k));
+    fetch('/api/analysis-cache', { method: 'DELETE' }).catch(() => undefined);
     setHistory([]);
     setToastMessage(t.form.allHistoryCleared);
-    setTimeout(() => setToastMessage(null), 3000);
+    clearToastAfter(3000);
   };
 
   const handleDeselectActiveVideo = () => {
@@ -1317,7 +1785,7 @@ export default function App() {
       setWorkflowTab('source');
     }
     setToastMessage('Active video ditutup (deselected)');
-    setTimeout(() => setToastMessage(null), 3000);
+    clearToastAfter(3000);
   };
 
   const formatRelativeTime = (iso: string) => {
@@ -1334,13 +1802,6 @@ export default function App() {
 
   const destroyPlayer = () => {
     stopTracking();
-    if (twitchPlayerRef.current) {
-      twitchPlayerRef.current = null;
-      const twContainer = document.getElementById('twitch-player-container');
-      if (twContainer) {
-        twContainer.innerHTML = '<div id="twitch-player"></div>';
-      }
-    }
     if (playerRef.current) {
       try {
         if (typeof playerRef.current.destroy === 'function') {
@@ -1357,66 +1818,8 @@ export default function App() {
     }
   };
 
-  const initTwitchPlayer = (videoId: string, forceRecreate = false) => {
-    const isClip = videoId.startsWith('twitch_clip_');
-    const rawId = isClip ? videoId.replace('twitch_clip_', '') : videoId.replace('twitch_', '');
-    const container = document.getElementById('twitch-player-container');
-    if (!container) {
-      setTimeout(() => initTwitchPlayer(videoId, forceRecreate), 100);
-      return;
-    }
-
-    if (twitchPlayerRef.current) {
-      twitchPlayerRef.current = null;
-      try {
-        container.innerHTML = '<div id="twitch-player"></div>';
-      } catch (_) {}
-    }
-
-    if ((window as any).Twitch && (window as any).Twitch.Player) {
-      if (!document.getElementById('twitch-player')) {
-        container.innerHTML = '<div id="twitch-player"></div>';
-      }
-      try {
-        const opts: any = {
-          width: '100%',
-          height: '100%',
-          autoplay: false,
-          parent: [window.location.hostname || 'localhost', 'localhost', '127.0.0.1']
-        };
-        if (isClip) {
-          opts.clip = rawId;
-        } else {
-          opts.video = rawId;
-        }
-        const player = new (window as any).Twitch.Player('twitch-player', opts);
-        twitchPlayerRef.current = player;
-        player.addEventListener((window as any).Twitch.Player.PLAY, () => {
-          startTracking();
-        });
-        player.addEventListener((window as any).Twitch.Player.PAUSE, () => {
-          stopTracking();
-          if (player.getCurrentTime) {
-            setCurrentTime(player.getCurrentTime());
-          }
-        });
-        player.addEventListener((window as any).Twitch.Player.READY, () => {
-          console.log('Twitch Player Ready');
-        });
-      } catch (err) {
-        console.error('Error instantiating Twitch Player:', err);
-      }
-    } else {
-      setTimeout(() => initTwitchPlayer(videoId, forceRecreate), 200);
-    }
-  };
-
   const initPlayer = (videoId: string, forceRecreate = false) => {
     if (!videoId || videoId.startsWith('upload_') || videoId.startsWith('gdrive_')) {
-      return;
-    }
-    if (videoId.startsWith('twitch_')) {
-      initTwitchPlayer(videoId, forceRecreate);
       return;
     }
     // If player already exists and we're not forcing recreate, try to load new video
@@ -1489,9 +1892,7 @@ export default function App() {
   const startTracking = () => {
     stopTracking();
     trackingInterval.current = window.setInterval(() => {
-      if (twitchPlayerRef.current && typeof twitchPlayerRef.current.getCurrentTime === 'function') {
-        setCurrentTime(twitchPlayerRef.current.getCurrentTime());
-      } else if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
+      if (playerRef.current && typeof playerRef.current.getCurrentTime === 'function') {
         setCurrentTime(playerRef.current.getCurrentTime());
       }
     }, 200);
@@ -1522,14 +1923,6 @@ export default function App() {
       }
       return;
     }
-    if (twitchPlayerRef.current && typeof twitchPlayerRef.current.seek === 'function') {
-      twitchPlayerRef.current.seek(seconds);
-      setCurrentTime(seconds);
-      try {
-        twitchPlayerRef.current.play();
-      } catch (_) {}
-      return;
-    }
     if (playerRef.current && typeof playerRef.current.seekTo === 'function') {
       playerRef.current.seekTo(seconds, true);
       setCurrentTime(seconds);
@@ -1556,15 +1949,6 @@ export default function App() {
         curr = directVideoPlayerRef.current.currentTime;
         if (curr >= clip.end_time) {
           directVideoPlayerRef.current.pause();
-          clearInterval(intervalId);
-          if (clipEndIntervalRef.current === intervalId) {
-            clipEndIntervalRef.current = null;
-          }
-        }
-      } else if (twitchPlayerRef.current && typeof twitchPlayerRef.current.getCurrentTime === 'function') {
-        curr = twitchPlayerRef.current.getCurrentTime();
-        if (curr >= clip.end_time) {
-          twitchPlayerRef.current.pause();
           clearInterval(intervalId);
           if (clipEndIntervalRef.current === intervalId) {
             clipEndIntervalRef.current = null;
@@ -1614,42 +1998,12 @@ export default function App() {
     return null;
   };
 
-  const isTwitchUrl = (urlStr: string): boolean => {
-    if (!urlStr) return false;
-    const trimmed = urlStr.trim();
-    return (
-      trimmed.includes('twitch.tv') ||
-      trimmed.startsWith('twitch_') ||
-      /(?:twitch\.tv\/videos\/|clips\.twitch\.tv\/|twitch\.tv\/[^/]+\/clip\/)/.test(trimmed)
-    );
-  };
-
-  const extractTwitchId = (urlStr: string): { type: 'vod' | 'clip'; id: string } | null => {
-    if (!urlStr) return null;
-    const trimmed = urlStr.trim();
-    const mVod = trimmed.match(/(?:twitch\.tv\/videos\/|twitch\.tv\/[a-zA-Z0-9_]+\/v\/|twitch_vod_|twitch_)(\d+)/);
-    if (mVod && mVod[1]) {
-      return { type: 'vod', id: mVod[1] };
-    }
-    const mClip = trimmed.match(/(?:clips\.twitch\.tv\/|twitch\.tv\/[^/]+\/clip\/|twitch_clip_)([a-zA-Z0-9_-]+)/);
-    if (mClip && mClip[1]) {
-      return { type: 'clip', id: mClip[1] };
-    }
-    return null;
-  };
-
   const extractVideoId = (urlStr: string): string | null => {
     if (!urlStr) return null;
     const trimmed = urlStr.trim();
     if (isGoogleDriveUrl(trimmed)) {
       const gId = extractGoogleDriveId(trimmed);
       return gId ? `gdrive_${gId}` : null;
-    }
-    if (isTwitchUrl(trimmed)) {
-      const tw = extractTwitchId(trimmed);
-      if (tw) {
-        return tw.type === 'vod' ? `twitch_${tw.id}` : `twitch_clip_${tw.id}`;
-      }
     }
     if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
       return trimmed;
@@ -1744,7 +2098,7 @@ export default function App() {
     const manualSuffix = subtitlesSource === 'manual' ? '_manual' : '';
 
     // Determine target video identifier
-    let targetAnalyzeUrl = sourceMode === 'gdrive' ? gdriveUrl.trim() : (sourceMode === 'twitch' ? (twitchUrl.trim() || url.trim()) : url.trim());
+    let targetAnalyzeUrl = sourceMode === 'gdrive' ? gdriveUrl.trim() : url.trim();
     let videoId = extractVideoId(targetAnalyzeUrl);
     let currentVideoInfo = uploadedVideoInfo;
 
@@ -2042,27 +2396,44 @@ export default function App() {
 
       // Cache the successful response safely (handling mobile Safari quota limits)
       if (resultData.video_id) {
-        try {
-          const promptSuffix = customPrompt.trim() ? `_prompt_${customPrompt.trim().replace(/[^a-zA-Z0-9]/g, '_')}` : '';
-          const modelSuffix = `_model_${selectedModel}`;
-          const clipsSuffix = clipCountMode === 'auto' ? '_clips_auto' : `_clips_${targetClipCount}`;
-          const langSuffix = subtitlesSource === 'youtube' ? `_lang_${transcriptLanguage}` : '';
-          const targetCacheKey = `cheat_clip_cache_${resultData.video_id}_${durationPref}${modelSuffix}${clipsSuffix}${promptSuffix}${rangeSuffix}${manualSuffix}${langSuffix}`;
-          const tsKey = `cheat_clip_ts_${resultData.video_id}_${durationPref}${modelSuffix}${clipsSuffix}${promptSuffix}${rangeSuffix}${manualSuffix}${langSuffix}`;
+        const promptSuffix = customPrompt.trim() ? `_prompt_${customPrompt.trim().replace(/[^a-zA-Z0-9]/g, '_')}` : '';
+        const modelSuffix = `_model_${selectedModel}`;
+        const clipsSuffix = clipCountMode === 'auto' ? '_clips_auto' : `_clips_${targetClipCount}`;
+        const langSuffix = subtitlesSource === 'youtube' ? `_lang_${transcriptLanguage}` : '';
+        const targetCacheKey = `cheat_clip_cache_${resultData.video_id}_${durationPref}${modelSuffix}${clipsSuffix}${promptSuffix}${rangeSuffix}${manualSuffix}${langSuffix}`;
+        const tsKey = `cheat_clip_ts_${resultData.video_id}_${durationPref}${modelSuffix}${clipsSuffix}${promptSuffix}${rangeSuffix}${manualSuffix}${langSuffix}`;
+        const analyzedAt = new Date().toISOString();
 
-          // Ensure persisted cache stores durable server URL, not temporary blob URL
-          const persistData = {
-            ...resultData,
-            video_url: resultData.video_url?.startsWith('blob:')
-              ? (currentVideoInfo?.savedName ? `/api/video/${currentVideoInfo.savedName}` : `/api/video/${resultData.video_id}`)
-              : resultData.video_url
-          };
+        // Ensure persisted cache stores durable server URL, not temporary blob URL
+        const persistData = {
+          ...resultData,
+          video_url: resultData.video_url?.startsWith('blob:')
+            ? (currentVideoInfo?.savedName ? `/api/video/${currentVideoInfo.savedName}` : `/api/video/${resultData.video_id}`)
+            : resultData.video_url
+        };
+
+        try {
           localStorage.setItem(targetCacheKey, JSON.stringify(persistData));
-          localStorage.setItem(tsKey, new Date().toISOString());
-          refreshHistory();
+          localStorage.setItem(tsKey, analyzedAt);
         } catch (storageErr) {
           console.warn('Could not cache analysis to localStorage (likely quota limit on mobile device):', storageErr);
         }
+
+        const cacheSuffix = `${durationPref}${modelSuffix}${clipsSuffix}${promptSuffix}${rangeSuffix}${manualSuffix}${langSuffix}`;
+        fetch('/api/analysis-cache', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cache_key: targetCacheKey,
+            video_id: resultData.video_id,
+            analyzed_at: analyzedAt,
+            duration_pref: durationPref,
+            range_suffix: cacheSuffix.substring(durationPref.length),
+            data: persistData,
+          }),
+        }).catch(() => undefined);
+
+        void refreshHistory();
       }
 
       // For direct video preview on local upload, preserve the fast in-memory objectUrl
@@ -2309,19 +2680,6 @@ export default function App() {
 
   const handleApplyAdjustedClipToResults = (adjustedClip: ViralClip) => {
     if (result && result.clips && trimmerClip) {
-      const oldKey = `${trimmerClip.start_time}_${trimmerClip.end_time}`;
-      const newKey = `${adjustedClip.start_time}_${adjustedClip.end_time}`;
-
-      // Clip selection is keyed by its timestamps. Preserve the selected state
-      // when changing either boundary so the adjusted clip is still rendered.
-      setMarkedClips(prev => {
-        if (!prev[oldKey] || oldKey === newKey) return prev;
-        const next = { ...prev };
-        delete next[oldKey];
-        next[newKey] = true;
-        return next;
-      });
-
       setResult(prev => {
         if (!prev) return prev;
         return {
@@ -2528,7 +2886,7 @@ Transcript:
     const ts = `${formatSeconds(clip.start_time)} - ${formatSeconds(clip.end_time)}`;
     navigator.clipboard.writeText(ts).then(() => {
       setToastMessage(t.results.copiedTimestampToast(ts));
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
     });
   };
 
@@ -2579,7 +2937,7 @@ Transcript:
     }
 
     navigator.clipboard.writeText(text).then(() => {
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
     });
   };
 
@@ -2703,13 +3061,13 @@ Transcript:
     downloadAnchor.remove();
 
     setToastMessage(t.results.downloadedJsonToast);
-    setTimeout(() => setToastMessage(null), 3000);
+    clearToastAfter(3000);
   };
 
   const handleExportSRT = () => {
     if (!result || !result.transcript) {
       setToastMessage(t.results.noTranscriptToExport);
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
       return;
     }
 
@@ -2737,39 +3095,30 @@ Transcript:
     downloadAnchor.remove();
 
     setToastMessage(t.results.downloadedSrtToast);
-    setTimeout(() => setToastMessage(null), 3000);
+    clearToastAfter(3000);
   };
 
   const handleCopyAllMarkdown = () => {
     if (!result) return;
-    let md = `# Viral Clips from "${result.title}"\n\n`;
-    md += `**Overall Summary**: ${result.summary}\n\n`;
-    result.clips.forEach((clip, index) => {
-      md += `## ${index + 1}. ${clip.title} (${clip.virality_score}% Virality)\n`;
-      md += `- **Timestamp**: ${formatSeconds(clip.start_time)} - ${formatSeconds(clip.end_time)} (Duration: ${formatSeconds(clip.end_time - clip.start_time)})\n`;
-      if (clip.key_quotes && clip.key_quotes.length > 0) {
-        md += `- **Key Quotes**:\n`;
-        clip.key_quotes.forEach(q => md += `  - *"${q}"*\n`);
-      }
-      if (clip.title_suggestion) {
-        md += `- **Title Suggestion**: ${clip.title_suggestion}\n`;
-      }
-      if (clip.caption_suggestion) {
-        const captionText = (() => {
-          const lowercaseHashtags = (clip.hashtag_suggestion || '').toLowerCase();
-          if (!lowercaseHashtags) return clip.caption_suggestion;
-          if (clip.caption_suggestion.toLowerCase().includes(lowercaseHashtags)) return clip.caption_suggestion;
-          return `${clip.caption_suggestion} ${lowercaseHashtags}`;
-        })();
-        md += `- **Caption Suggestion**: ${captionText}\n`;
-      }
-      md += `- **Transcript**:\n  > ${clip.transcript.replace(/\n/g, '\n  > ')}\n\n`;
-    });
-
+    const md = buildClipsMarkdown(result);
     navigator.clipboard.writeText(md).then(() => {
       setToastMessage(t.results.copiedMarkdownToast);
-      setTimeout(() => setToastMessage(null), 3000);
+      clearToastAfter(3000);
     });
+  };
+
+  const handleDownloadMarkdown = () => {
+    if (!result) return;
+    const blob = new Blob([buildClipsMarkdown(result)], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `cheat_clip_metadata_${result.video_id || 'clips'}.md`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(url);
+    setToastMessage('Metadata MD diunduh.', 3000);
   };
 
   // Filter clips based on query and virality filters
@@ -2853,6 +3202,9 @@ Transcript:
 
   return (
     <>
+      {/* Always-visible upload progress, independent of the current tab */}
+      <YouTubeUploadStatusBar items={youtubeUploads} />
+
       {/* Toast Notification */}
       {toastMessage && (
         <div className="toast-msg" role="status" aria-live="polite">
@@ -2916,6 +3268,16 @@ Transcript:
                   )}
                 </span>
               </button>
+              {youtubeStatus.configured && (
+                <button
+                  type="button"
+                  className={`header-nav-btn${youtubeStatus.connected ? ' cookies-active' : ''}`}
+                  onClick={() => youtubeStatus.connected ? disconnectYouTube() : (window.location.href = '/api/youtube/oauth/start')}
+                  title={youtubeStatus.connected ? `Terhubung: ${youtubeStatus.channel_title || 'YouTube'}` : 'Hubungkan channel YouTube'}
+                >
+                  <Upload size={14} /> {youtubeStatus.connected ? (youtubeStatus.channel_title || 'YouTube') : 'Connect YouTube'}
+                </button>
+              )}
               {allowAppUpdates && (
                 <button
                   type="button"
@@ -2987,7 +3349,7 @@ Transcript:
             onClick={() => {
               setWorkflowTab('clips');
             }}
-            disabled={!loading && !result && history.length === 0}
+            disabled={!loading && !result && history.length === 0 && !renderHistory.some(batch => (batch.clips || []).some(c => c.status === 'completed' && c.download_url))}
             title={
               loading
                 ? 'Sedang menganalisa video...'
@@ -2995,7 +3357,9 @@ Transcript:
                   ? 'Lihat hasil rekomendasi klip'
                   : history.length > 0
                     ? 'Buka riwayat klip tersimpan'
-                    : 'Selesaikan analisis video terlebih dahulu'
+                    : renderHistory.some(batch => (batch.clips || []).some(c => c.status === 'completed' && c.download_url))
+                      ? 'Buka file hasil render tersimpan'
+                      : 'Selesaikan analisis video terlebih dahulu'
             }
           >
             <span className="workflow-step-num">02</span>
@@ -3049,6 +3413,32 @@ Transcript:
               <span className="workflow-tab-count">
                 [{markedClipsList.length} READY]
               </span>
+            )}
+          </button>
+
+          <div className={`workflow-process-connector ${completedRenderClips.length > 0 ? 'completed' : ''}`} aria-hidden="true">
+            <span className="connector-line" />
+            <span className="connector-arrow-box">
+              <ChevronRight size={13} strokeWidth={2.5} />
+            </span>
+            <span className="connector-line" />
+          </div>
+
+          <button
+            type="button"
+            id="tab-step-upload"
+            className={`workflow-tab-btn ${workflowTab === 'upload' ? 'active' : ''} ${completedRenderClips.length > 0 ? 'step-has-content' : ''}`}
+            onClick={() => {
+              if (result) setWorkflowTab('upload');
+            }}
+            disabled={!result}
+            title={!result ? 'Selesaikan analisis video terlebih dahulu' : 'Atur metadata dan upload ke YouTube'}
+          >
+            <span className="workflow-step-num">04</span>
+            <Upload size={15} className="workflow-step-icon" />
+            <span className="workflow-step-title">YOUTUBE UPLOAD</span>
+            {completedRenderClips.length > 0 && (
+              <span className="workflow-tab-count">[{completedRenderClips.length} READY]</span>
             )}
           </button>
         </nav>
@@ -3194,6 +3584,48 @@ Transcript:
                 </>
               )}
 
+              {workflowTab !== 'upload' ? (
+                <button
+                  type="button"
+                  className="glowing-btn"
+                  onClick={() => setWorkflowTab('upload')}
+                  style={{
+                    padding: '0.4rem 0.95rem',
+                    fontSize: '0.78rem',
+                    background: 'transparent',
+                    color: 'var(--text-primary)',
+                    fontWeight: 700,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem'
+                  }}
+                >
+                  <span>[ 04 YOUTUBE UPLOAD</span>
+                  <ArrowRight size={13} />
+                  <span>]</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="glowing-btn"
+                  onClick={() => setWorkflowTab('clipper')}
+                  style={{
+                    padding: '0.4rem 0.95rem',
+                    fontSize: '0.78rem',
+                    background: 'transparent',
+                    color: 'var(--text-primary)',
+                    fontWeight: 700,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '0.4rem'
+                  }}
+                >
+                  <span>[</span>
+                  <ArrowLeft size={13} />
+                  <span>03 AUTO CLIPPER ]</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 className="active-video-close-btn"
@@ -3243,38 +3675,6 @@ Transcript:
                 </svg>
                 {t.form.tabYoutube}
               </button>
-
-              {/* Twitch Tab */}
-              <button
-                type="button"
-                id="source-mode-twitch"
-                className={`source-tab-btn ${sourceMode === 'twitch' ? 'active' : ''}`}
-                onClick={() => {
-                  setSourceMode('twitch');
-                  setError(null);
-                }}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  padding: '0.55rem 1.1rem',
-                  borderRadius: 0,
-                  border: sourceMode === 'twitch' ? '1px solid #9146ff' : '1px solid #201e2c',
-                  background: sourceMode === 'twitch' ? 'rgba(145, 70, 255, 0.15)' : '#08080c',
-                  color: sourceMode === 'twitch' ? '#ffffff' : 'var(--text-secondary)',
-                  cursor: 'pointer',
-                  fontWeight: 600,
-                  fontSize: '0.85rem',
-                  transition: 'all 0.2s ease',
-                  boxShadow: sourceMode === 'twitch' ? '0 0 15px rgba(145, 70, 255, 0.45)' : 'none'
-                }}
-              >
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style={{ color: '#9146ff' }}>
-                  <path d="M11.571 4.714h1.715v5.143H11.57zm4.715 0H18v5.143h-1.714zM6 0L1.714 4.286v15.428h5.143V24l4.286-4.286h3.428L22.286 12V0zm14.571 11.143l-3.428 3.428h-3.429l-3 3v-3H6.857V1.714h13.714Z" />
-                </svg>
-                {t.form.tabTwitch}
-              </button>
-
 
               {/* Google Drive Tab */}
               <button
@@ -3464,141 +3864,6 @@ Transcript:
                     )}
                   </button>
                 </div>
-              </div>
-            )}
-
-            {/* Twitch input mode */}
-            {sourceMode === 'twitch' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem', width: '100%' }}>
-                <label style={{ fontSize: '0.85rem', fontWeight: 500, color: 'var(--text-secondary)' }}>{t.form.twitchUrlLabel}</label>
-                <div className="form-main-input-row">
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'stretch',
-                      position: 'relative',
-                      flex: 1,
-                      height: '48px',
-                      background: '#060608',
-                      border: '1px solid rgba(145, 70, 255, 0.45)',
-                      boxShadow: '0 0 10px rgba(145, 70, 255, 0.2)',
-                      transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
-                    }}
-                    className="hacker-api-key-container"
-                  >
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        padding: '0 0.85rem',
-                        background: 'rgba(145, 70, 255, 0.12)',
-                        borderRight: '1px solid rgba(145, 70, 255, 0.3)',
-                        color: '#9146ff',
-                        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                        fontSize: '0.78rem',
-                        fontWeight: 700,
-                        letterSpacing: '0.05em',
-                        userSelect: 'none',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      TWITCH &gt;
-                    </div>
-                    <input
-                      id="twitch-url-input"
-                      type="text"
-                      value={twitchUrl || url}
-                      onChange={(e) => {
-                        setTwitchUrl(e.target.value);
-                        setUrl(e.target.value);
-                      }}
-                      disabled={loading}
-                      placeholder={t.form.twitchUrlPlaceholder}
-                      autoComplete="off"
-                      spellCheck={false}
-                      required={sourceMode === 'twitch'}
-                      style={{
-                        flex: 1,
-                        height: '100%',
-                        background: 'transparent',
-                        border: 'none',
-                        outline: 'none',
-                        padding: '0 0.85rem',
-                        fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-                        fontSize: '0.88rem',
-                        fontWeight: 400,
-                        color: '#ffffff',
-                        caretColor: '#9146ff',
-                      }}
-                    />
-                    {(twitchUrl || url) && !loading && (
-                      <div
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          padding: '0 0.35rem',
-                          background: 'rgba(255, 255, 255, 0.02)',
-                          borderLeft: '1px solid rgba(255, 255, 255, 0.08)',
-                        }}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => { setTwitchUrl(''); setUrl(''); }}
-                          title="Clear URL"
-                          style={{
-                            background: 'transparent',
-                            border: 'none',
-                            color: 'rgba(255, 255, 255, 0.4)',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: '0.3rem 0.5rem',
-                            transition: 'color 0.15s ease',
-                          }}
-                          onMouseEnter={(e) => (e.currentTarget.style.color = '#ff1e27')}
-                          onMouseLeave={(e) => (e.currentTarget.style.color = 'rgba(255, 255, 255, 0.4)')}
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
-                    )}
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="btn btn-primary"
-                    disabled={loading || !(twitchUrl.trim() || url.trim())}
-                    style={{
-                      height: '48px',
-                      padding: '0 1.5rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.5rem',
-                      whiteSpace: 'nowrap',
-                      borderRadius: 0,
-                      background: 'rgba(145, 70, 255, 0.2)',
-                      border: '1px solid #9146ff',
-                      color: '#ffffff',
-                      boxShadow: '0 0 10px rgba(145, 70, 255, 0.3)'
-                    }}
-                  >
-                    {loading ? (
-                      <>
-                        <div className="spinner" />
-                        <span>{t.form.processing}</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles size={16} color="#9146ff" />
-                        <span>{t.form.hackClips}</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-                <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--text-secondary)' }}>
-                  {t.form.twitchNotice}
-                </p>
               </div>
             )}
 
@@ -4416,7 +4681,7 @@ Transcript:
                           const text = evt.target?.result as string;
                           setManualSubtitlesContent(text);
                           setToastMessage(t.form.subtitlesLoaded(file.name));
-                          setTimeout(() => setToastMessage(null), 3000);
+                          clearToastAfter(3000);
                         };
                         reader.readAsText(file);
                       }}
@@ -5101,6 +5366,67 @@ Transcript:
               </section>
             )}
 
+            {/* Rendered exports stored on the server (survives reloads/browsers) */}
+            {renderHistory.some(batch => (batch.clips || []).some(c => c.status === 'completed' && c.download_url)) && (
+              <section
+                className="glass-panel"
+                style={{ padding: '1rem', border: '1px solid #201e2c', borderLeft: '3px solid #00ff66', background: '#0a0a0f' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                    <span style={{ color: '#00ff66', fontFamily: 'var(--font-mono)', fontWeight: 800 }}>&gt;_</span>
+                    <h3 style={{ margin: 0, fontSize: '0.95rem', color: 'var(--text-primary)' }}>
+                      Rendered Files
+                    </h3>
+                    <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)' }}>
+                      tersimpan di server · tidak perlu render ulang
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowRenderHistory(v => !v)}
+                    style={{ background: '#08080c', border: '1px solid #201e2c', color: 'var(--text-secondary)', padding: '0.3rem 0.55rem', cursor: 'pointer' }}
+                    title={showRenderHistory ? 'Minimize' : 'Expand'}
+                  >
+                    {showRenderHistory ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                  </button>
+                </div>
+                {showRenderHistory && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '0.7rem', marginTop: '0.85rem' }}>
+                    {renderHistory.map(batch => {
+                      const clips = (batch.clips || []).filter(c => c.status === 'completed' && c.download_url);
+                      if (!clips.length) return null;
+                      const stamp = batch.created_at || batch.updated_at;
+                      return (
+                        <div key={batch.batch_id} style={{ border: '1px solid #201e2c', background: '#08080c', padding: '0.6rem 0.7rem' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', fontSize: '0.7rem', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginBottom: '0.4rem' }}>
+                            <span>{batch.recovered ? 'EXPORT LAMA (RECOVERED)' : 'BATCH RENDER'}</span>
+                            <span>{stamp ? formatRelativeTime(stamp) : ''} · {clips.length} file</span>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                            {clips.map((clip, index) => (
+                              <div key={`${batch.batch_id}_${clip.clip_index}_${index}`} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.6rem' }}>
+                                <span style={{ fontSize: '0.8rem', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={clip.title}>
+                                  {clip.clip_index + 1}. {clip.title}
+                                </span>
+                                <a
+                                  href={clip.download_url}
+                                  download
+                                  style={{ flexShrink: 0, fontSize: '0.7rem', fontWeight: 700, color: '#00ff66', border: '1px solid rgba(0,255,102,0.4)', padding: '0.2rem 0.5rem', textDecoration: 'none' }}
+                                >
+                                  ⬇ MP4
+                                </a>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            )}
+
             {/* Decoding Video / Analyzing Progress Section (strictly rendered in Process #2 under History) */}
             {loading && (
               <section
@@ -5411,10 +5737,6 @@ Transcript:
                               }
                             }}
                           />
-                        ) : (result.source_type === 'twitch' || result.video_id?.startsWith('twitch_')) ? (
-                          <div id="twitch-player-container" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}>
-                            <div id="twitch-player"></div>
-                          </div>
                         ) : (
                           <div id="youtube-player-container" style={{ width: '100%', height: '100%', position: 'absolute', top: 0, left: 0 }}>
                             <div id="youtube-player"></div>
@@ -5711,7 +6033,7 @@ Transcript:
                       overflowY: 'auto'
                     }}
                   >
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '1.25rem' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem', borderBottom: '1px solid var(--border-color)', paddingBottom: '1.25rem' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <h2 style={{ fontSize: '1.35rem', fontWeight: 600 }}>{t.results.recommendedClips}</h2>
                         <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 500 }}>{t.results.sortLabel(sortBy.toUpperCase())}</span>
@@ -5844,6 +6166,13 @@ Transcript:
                           </button>
                           <button
                             type="button"
+                            className="toolbar-action-btn toolbar-btn-copy-md"
+                            onClick={handleDownloadMarkdown}
+                          >
+                            Download .md
+                          </button>
+                          <button
+                            type="button"
                             className="toolbar-action-btn toolbar-btn-json"
                             onClick={handleExportJSON}
                           >
@@ -5860,9 +6189,9 @@ Transcript:
                           )}
                         </div>
                       </div>
-                    </div>
+                      </div>
 
-                    <div className="clips-list" style={{ maxHeight: 'none', flex: 1 }}>
+                      <div className="clips-list" style={{ maxHeight: 'none', flex: 1 }}>
                       {sortedClips.length === 0 ? (
                         <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-muted)', fontSize: '0.9rem' }}>
                           {t.results.noClipsMatch}
@@ -5902,7 +6231,7 @@ Transcript:
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1 }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
-                                    <span className="clip-title" style={{ color: !!markedClips[`${clip.start_time}_${clip.end_time}`] ? 'var(--secondary)' : 'var(--text-primary)', opacity: 1 }}>
+                                    <span className="clip-title" style={{ color: markedClips[`${clip.start_time}_${clip.end_time}`] ? 'var(--secondary)' : 'var(--text-primary)', opacity: 1 }}>
                                       {clip.title}
                                     </span>
                                     <button
@@ -6212,11 +6541,11 @@ Transcript:
         {/* Embedded Clip Studio Section with side inline batch progress */}
         {result && (
           <div style={{ display: workflowTab === 'clipper' ? 'block' : 'none' }}>
+            <Suspense fallback={<div className="glass-panel" style={{ padding: '2rem', textAlign: 'center' }}>Memuat Clip Studio...</div>}>
             <ClipStudioSection
               videoUrl={result.video_url || url}
               videoId={result.video_id}
               allClips={result.clips}
-              transcript={result.transcript || []}
               markedClips={markedClipsList}
               activeClip={activeClip}
               onStartRender={handleStartBatchRender}
@@ -6235,6 +6564,25 @@ Transcript:
               allowAppUpdates={allowAppUpdates}
               onOpenCookiesModal={() => setIsCookiesModalOpen(true)}
               onBackToClips={() => setWorkflowTab('clips')}
+              onUploadToYouTube={handleUploadToYouTube}
+              onPrepareUpload={() => setWorkflowTab('upload')}
+            />
+            </Suspense>
+          </div>
+        )}
+
+        {/* YouTube Upload Page (04) */}
+        {result && (
+          <div style={{ display: workflowTab === 'upload' ? 'block' : 'none' }}>
+            <YouTubeUploadPage
+              result={result}
+              batchProgress={batchProgress}
+              youtubeStatus={youtubeStatus}
+              playlists={youtubePlaylists}
+              uploads={youtubeUploads}
+              onDisconnect={disconnectYouTube}
+              onUpload={handleUploadToYouTube}
+              onBackToClipper={() => setWorkflowTab('clipper')}
             />
           </div>
         )}
@@ -6395,7 +6743,7 @@ Transcript:
         />
 
         {/* Clip Trimmer & Context Editor Modal */}
-        <ClipTrimmerModal
+        <Suspense fallback={null}><ClipTrimmerModal
           isOpen={Boolean(trimmerClip)}
           clip={trimmerClip}
           videoId={result?.video_id || ''}
@@ -6405,12 +6753,11 @@ Transcript:
           videoDuration={result?.duration || 0}
           transcript={result?.transcript}
           onClose={() => setTrimmerClip(null)}
-          onApply={handleApplyAdjustedClipToResults}
           onDownload={async (adjustedClip) => {
             handleApplyAdjustedClipToResults(adjustedClip);
             await handleDownloadRawClip(adjustedClip);
           }}
-        />
+        /></Suspense>
 
         {/* Global Fancy Clear Temp Confirmation Modal */}
         {showGlobalClearModal && (
@@ -6470,4 +6817,3 @@ Transcript:
     </>
   );
 }
-

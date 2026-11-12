@@ -9,7 +9,6 @@ from typing import Optional
 from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
 
-from backend.utils.text import canonical_video_url
 from backend.config import (
     EXPORTS_DIR,
     TEMP_DIR,
@@ -414,8 +413,7 @@ async def get_clip_frame(
     Guarantees returning a real video frame, never a promotional thumbnail.
     """
     try:
-        effective_vurl = video_url or canonical_video_url(video_id)
-        frame_path = await asyncio.to_thread(extract_clip_frame, effective_vurl, video_id, timestamp, cookies)
+        frame_path = await asyncio.to_thread(extract_clip_frame, video_url or "", video_id, timestamp, cookies)
         if frame_path and os.path.exists(frame_path):
             return FileResponse(frame_path, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
     except Exception as e:
@@ -450,8 +448,7 @@ async def detect_face(
     }
     try:
         # First try to extract or get the cached frame
-        effective_vurl = video_url or canonical_video_url(video_id)
-        frame_path = await asyncio.to_thread(extract_clip_frame, effective_vurl, video_id, timestamp, cookies)
+        frame_path = await asyncio.to_thread(extract_clip_frame, video_url or "", video_id, timestamp, cookies)
         if frame_path and os.path.exists(frame_path):
             box = await asyncio.to_thread(
                 detect_speaker_face_box,
