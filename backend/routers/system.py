@@ -15,10 +15,12 @@ from backend.services.system_service import (
     clear_temp_files,
     get_current_git_info,
     get_temp_storage_summary,
+    get_ytdlp_version_info,
     is_server_environment,
     is_update_allowed,
     run_git_command,
     trigger_detached_restart,
+    update_ytdlp_package,
 )
 
 router = APIRouter(tags=["System"])
@@ -245,3 +247,20 @@ async def api_restart_app(authorized: bool = Depends(verify_admin_access)):
         "status": "restarting",
         "message": "Cheat Clip PRO is restarting..."
     }
+
+
+@router.get("/api/system/ytdlp")
+def api_get_ytdlp_info():
+    """Returns installed yt-dlp version information."""
+    return get_ytdlp_version_info()
+
+
+@router.post("/api/system/ytdlp/update")
+def api_update_ytdlp(authorized: bool = Depends(verify_admin_access)):
+    """Upgrades yt-dlp to latest version to ensure YouTube player signature extraction stays up to date."""
+    if not is_update_allowed():
+        raise HTTPException(
+            status_code=403,
+            detail="Package updates via API are disabled in server / Docker environments."
+        )
+    return update_ytdlp_package()

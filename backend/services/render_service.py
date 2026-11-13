@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import re
@@ -25,6 +26,53 @@ RENDER_BATCHES: Dict[str, Dict[str, Any]] = {}
 BATCH_REQUESTS: Dict[str, RenderBatchRequest] = {}
 # Concurrency gate: serialize video rendering (1 active render job at a time) to prevent CPU starvation on low-spec servers
 _RENDER_SEMAPHORE = asyncio.Semaphore(1)
+
+BATCH_STATE_FILE = TEMP_DIR / "render_batches_state.json"
+
+
+def save_render_batches():
+    """Safely saves active/completed batches to disk to survive server reloads."""
+    try:
+        data = {}
+        for b_id, b_data in list(RENDER_BATCHES.items()):
+            data[b_id] = {
+                "batch_id": b_data.get("batch_id"),
+                "total_clips": b_data.get("total_clips"),
+                "current_clip_index": b_data.get("current_clip_index"),
+                "overall_status": b_data.get("overall_status"),
+                "clips": b_data.get("clips", []),
+                "zip_url": b_data.get("zip_url"),
+                "is_merged": b_data.get("is_merged", False),
+                "merged_segments_count": b_data.get("merged_segments_count")
+            }
+        with open(BATCH_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+    except Exception as e:
+        logger.debug(f"Failed to persist batch states: {e}")
+
+
+def load_render_batches():
+    """Loads previously saved batches on server startup."""
+    if not BATCH_STATE_FILE.exists():
+        return
+    try:
+        if BATCH_STATE_FILE.stat().st_size == 0:
+            return
+        with open(BATCH_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                for b_id, b_data in data.items():
+                    if b_id not in RENDER_BATCHES:
+                        if b_data.get("overall_status") == "running":
+                            b_data["overall_status"] = "interrupted"
+                        RENDER_BATCHES[b_id] = b_data
+    except Exception as e:
+        logger.debug(f"Failed to load batch states: {e}")
+
+
+load_render_batches()
 
 
 async def render_single_batch_clip(
@@ -310,6 +358,8 @@ def update_batch_summary_and_zip(batch_id: str, settings: RenderSettingsModel):
     else:
         batch["overall_status"] = "completed"
         batch["warning_message"] = None
+
+    save_render_batches()
 
 
 async def render_merged_batch_clips(

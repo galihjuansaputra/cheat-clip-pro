@@ -27,6 +27,7 @@ from backend.services.render_service import (
     RENDER_BATCHES,
     process_batch_rendering,
     process_batch_retry,
+    save_render_batches,
 )
 
 router = APIRouter(tags=["Render"])
@@ -92,6 +93,7 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
         }
 
     BATCH_REQUESTS[batch_id] = request
+    save_render_batches()
 
     background_tasks.add_task(process_batch_rendering, batch_id, request)
     return {"batch_id": batch_id, "total_clips": 1 if is_merged else len(request.clips), "is_merged": is_merged}

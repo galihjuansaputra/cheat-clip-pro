@@ -375,3 +375,48 @@ def trigger_detached_restart(delay: float = 2.5):
         close_fds=True
     )
     logger.info(f"Detached restart runner spawned with delay={delay}s")
+
+
+def get_ytdlp_version_info() -> dict:
+    """Returns the currently installed yt-dlp version."""
+    try:
+        from yt_dlp.version import __version__ as version
+    except Exception:
+        try:
+            import yt_dlp
+            version = getattr(yt_dlp, "__version__", "unknown")
+        except Exception as e:
+            version = f"Error: {e}"
+    return {
+        "version": version,
+        "is_server": is_server_environment(),
+        "allow_update": is_update_allowed()
+    }
+
+
+def update_ytdlp_package() -> dict:
+    """Safely upgrades yt-dlp using python -m pip install --upgrade yt-dlp."""
+    if not is_update_allowed():
+        return {
+            "success": False,
+            "message": "Updating packages via API is disabled in server mode for safety."
+        }
+    try:
+        cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "yt-dlp"]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+        import yt_dlp
+        import yt_dlp.version
+        import importlib
+        importlib.reload(yt_dlp)
+        importlib.reload(yt_dlp.version)
+        new_version = getattr(yt_dlp.version, "__version__", "unknown")
+        return {
+            "success": res.returncode == 0,
+            "version": new_version,
+            "output": res.stdout[:500] if res.stdout else res.stderr[:500]
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": str(e)
+        }
