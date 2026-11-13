@@ -236,10 +236,13 @@ async def render_single_batch_clip(
 
         # 3. Render Final Vertical MP4
         clip_status["status"] = "rendering"
-        clip_status["progress_percent"] = 70
+        clip_status["progress_percent"] = 50
 
         out_filename = f"clip_{idx+1}_{batch_id}.mp4"
         out_path = str(EXPORTS_DIR / out_filename)
+
+        def _on_single_clip_progress(frac: float):
+            clip_status["progress_percent"] = min(98, int(50.0 + frac * 48.0))
 
         await asyncio.to_thread(
             render_clip_to_mp4,
@@ -275,7 +278,8 @@ async def render_single_batch_clip(
             hardware_accel=settings.hardware_accel or "auto",
             title_y_percent=settings.title_y_percent,
             crop_x_percent=getattr(settings, "crop_x_percent", None),
-            title_x_percent=getattr(settings, "title_x_percent", 50.0)
+            title_x_percent=getattr(settings, "title_x_percent", 50.0),
+            progress_callback=_on_single_clip_progress
         )
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):
@@ -541,12 +545,15 @@ async def render_merged_batch_clips(
 
         # 4. Render Final Single MP4
         clip_status["status"] = "rendering"
-        clip_status["progress_percent"] = 65
+        clip_status["progress_percent"] = 55
 
         clean_safe_title = re.sub(r'[\\/*?:"<>|]', "", clip_status.get("base_title") or "highlight_compilation")
         clean_safe_title = clean_safe_title.replace(" ", "_")[:40] or "compilation"
         out_filename = f"compilation_{clean_safe_title}_{batch_id}.mp4"
         out_path = str(EXPORTS_DIR / out_filename)
+
+        def _on_compilation_progress(frac: float):
+            clip_status["progress_percent"] = min(98, int(55.0 + frac * 43.0))
 
         await asyncio.to_thread(
             render_clip_to_mp4,
@@ -582,7 +589,8 @@ async def render_merged_batch_clips(
             hardware_accel=settings.hardware_accel or "auto",
             title_y_percent=settings.title_y_percent,
             crop_x_percent=getattr(settings, "crop_x_percent", None),
-            title_x_percent=getattr(settings, "title_x_percent", 50.0)
+            title_x_percent=getattr(settings, "title_x_percent", 50.0),
+            progress_callback=_on_compilation_progress
         )
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):

@@ -437,7 +437,12 @@ export default function App() {
 
     setIsLaunchingRender(true);
 
-    const isClientMode = !isMobileDevice() && (settings.hardwareAccel === 'browser_wasm' || settings.renderEngine === 'client' || (sourceMode === 'upload' && Boolean(uploadedVideoFile)));
+    const isClientMode = !isMobileDevice() && (
+      settings.renderEngine === 'client' ||
+      settings.hardwareAccel === 'browser_wasm' ||
+      settings.hardwareAccel === 'client_gpu' ||
+      (sourceMode === 'upload' && Boolean(uploadedVideoFile))
+    );
 
     if (isClientMode) {
       try {

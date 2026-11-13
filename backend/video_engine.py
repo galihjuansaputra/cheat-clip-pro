@@ -2851,6 +2851,85 @@ def check_has_audio(video_path: str) -> bool:
         return True
 
 
+def _run_ffmpeg_command_with_progress(
+    cmd: List[str],
+    total_duration: float,
+    timeout: float,
+    progress_callback: Optional[Callable[[float], None]] = None
+) -> Tuple[int, str]:
+    """
+    Executes an FFmpeg command with -progress pipe:1 and streams progress to callback.
+    Captures stderr asynchronously to prevent pipe deadlocks and provide complete error reporting.
+    """
+    full_cmd = list(cmd)
+    if "-progress" not in full_cmd:
+        full_cmd.insert(1, "pipe:1")
+        full_cmd.insert(1, "-progress")
+        full_cmd.insert(3, "-nostats")
+
+    process = subprocess.Popen(
+        full_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1
+    )
+    stderr_lines: List[str] = []
+
+    def _read_stderr():
+        if process.stderr:
+            for line in iter(process.stderr.readline, ''):
+                stderr_lines.append(line)
+            try:
+                process.stderr.close()
+            except Exception:
+                pass
+
+    t = threading.Thread(target=_read_stderr, daemon=True)
+    t.start()
+
+    start_time = time.time()
+    try:
+        if process.stdout:
+            for line in iter(process.stdout.readline, ''):
+                if timeout and (time.time() - start_time) > timeout:
+                    process.kill()
+                    raise subprocess.TimeoutExpired(full_cmd, timeout)
+                line = line.strip()
+                if not line:
+                    continue
+                if line.startswith("out_time_us="):
+                    try:
+                        us_val = int(line.split("=", 1)[1])
+                        cur_sec = us_val / 1_000_000.0
+                        if total_duration > 0 and progress_callback:
+                            frac = min(0.99, max(0.0, cur_sec / total_duration))
+                            progress_callback(frac)
+                    except Exception:
+                        pass
+                elif line == "progress=end":
+                    if progress_callback:
+                        progress_callback(1.0)
+            try:
+                process.stdout.close()
+            except Exception:
+                pass
+    except subprocess.TimeoutExpired:
+        raise
+    except Exception as e:
+        logger.warning(f"Error while reading FFmpeg progress: {e}")
+    finally:
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        t.join(timeout=2)
+
+    stderr_text = "".join(stderr_lines).strip()
+    return process.returncode, stderr_text
+
+
 def render_clip_to_mp4(
     video_path: str,
     output_mp4_path: str,
@@ -2890,7 +2969,8 @@ def render_clip_to_mp4(
     hardware_accel: Optional[str] = "auto",
     title_y_percent: Optional[float] = None,
     crop_x_percent: Optional[float] = None,
-    title_x_percent: Optional[float] = 50.0
+    title_x_percent: Optional[float] = 50.0,
+    progress_callback: Optional[Callable[[float], None]] = None
 ) -> str:
     """
     Renders the final 1080x1920 short-form video with layout, aspect ratio, titles, subtitles,
@@ -3125,15 +3205,22 @@ def render_clip_to_mp4(
 
     logger.info(f"Rendering final vertical clip to {output_mp4_path} with {chosen_encoder_name} (Duration: {dur:.1f}s, Timeout: {render_timeout}s, Selection: {hardware_accel}, BGM: {bgm_enabled}, Watermark: {watermark_enabled})...")
 
-    res = None
+    res_code = -1
+    err_text = ""
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, timeout=render_timeout)
+        res_code, err_text = _run_ffmpeg_command_with_progress(
+            cmd,
+            total_duration=dur,
+            timeout=render_timeout,
+            progress_callback=progress_callback
+        )
     except subprocess.TimeoutExpired:
         logger.warning(f"Hardware encoder ({chosen_encoder_name}) timed out after {render_timeout}s.")
-        res = None
+        res_code = -1
+        err_text = f"Timed out after {render_timeout}s"
 
-    if res is None or res.returncode != 0:
-        err_msg_initial = res.stderr[:250] if (res and res.stderr) else f"Timed out after {render_timeout}s"
+    if res_code != 0 or not (os.path.exists(output_mp4_path) and is_valid_mp4(output_mp4_path)):
+        err_msg_initial = err_text[:250] if err_text else f"Timed out after {render_timeout}s"
         logger.warning(f"Hardware encoder ({chosen_encoder_name}) failed or timed out: {err_msg_initial}")
         # Automatic fallback to universal CPU encoding (libx264) if chosen hardware encoder fails
         if chosen_encoder_name != "libx264":
@@ -3152,9 +3239,15 @@ def render_clip_to_mp4(
                 "-shortest",
                 str(output_mp4_path)
             ]
-            res_cpu = None
+            cpu_res_code = -1
+            cpu_err_text = ""
             try:
-                res_cpu = subprocess.run(cpu_cmd, capture_output=True, text=True, timeout=cpu_render_timeout)
+                cpu_res_code, cpu_err_text = _run_ffmpeg_command_with_progress(
+                    cpu_cmd,
+                    total_duration=dur,
+                    timeout=cpu_render_timeout,
+                    progress_callback=progress_callback
+                )
             except subprocess.TimeoutExpired:
                 logger.error(f"FFmpeg CPU fallback timed out after {cpu_render_timeout}s.")
                 if os.path.exists(output_mp4_path):
@@ -3164,8 +3257,10 @@ def render_clip_to_mp4(
                         pass
                 raise RuntimeError(f"FFmpeg rendering timed out after {cpu_render_timeout}s for clip of duration {dur:.1f}s.")
 
-            if res_cpu.returncode == 0 and os.path.exists(output_mp4_path) and is_valid_mp4(output_mp4_path):
+            if cpu_res_code == 0 and os.path.exists(output_mp4_path) and is_valid_mp4(output_mp4_path):
                 logger.info(f"Successfully rendered with CPU fallback: {output_mp4_path}")
+                if progress_callback:
+                    progress_callback(1.0)
                 return str(output_mp4_path)
             else:
                 if os.path.exists(output_mp4_path):
@@ -3173,25 +3268,24 @@ def render_clip_to_mp4(
                         os.unlink(output_mp4_path)
                     except Exception:
                         pass
-                err_text = res_cpu.stderr if (res_cpu and res_cpu.stderr) else (res.stderr if (res and res.stderr) else "Unknown FFmpeg error")
-                if "moov atom not found" in err_text.lower():
+                active_err = cpu_err_text or err_text or "Unknown FFmpeg error"
+                if "moov atom not found" in active_err.lower():
                     raise RuntimeError("FFmpeg rendering failed: Source video segment is incomplete ('moov atom not found'). Please retry rendering this clip.")
-                logger.error(f"FFmpeg CPU fallback also failed: {err_text}")
-                raise RuntimeError(f"FFmpeg rendering failed: {err_text}")
+                logger.error(f"FFmpeg CPU fallback also failed: {active_err}")
+                raise RuntimeError(f"FFmpeg rendering failed: {active_err}")
         else:
             if os.path.exists(output_mp4_path):
                 try:
                     os.unlink(output_mp4_path)
                 except Exception:
                     pass
-            if res is None:
-                raise RuntimeError(f"FFmpeg rendering timed out after {render_timeout}s for clip of duration {dur:.1f}s.")
-            err_text = res.stderr or "Unknown FFmpeg error"
             if "moov atom not found" in err_text.lower():
                 raise RuntimeError("FFmpeg rendering failed: Source video segment is incomplete ('moov atom not found'). Please retry rendering this clip.")
             logger.error(f"FFmpeg render error: {err_text}")
-            raise RuntimeError(f"FFmpeg rendering failed: {err_text}")
+            raise RuntimeError(f"FFmpeg rendering failed: {err_text or 'Unknown FFmpeg error'}")
 
+    if progress_callback:
+        progress_callback(1.0)
     return str(output_mp4_path)
 
 
