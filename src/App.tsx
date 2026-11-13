@@ -6,6 +6,7 @@ import { getStoredCookies, hasStoredCookies } from './utils/cookieUtils';
 import { extractAudioFromVideoClient } from './utils/audioExtractor';
 import { renderClipClientSide, triggerBrowserDownload } from './services/clientRenderer';
 import { renderClipWebCodecs, isWebCodecsGpuSupported } from './services/webcodecsRenderer';
+import { buildCaptionChunksForClip } from './services/captionUtils';
 import { isMobileDevice, requestWakeLock, releaseWakeLock } from './utils/deviceUtils';
 import { LayoutMetricsSync } from './utils/layoutMetricsSync';
 import { useLanguage } from './locales';
@@ -547,13 +548,36 @@ export default function App() {
 
           if (useWebCodecsGpu) {
             try {
+              const isPreTrimmed = !(sourceMode === 'upload' && uploadedVideoFile);
+              const clipChunks = buildCaptionChunksForClip(
+                result.transcript,
+                clip.start_time,
+                clip.end_time,
+                clip.transcript
+              );
+
               blob = await renderClipWebCodecs({
                 videoSourceUrl: rawSourceUrl,
-                startTime: (sourceMode === 'upload' && uploadedVideoFile) ? clip.start_time : undefined,
-                endTime: (sourceMode === 'upload' && uploadedVideoFile) ? clip.end_time : undefined,
+                startTime: isPreTrimmed ? 0 : clip.start_time,
+                endTime: isPreTrimmed ? undefined : clip.end_time,
+                clipTimeOffset: isPreTrimmed ? clip.start_time : 0,
                 aspectRatio: settings.aspectRatio as any,
                 backgroundStyle: settings.backgroundStyle as any,
                 titleText: settings.titleText,
+                titleYPercent: settings.titleYPercent,
+                titleFont: settings.titleFont,
+                titleDuration: settings.titleDuration,
+                titleFontSizePx: settings.titleFontSizePx,
+                subtitlesEnabled: settings.subtitlesEnabled,
+                captionChunks: clipChunks,
+                captionStyle: settings.captionStyle,
+                captionFont: settings.captionFont,
+                fontSizePx: settings.fontSizePx,
+                textCase: settings.textCase,
+                subtitleYPercent: settings.subtitleYPercent,
+                subtitleOffsetSeconds: settings.subtitleOffsetSeconds,
+                subtitlePositionMode: settings.subtitlePositionMode,
+                subtitleCenterYPercent: settings.subtitleCenterYPercent,
                 fileName: `${filename}.mp4`,
                 onProgress: (pct, stage) => {
                   setBatchProgress(prev => {

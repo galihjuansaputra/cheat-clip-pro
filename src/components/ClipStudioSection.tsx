@@ -305,7 +305,7 @@ export const DEFAULT_STUDIO_PREFS: Required<StudioPreferences> = {
   subtitlePositionMode: 'bottom',
   titleDuration: 'entire',
   originalAudioVolume: 100,
-  hardwareAccel: 'nvenc',
+  hardwareAccel: 'client_gpu',
   titleYPercent: 17,
   titleXPercent: 50,
   subtitleYPercent: 21,
@@ -475,13 +475,15 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [hasWebCodecs] = useState<boolean>(() => isWebCodecsGpuSupported());
 
   // Hardware acceleration / Video Encoder state:
-  // Defaults to 'nvenc' (dedicated NVIDIA GPU hardware encoder) and never defaults to CPU
+  // Defaults to Client GPU Hardware Acceleration ('client_gpu') to offload all rendering work to user's device (0% server load)
   const [hardwareAccel, setHardwareAccel] = useState<HardwareAccelOption>(() => {
     const saved = getSavedStudioPreferences().hardwareAccel;
-    if (saved && saved !== 'browser_wasm' && saved !== 'client_gpu' && saved !== 'cpu') {
-      return saved;
+    if (saved) {
+      if (saved === 'client_gpu' && isWebCodecsGpuSupported()) return 'client_gpu';
+      if (saved === 'browser_wasm') return 'browser_wasm';
+      if (saved === 'auto' || saved === 'cpu') return saved;
     }
-    return 'nvenc';
+    return isWebCodecsGpuSupported() ? 'client_gpu' : 'browser_wasm';
   });
   const [hardwareInfo, setHardwareInfo] = useState<HardwareAccelInfo | null>(null);
   const [hwDropdownOpen, setHwDropdownOpen] = useState<boolean>(false);
@@ -501,14 +503,20 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
         if (res.ok) {
           const data: HardwareAccelInfo = await res.json();
           setHardwareInfo(data);
-          if (data.gpu_name) {
-            setClientGpuName(data.gpu_name);
-          }
-          const saved = getSavedStudioPreferences().hardwareAccel;
-          // Never default to CPU or legacy WASM; prioritize dedicated NVIDIA NVENC GPU
-          if (!saved || saved === 'browser_wasm' || saved === 'client_gpu' || saved === 'cpu') {
-            setHardwareAccel(data.support?.nvenc ? 'nvenc' : (data.recommended as HardwareAccelOption || 'auto'));
-          }
+          // If user previously had a server encoder selected that is unavailable on this host (e.g. nvenc on VPS),
+          // automatically fallback to client_gpu instead of keeping an unavailable selection!
+          setHardwareAccel(current => {
+            if (current === 'nvenc' && !data.support?.nvenc) {
+              return isWebCodecsGpuSupported() ? 'client_gpu' : 'browser_wasm';
+            }
+            if (current === 'amf' && !data.support?.amf) {
+              return isWebCodecsGpuSupported() ? 'client_gpu' : 'browser_wasm';
+            }
+            if (current === 'qsv' && !data.support?.qsv) {
+              return isWebCodecsGpuSupported() ? 'client_gpu' : 'browser_wasm';
+            }
+            return current;
+          });
         }
       } catch {
         // Backend offline or loading
@@ -4491,12 +4499,30 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   />
                   <div className="hw-dropdown-menu" role="listbox">
                     {[
+                      ...(hasWebCodecs ? [{
+                        value: 'client_gpu' as HardwareAccelOption,
+                        badge: 'GPU',
+                        title: `Browser Client GPU (${clientGpuName})`,
+                        desc: 'Native WebCodecs VideoEncoder running in browser (0% Server CPU · Client GPU Accel)',
+                        status: 'Default (Client GPU)',
+                        isReady: true,
+                        disabled: false,
+                      }] : []),
+                      {
+                        value: 'browser_wasm' as HardwareAccelOption,
+                        badge: 'WASM',
+                        title: t.studio.hwWasm,
+                        desc: t.studio.hwWasmDesc || 'Browser engine client-side (0% Server CPU)',
+                        status: 'Browser WASM',
+                        isReady: true,
+                        disabled: false,
+                      },
                       {
                         value: 'auto' as HardwareAccelOption,
                         badge: 'AUTO',
                         title: hardwareInfo?.gpu_name ? `${t.studio.hwAuto} (${hardwareInfo.gpu_name})` : t.studio.hwAuto,
-                        desc: hardwareInfo?.recommended ? `${t.studio.hwAutoDesc} · Recommended: ${hardwareInfo.gpu_name || hardwareInfo.recommended.toUpperCase()}` : t.studio.hwAutoDesc,
-                        status: hardwareInfo?.recommended ? `${t.studio.hwDetectedPill}: ${(hardwareInfo.gpu_name || hardwareInfo.recommended).toUpperCase()}` : t.studio.hwDetectedPill,
+                        desc: hardwareInfo?.recommended ? `${t.studio.hwAutoDesc} · Server Encoder: ${(hardwareInfo.gpu_name || hardwareInfo.recommended).toUpperCase()}` : t.studio.hwAutoDesc,
+                        status: hardwareInfo?.recommended ? `Server ${(hardwareInfo.gpu_name || hardwareInfo.recommended).toUpperCase()}` : t.studio.hwDetectedPill,
                         isReady: true,
                         disabled: false,
                       },
@@ -4504,7 +4530,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         value: 'nvenc' as HardwareAccelOption,
                         badge: 'NVENC',
                         title: hardwareInfo?.gpu_name ? `NVIDIA NVENC (${hardwareInfo.gpu_name})` : t.studio.hwNvenc,
-                        desc: hardwareInfo?.gpu_name ? `Dedicated GPU Hardware Encoding using ${hardwareInfo.gpu_name}` : t.studio.hwNvencDesc,
+                        desc: hardwareInfo?.gpu_name ? `Server GPU Hardware Encoding using ${hardwareInfo.gpu_name}` : t.studio.hwNvencDesc,
                         status: hardwareInfo?.support?.nvenc ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill,
                         isReady: Boolean(hardwareInfo?.support?.nvenc),
                         disabled: Boolean(hardwareInfo?.support && !hardwareInfo.support.nvenc),
@@ -4533,24 +4559,6 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         title: t.studio.hwCpu,
                         desc: t.studio.hwCpuDesc,
                         status: t.studio.hwSupportedPill,
-                        isReady: true,
-                        disabled: false,
-                      },
-                      ...(hasWebCodecs ? [{
-                        value: 'client_gpu' as HardwareAccelOption,
-                        badge: 'GPU',
-                        title: `Browser Client GPU (${clientGpuName})`,
-                        desc: 'Native WebCodecs VideoEncoder running directly in browser (0% Server CPU)',
-                        status: 'Browser Native',
-                        isReady: true,
-                        disabled: false,
-                      }] : []),
-                      {
-                        value: 'browser_wasm' as HardwareAccelOption,
-                        badge: 'WASM',
-                        title: t.studio.hwWasm,
-                        desc: t.studio.hwWasmDesc || 'Browser engine client-side (0% server CPU)',
-                        status: 'Browser WASM',
                         isReady: true,
                         disabled: false,
                       },
@@ -5180,6 +5188,14 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       onChange={(e) => setHardwareAccel(e.target.value as HardwareAccelOption)}
                       title={t.studio.hwChangeHint}
                     >
+                      {hasWebCodecs && (
+                        <option value="client_gpu">
+                          [GPU] Browser Client GPU ({clientGpuName})
+                        </option>
+                      )}
+                      <option value="browser_wasm">
+                        [WASM] {t.studio.hwWasm || 'Browser WASM Engine'}
+                      </option>
                       <option value="auto">
                         {t.studio.hwAuto} {hardwareInfo?.gpu_name ? `(${hardwareInfo.gpu_name})` : (hardwareInfo?.recommended ? `(${hardwareInfo.recommended.toUpperCase()})` : '')}
                       </option>
@@ -5194,14 +5210,6 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       </option>
                       <option value="cpu">
                         {t.studio.hwCpu} ({t.studio.hwSupportedPill})
-                      </option>
-                      {hasWebCodecs && (
-                        <option value="client_gpu">
-                          [GPU] Browser Client GPU ({clientGpuName})
-                        </option>
-                      )}
-                      <option value="browser_wasm">
-                        [WASM] {t.studio.hwWasm || 'Browser WASM Engine'}
                       </option>
                     </select>
                   </div>
