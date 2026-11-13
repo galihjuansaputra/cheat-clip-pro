@@ -1,11 +1,6 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
 import { HeatmapTimeline } from './components/HeatmapTimeline';
 import { LanguageSwitcher } from './components/LanguageSwitcher';
-import { ClipStudioSection } from './components/ClipStudioSection';
-import { CookiesModal } from './components/CookiesModal';
-import { CookieWarningModal } from './components/CookieWarningModal';
-import { ClipTrimmerModal } from './components/ClipTrimmerModal';
-import { AppUpdateModal } from './components/AppUpdateModal';
 import { resilientFetch } from './utils/api';
 import { getStoredCookies, hasStoredCookies } from './utils/cookieUtils';
 import { extractAudioFromVideoClient } from './utils/audioExtractor';
@@ -15,6 +10,23 @@ import { isMobileDevice, requestWakeLock, releaseWakeLock } from './utils/device
 import { LayoutMetricsSync } from './utils/layoutMetricsSync';
 import { useLanguage } from './locales';
 import { HackerApiKeyInput } from './components/HackerApiKeyInput';
+
+// Lazy-loaded modal and heavy studio components to minimize initial bundle size and speed up page load
+const ClipStudioSection = lazy(() =>
+  import('./components/ClipStudioSection').then(m => ({ default: m.ClipStudioSection }))
+);
+const CookiesModal = lazy(() =>
+  import('./components/CookiesModal').then(m => ({ default: m.CookiesModal }))
+);
+const CookieWarningModal = lazy(() =>
+  import('./components/CookieWarningModal').then(m => ({ default: m.CookieWarningModal }))
+);
+const ClipTrimmerModal = lazy(() =>
+  import('./components/ClipTrimmerModal').then(m => ({ default: m.ClipTrimmerModal }))
+);
+const AppUpdateModal = lazy(() =>
+  import('./components/AppUpdateModal').then(m => ({ default: m.AppUpdateModal }))
+);
 import {
   Play,
   Download,
@@ -6212,30 +6224,36 @@ Transcript:
         {/* Embedded Clip Studio Section with side inline batch progress */}
         {result && (
           <div style={{ display: workflowTab === 'clipper' ? 'block' : 'none' }}>
-            <ClipStudioSection
-              videoUrl={result.video_url || url}
-              videoId={result.video_id}
-              allClips={result.clips}
-              transcript={result.transcript || []}
-              markedClips={markedClipsList}
-              activeClip={activeClip}
-              onStartRender={handleStartBatchRender}
-              isRendering={isLaunchingRender}
-              onToggleMarkClip={(clip) => toggleMarkedClip(`${clip.start_time}_${clip.end_time}`)}
-              onToggleAllClips={toggleAllMarkedClips}
-              batchProgress={batchProgress}
-              onDismissProgress={() => {
-                if (batchEventSourceRef.current) {
-                  batchEventSourceRef.current.close();
-                  batchEventSourceRef.current = null;
-                }
-                setBatchProgress(null);
-              }}
-              onRetryClip={handleRetryBatchClip}
-              allowAppUpdates={allowAppUpdates}
-              onOpenCookiesModal={() => setIsCookiesModalOpen(true)}
-              onBackToClips={() => setWorkflowTab('clips')}
-            />
+            <Suspense fallback={
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '360px', color: '#888' }}>
+                <span className="pulsing-text">Loading Studio Engine...</span>
+              </div>
+            }>
+              <ClipStudioSection
+                videoUrl={result.video_url || url}
+                videoId={result.video_id}
+                allClips={result.clips}
+                transcript={result.transcript || []}
+                markedClips={markedClipsList}
+                activeClip={activeClip}
+                onStartRender={handleStartBatchRender}
+                isRendering={isLaunchingRender}
+                onToggleMarkClip={(clip) => toggleMarkedClip(`${clip.start_time}_${clip.end_time}`)}
+                onToggleAllClips={toggleAllMarkedClips}
+                batchProgress={batchProgress}
+                onDismissProgress={() => {
+                  if (batchEventSourceRef.current) {
+                    batchEventSourceRef.current.close();
+                    batchEventSourceRef.current = null;
+                  }
+                  setBatchProgress(null);
+                }}
+                onRetryClip={handleRetryBatchClip}
+                allowAppUpdates={allowAppUpdates}
+                onOpenCookiesModal={() => setIsCookiesModalOpen(true)}
+                onBackToClips={() => setWorkflowTab('clips')}
+              />
+            </Suspense>
           </div>
         )}
 
@@ -6366,51 +6384,54 @@ Transcript:
           </div>
         )}
 
-        {/* Cookie Pre-check Warning Modal */}
-        <CookieWarningModal
-          isOpen={cookieWarningState.isOpen}
-          actionType={cookieWarningState.actionType}
-          onClose={() => setCookieWarningState(prev => ({ ...prev, isOpen: false }))}
-          onProceedAnyway={cookieWarningState.onProceed}
-          onOpenCookiesModal={() => {
-            setCookieWarningState(prev => ({ ...prev, isOpen: false }));
-            setIsCookiesModalOpen(true);
-          }}
-        />
+        {/* Lazy Loaded Modals */}
+        <Suspense fallback={null}>
+          {/* Cookie Pre-check Warning Modal */}
+          <CookieWarningModal
+            isOpen={cookieWarningState.isOpen}
+            actionType={cookieWarningState.actionType}
+            onClose={() => setCookieWarningState(prev => ({ ...prev, isOpen: false }))}
+            onProceedAnyway={cookieWarningState.onProceed}
+            onOpenCookiesModal={() => {
+              setCookieWarningState(prev => ({ ...prev, isOpen: false }));
+              setIsCookiesModalOpen(true);
+            }}
+          />
 
-        {/* YouTube Cookies Modal */}
-        <CookiesModal
-          isOpen={isCookiesModalOpen}
-          onClose={() => {
-            setIsCookiesModalOpen(false);
-            setHasCookies(hasStoredCookies());
-          }}
-          onCookieStatusChange={setHasCookies}
-        />
+          {/* YouTube Cookies Modal */}
+          <CookiesModal
+            isOpen={isCookiesModalOpen}
+            onClose={() => {
+              setIsCookiesModalOpen(false);
+              setHasCookies(hasStoredCookies());
+            }}
+            onCookieStatusChange={setHasCookies}
+          />
 
-        {/* App Update & Restart Modal */}
-        <AppUpdateModal
-          isOpen={isUpdateModalOpen}
-          onClose={() => setIsUpdateModalOpen(false)}
-        />
+          {/* App Update & Restart Modal */}
+          <AppUpdateModal
+            isOpen={isUpdateModalOpen}
+            onClose={() => setIsUpdateModalOpen(false)}
+          />
 
-        {/* Clip Trimmer & Context Editor Modal */}
-        <ClipTrimmerModal
-          isOpen={Boolean(trimmerClip)}
-          clip={trimmerClip}
-          videoId={result?.video_id || ''}
-          videoUrl={result?.video_url}
-          sourceType={result?.source_type}
-          videoTitle={result?.title}
-          videoDuration={result?.duration || 0}
-          transcript={result?.transcript}
-          onClose={() => setTrimmerClip(null)}
-          onApply={handleApplyAdjustedClipToResults}
-          onDownload={async (adjustedClip) => {
-            handleApplyAdjustedClipToResults(adjustedClip);
-            await handleDownloadRawClip(adjustedClip);
-          }}
-        />
+          {/* Clip Trimmer & Context Editor Modal */}
+          <ClipTrimmerModal
+            isOpen={Boolean(trimmerClip)}
+            clip={trimmerClip}
+            videoId={result?.video_id || ''}
+            videoUrl={result?.video_url}
+            sourceType={result?.source_type}
+            videoTitle={result?.title}
+            videoDuration={result?.duration || 0}
+            transcript={result?.transcript}
+            onClose={() => setTrimmerClip(null)}
+            onApply={handleApplyAdjustedClipToResults}
+            onDownload={async (adjustedClip) => {
+              handleApplyAdjustedClipToResults(adjustedClip);
+              await handleDownloadRawClip(adjustedClip);
+            }}
+          />
+        </Suspense>
 
         {/* Global Fancy Clear Temp Confirmation Modal */}
         {showGlobalClearModal && (
