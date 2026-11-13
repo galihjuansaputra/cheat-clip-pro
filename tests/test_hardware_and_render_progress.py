@@ -6,6 +6,7 @@ from backend.video_engine import (
     detect_hardware_support,
     resolve_encoder,
     _run_ffmpeg_command_with_progress,
+    generate_ass_file,
 )
 
 
@@ -58,6 +59,42 @@ class TestHardwareAndRenderProgress(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertTrue(len(progress_updates) > 0)
         self.assertAlmostEqual(progress_updates[-1], 1.0, delta=0.01)
+
+    def test_generate_ass_file_start_visibility_and_bouncing(self):
+        output_ass = Path("temp_test_subtitle.ass")
+        words = [
+            {"word": "Selamat", "start": 1.5, "end": 2.0},
+            {"word": "datang", "start": 2.1, "end": 2.6},
+            {"word": "kawan", "start": 2.7, "end": 3.2},
+            {"word": "di", "start": 4.5, "end": 4.8},
+            {"word": "sini", "start": 4.9, "end": 5.4},
+        ]
+        try:
+            generate_ass_file(
+                words=words,
+                style_preset="viral_pop",
+                font_name="Montserrat",
+                output_ass_path=str(output_ass),
+                target_aspect_ratio="9:16",
+                duration_seconds=8.0,
+            )
+            self.assertTrue(output_ass.exists())
+            content = output_ass.read_text(encoding="utf-8")
+
+            # Check subtitle is immediately visible at 0:00:00.00
+            self.assertIn("Dialogue: 0,0:00:00.00,", content)
+            self.assertIn("SELAMAT DATANG KAWAN", content)
+
+            # Check bouncing effect animation tags are present on active words
+            self.assertIn(r"\fscx100\fscy100\t(0,", content)
+            self.assertIn(r"\fscx116\fscy116", content)
+            self.assertIn(r"\fscx108\fscy108", content)
+
+            # Check pause bridging / end extension
+            self.assertIn("0:00:07.95", content)
+        finally:
+            if output_ass.exists():
+                output_ass.unlink()
 
 
 if __name__ == "__main__":

@@ -2281,7 +2281,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     c_end = c_start + 0.28
             chunk_bounds.append((c_start, c_end))
 
-        # Clamp against subsequent chunk start times to eliminate any inter-chunk overlaps
+        # Clamp against subsequent chunk start times to eliminate any inter-chunk overlaps,
+        # and bridge inter-chunk gaps so captions remain seamlessly visible without flickering off
         for i in range(len(chunk_bounds) - 1):
             cur_s, cur_e = chunk_bounds[i]
             nxt_s, nxt_e = chunk_bounds[i + 1]
@@ -2290,12 +2291,28 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 chunk_bounds[i] = (cur_s, split_pt)
                 if nxt_s < split_pt:
                     chunk_bounds[i + 1] = (split_pt, max(split_pt + 0.28, nxt_e))
+            elif cur_e < nxt_s:
+                chunk_bounds[i] = (cur_s, nxt_s)
 
-        # Anchor opening chunk to 0.00s if speech starts near the beginning (<= 3.5s)
-        # This guarantees captions/subtitles are immediately visible from frame 0 rather than delayed
-        if chunk_bounds and chunk_bounds[0][0] <= 3.5:
-            c_s, c_e = chunk_bounds[0]
-            chunk_bounds[0] = (0.0, max(c_e, 0.40))
+        # Extend final chunk to video end so subtitles remain visible until the video ends
+        if chunk_bounds and duration_seconds and float(duration_seconds) > 0:
+            last_s, last_e = chunk_bounds[-1]
+            vid_end = max(last_e, float(duration_seconds) - 0.05)
+            chunk_bounds[-1] = (last_s, vid_end)
+
+        # Ensure subtitle visibility from frame 0 (0:00:00.00):
+        # If speech starts after 0.05s, display the first chunk in neutral/primary color
+        # from 0:00:00.00 until speech start, so viewers immediately see captions without waiting
+        if chunks:
+            first_speech_time = max(0.0, chunks[0][0]["start"])
+            if first_speech_time > 0.05:
+                intro_text = " ".join(item["word_text"] for item in chunks[0])
+                events.append(
+                    f"Dialogue: 0,0:00:00.00,{format_ass_timestamp(first_speech_time)},SubStyle,,0,0,0,,{{\\q2\\an{sub_align}\\pos({center_x},{sub_y})}}{intro_text}"
+                )
+            else:
+                c_s, c_e = chunk_bounds[0]
+                chunk_bounds[0] = (0.0, c_e)
 
         # Step D: Partition each chunk into strictly contiguous active-word time slices
         for chunk_idx, chunk in enumerate(chunks):
@@ -2304,8 +2321,17 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 c_end = c_start + 0.25
             num_words = len(chunk)
 
+            last_word_end = chunk[-1]["end"]
+            has_pause_tail = (c_end > last_word_end + 0.35)
+
             if num_words == 1:
-                time_slices = [(c_start, c_end)]
+                if has_pause_tail:
+                    active_end = max(c_start + 0.2, min(last_word_end + 0.25, c_end - 0.1))
+                    time_slices = [(c_start, active_end)]
+                    idle_slice = (active_end, c_end)
+                else:
+                    time_slices = [(c_start, c_end)]
+                    idle_slice = None
             else:
                 points = [c_start]
                 for w_i in range(1, num_words):
@@ -2318,19 +2344,37 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                     else:
                         pt = max(min_allowed, min(max_allowed, raw_st))
                     points.append(pt)
-                points.append(c_end)
-                time_slices = [(points[k], points[k + 1]) for k in range(num_words)]
+
+                if has_pause_tail:
+                    active_end = max(points[-1] + 0.2, min(last_word_end + 0.25, c_end - 0.1))
+                    points.append(active_end)
+                    time_slices = [(points[k], points[k + 1]) for k in range(num_words)]
+                    idle_slice = (active_end, c_end)
+                else:
+                    points.append(c_end)
+                    time_slices = [(points[k], points[k + 1]) for k in range(num_words)]
+                    idle_slice = None
 
             for active_idx, (w_start, w_end) in enumerate(time_slices):
                 if w_end <= w_start:
                     continue
 
+                dur_ms = max(60, int((w_end - w_start) * 1000))
+                pop_ms = min(70, max(25, int(dur_ms * 0.35)))
+                settle_ms = min(160, max(pop_ms + 25, int(dur_ms * 0.70)))
+
                 line_parts = []
                 for idx, item in enumerate(chunk):
                     w_txt = item["word_text"]
                     if idx == active_idx:
-                        # Highlight active word with color only (no font scale or bold toggle so metrics stay 100% identical)
-                        line_parts.append(r"{\c" + highlight_color + r"\3c" + outline_color + r"}" + w_txt + r"{\c" + primary_color + r"\3c" + outline_color + r"}")
+                        # Bouncing pop effect animation matching studio preview (scale 1.0 -> 1.16 pop -> 1.08 settle)
+                        bounce_tag = (
+                            r"{\c" + highlight_color + r"\3c" + outline_color +
+                            rf"\fscx100\fscy100\t(0,{pop_ms},\fscx116\fscy116)\t({pop_ms},{settle_ms},\fscx108\fscy108)}}" +
+                            w_txt +
+                            r"{\fscx100\fscy100\c" + primary_color + r"\3c" + outline_color + r"}"
+                        )
+                        line_parts.append(bounce_tag)
                     else:
                         line_parts.append(w_txt)
 
@@ -2338,6 +2382,13 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 # Lock position to sub_y with \q2\an{sub_align}\pos(center_x, sub_y)
                 events.append(
                     f"Dialogue: 0,{format_ass_timestamp(w_start)},{format_ass_timestamp(w_end)},SubStyle,,0,0,0,,{{\\q2\\an{sub_align}\\pos({center_x},{sub_y})}}{styled_line}"
+                )
+
+            # Keep caption text visible during natural speech pauses until next chunk starts
+            if idle_slice and idle_slice[1] > idle_slice[0]:
+                unhighlighted_tail = " ".join(item["word_text"] for item in chunk)
+                events.append(
+                    f"Dialogue: 0,{format_ass_timestamp(idle_slice[0])},{format_ass_timestamp(idle_slice[1])},SubStyle,,0,0,0,,{{\\q2\\an{sub_align}\\pos({center_x},{sub_y})}}{unhighlighted_tail}"
                 )
 
     ass_content = ass_header + "\n".join(events) + "\n"
