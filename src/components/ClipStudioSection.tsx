@@ -305,7 +305,7 @@ export const DEFAULT_STUDIO_PREFS: Required<StudioPreferences> = {
   subtitlePositionMode: 'bottom',
   titleDuration: 'entire',
   originalAudioVolume: 100,
-  hardwareAccel: 'browser_wasm',
+  hardwareAccel: 'auto',
   titleYPercent: 17,
   titleXPercent: 50,
   subtitleYPercent: 21,
@@ -471,31 +471,17 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [isWatermarkDragging, setIsWatermarkDragging] = useState<boolean>(false);
   const phoneContainerRef = useRef<HTMLDivElement | null>(null);
 
-  const [isLocalhost] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const h = window.location.hostname;
-      return h === 'localhost' || h === '127.0.0.1';
-    }
-    return false;
-  });
-
   const [clientGpuName, setClientGpuName] = useState<string>(() => getClientGpuName());
   const [hasWebCodecs] = useState<boolean>(() => isWebCodecsGpuSupported());
 
   // Hardware acceleration / Video Encoder state:
-  // - On Mobile: default to 'auto' (Server Render) to avoid mobile OOM / tab crashes.
-  // - On Desktop (deployed): default to 'client_gpu' / 'browser_wasm' to use user's local GPU/CPU and avoid burdening the server.
-  // - On Desktop (localhost): default to 'auto'.
+  // Defaults to 'auto' to leverage the host's dedicated GPU encoder (e.g. NVIDIA NVENC on RTX 3060 Ti)
   const [hardwareAccel, setHardwareAccel] = useState<HardwareAccelOption>(() => {
-    if (isMobileDevice()) {
-      return 'auto';
-    }
-    const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
-    if (!isLocal) {
-      return isWebCodecsGpuSupported() ? 'client_gpu' : 'browser_wasm';
-    }
     const saved = getSavedStudioPreferences().hardwareAccel;
-    return (saved && saved !== 'browser_wasm') ? saved : 'auto';
+    if (saved && saved !== 'browser_wasm' && saved !== 'client_gpu') {
+      return saved;
+    }
+    return 'auto';
   });
   const [hardwareInfo, setHardwareInfo] = useState<HardwareAccelInfo | null>(null);
   const [hwDropdownOpen, setHwDropdownOpen] = useState<boolean>(false);
@@ -510,24 +496,16 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           if (data.gpu_name) {
             setClientGpuName(data.gpu_name);
           }
+          const saved = getSavedStudioPreferences().hardwareAccel;
+          if (!saved || saved === 'browser_wasm' || saved === 'client_gpu') {
+            setHardwareAccel('auto');
+          }
         }
       } catch {
         // Backend offline or loading
       }
     };
 
-    if (isMobileDevice()) {
-      // Mobile devices always use Server Engine (FFmpeg) to prevent mobile browser crash / OOM
-      setHardwareAccel('auto');
-      fetchHardwareSupport();
-      return;
-    }
-
-    if (!isLocalhost) {
-      // On deployed domain for desktop users, use client engine (prefer client_gpu) to spare server
-      setHardwareAccel(isWebCodecsGpuSupported() ? 'client_gpu' : 'browser_wasm');
-      return;
-    }
     fetchHardwareSupport();
   }, []);
 
@@ -4457,13 +4435,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   <div className="hw-trigger-info">
                     <span className="hw-trigger-name">
                       {hardwareAccel === 'auto'
-                        ? t.studio.hwAuto
+                        ? (hardwareInfo?.gpu_name ? `${t.studio.hwAuto} (${hardwareInfo.gpu_name})` : (hardwareInfo?.recommended ? `${t.studio.hwAuto} (${hardwareInfo.recommended.toUpperCase()})` : t.studio.hwAuto))
+                        : hardwareAccel === 'nvenc'
+                        ? (hardwareInfo?.gpu_name ? `NVIDIA NVENC (${hardwareInfo.gpu_name})` : t.studio.hwNvenc)
                         : hardwareAccel === 'client_gpu'
                         ? `Client GPU (${clientGpuName})`
                         : hardwareAccel === 'browser_wasm'
                         ? t.studio.hwWasm
-                        : hardwareAccel === 'nvenc'
-                        ? t.studio.hwNvenc
                         : hardwareAccel === 'amf'
                         ? t.studio.hwAmf
                         : hardwareAccel === 'qsv'
@@ -4472,7 +4450,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     </span>
                     <span className="hw-trigger-status-pill">
                       {hardwareAccel === 'auto'
-                        ? (hardwareInfo?.recommended ? `[${t.studio.hwDetectedPill}: ${hardwareInfo.recommended.toUpperCase()}]` : `[${t.studio.hwDetectedPill}]`)
+                        ? (hardwareInfo?.recommended ? `[${t.studio.hwDetectedPill}: ${(hardwareInfo.gpu_name || hardwareInfo.recommended).toUpperCase()}]` : `[${t.studio.hwDetectedPill}]`)
                         : hardwareAccel === 'client_gpu'
                         ? '[WebCodecs GPU Accel]'
                         : hardwareAccel === 'browser_wasm'
@@ -4503,93 +4481,71 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     style={{ position: 'fixed', inset: 0, zIndex: 99 }}
                   />
                   <div className="hw-dropdown-menu" role="listbox">
-                    {(isLocalhost
-                      ? [
-                          {
-                            value: 'auto' as HardwareAccelOption,
-                            badge: 'AUTO',
-                            title: t.studio.hwAuto,
-                            desc: hardwareInfo?.recommended ? `${t.studio.hwAutoDesc} · Recommended: ${hardwareInfo.recommended.toUpperCase()}` : t.studio.hwAutoDesc,
-                            status: hardwareInfo?.recommended ? `${t.studio.hwDetectedPill}: ${hardwareInfo.recommended.toUpperCase()}` : t.studio.hwDetectedPill,
-                            isReady: true,
-                            disabled: false,
-                          },
-                          ...(hasWebCodecs ? [{
-                            value: 'client_gpu' as HardwareAccelOption,
-                            badge: 'GPU',
-                            title: `Client GPU Acceleration (${clientGpuName})`,
-                            desc: 'Native WebCodecs VideoEncoder running directly on user GPU (0% Server CPU)',
-                            status: 'Client GPU Native',
-                            isReady: true,
-                            disabled: false,
-                          }] : []),
-                          {
-                            value: 'browser_wasm' as HardwareAccelOption,
-                            badge: 'WASM',
-                            title: t.studio.hwWasm,
-                            desc: t.studio.hwWasmDesc || 'Browser engine client-side (0% server CPU)',
-                            status: 'Client Engine',
-                            isReady: true,
-                            disabled: false,
-                          },
-                          {
-                            value: 'nvenc' as HardwareAccelOption,
-                            badge: 'NVENC',
-                            title: t.studio.hwNvenc,
-                            desc: t.studio.hwNvencDesc,
-                            status: hardwareInfo?.support?.nvenc ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill,
-                            isReady: Boolean(hardwareInfo?.support?.nvenc),
-                            disabled: Boolean(hardwareInfo?.support && !hardwareInfo.support.nvenc),
-                          },
-                          {
-                            value: 'amf' as HardwareAccelOption,
-                            badge: 'AMF',
-                            title: t.studio.hwAmf,
-                            desc: t.studio.hwAmfDesc,
-                            status: hardwareInfo?.support?.amf ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill,
-                            isReady: Boolean(hardwareInfo?.support?.amf),
-                            disabled: Boolean(hardwareInfo?.support && !hardwareInfo.support.amf),
-                          },
-                          {
-                            value: 'qsv' as HardwareAccelOption,
-                            badge: 'QSV',
-                            title: t.studio.hwQsv,
-                            desc: t.studio.hwQsvDesc,
-                            status: hardwareInfo?.support?.qsv ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill,
-                            isReady: Boolean(hardwareInfo?.support?.qsv),
-                            disabled: Boolean(hardwareInfo?.support && !hardwareInfo.support.qsv),
-                          },
-                          {
-                            value: 'cpu' as HardwareAccelOption,
-                            badge: 'CPU',
-                            title: t.studio.hwCpu,
-                            desc: t.studio.hwCpuDesc,
-                            status: t.studio.hwSupportedPill,
-                            isReady: true,
-                            disabled: false,
-                          },
-                        ]
-                      : [
-                          ...(hasWebCodecs ? [{
-                            value: 'client_gpu' as HardwareAccelOption,
-                            badge: 'GPU',
-                            title: `Client GPU Acceleration (${clientGpuName})`,
-                            desc: 'WebCodecs GPU Hardware Encoder (0% Server CPU / RAM)',
-                            status: 'Client GPU Native',
-                            isReady: true,
-                            disabled: false,
-                          }] : []),
-                          {
-                            value: 'browser_wasm' as HardwareAccelOption,
-                            badge: 'WASM',
-                            title: t.studio.hwWasm || 'Browser Engine (WASM Fallback)',
-                            desc: 'Client-Side WebAssembly Software Engine (0% Server CPU / RAM)',
-                            status: 'Active Client Engine',
-                            isReady: true,
-                            disabled: false,
-                          },
-                        ]
-                    ).map((opt) => {
+                    {[
+                      {
+                        value: 'auto' as HardwareAccelOption,
+                        badge: 'AUTO',
+                        title: hardwareInfo?.gpu_name ? `${t.studio.hwAuto} (${hardwareInfo.gpu_name})` : t.studio.hwAuto,
+                        desc: hardwareInfo?.recommended ? `${t.studio.hwAutoDesc} · Recommended: ${hardwareInfo.gpu_name || hardwareInfo.recommended.toUpperCase()}` : t.studio.hwAutoDesc,
+                        status: hardwareInfo?.recommended ? `${t.studio.hwDetectedPill}: ${(hardwareInfo.gpu_name || hardwareInfo.recommended).toUpperCase()}` : t.studio.hwDetectedPill,
+                        isReady: true,
+                        disabled: false,
+                      },
+                      {
+                        value: 'nvenc' as HardwareAccelOption,
+                        badge: 'NVENC',
+                        title: hardwareInfo?.gpu_name ? `NVIDIA NVENC (${hardwareInfo.gpu_name})` : t.studio.hwNvenc,
+                        desc: hardwareInfo?.gpu_name ? `Dedicated GPU Hardware Encoding using ${hardwareInfo.gpu_name}` : t.studio.hwNvencDesc,
+                        status: hardwareInfo?.support?.nvenc ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill,
+                        isReady: Boolean(hardwareInfo?.support?.nvenc),
+                        disabled: Boolean(hardwareInfo?.support && !hardwareInfo.support.nvenc),
+                      },
+                      {
+                        value: 'amf' as HardwareAccelOption,
+                        badge: 'AMF',
+                        title: t.studio.hwAmf,
+                        desc: t.studio.hwAmfDesc,
+                        status: hardwareInfo?.support?.amf ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill,
+                        isReady: Boolean(hardwareInfo?.support?.amf),
+                        disabled: Boolean(hardwareInfo?.support && !hardwareInfo.support.amf),
+                      },
+                      {
+                        value: 'qsv' as HardwareAccelOption,
+                        badge: 'QSV',
+                        title: t.studio.hwQsv,
+                        desc: t.studio.hwQsvDesc,
+                        status: hardwareInfo?.support?.qsv ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill,
+                        isReady: Boolean(hardwareInfo?.support?.qsv),
+                        disabled: Boolean(hardwareInfo?.support && !hardwareInfo.support.qsv),
+                      },
+                      {
+                        value: 'cpu' as HardwareAccelOption,
+                        badge: 'CPU',
+                        title: t.studio.hwCpu,
+                        desc: t.studio.hwCpuDesc,
+                        status: t.studio.hwSupportedPill,
+                        isReady: true,
+                        disabled: false,
+                      },
+                      ...(hasWebCodecs ? [{
+                        value: 'client_gpu' as HardwareAccelOption,
+                        badge: 'GPU',
+                        title: `Browser Client GPU (${clientGpuName})`,
+                        desc: 'Native WebCodecs VideoEncoder running directly in browser (0% Server CPU)',
+                        status: 'Browser Native',
+                        isReady: true,
+                        disabled: false,
+                      }] : []),
+                      {
+                        value: 'browser_wasm' as HardwareAccelOption,
+                        badge: 'WASM',
+                        title: t.studio.hwWasm,
+                        desc: t.studio.hwWasmDesc || 'Browser engine client-side (0% server CPU)',
+                        status: 'Browser WASM',
+                        isReady: true,
+                        disabled: false,
+                      },
+                    ].map((opt) => {
                       const isSelected = hardwareAccel === opt.value;
                       return (
                         <div
@@ -5212,47 +5168,30 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       value={hardwareAccel}
                       onChange={(e) => setHardwareAccel(e.target.value as HardwareAccelOption)}
                       title={t.studio.hwChangeHint}
-                      disabled={!isLocalhost}
                     >
-                      {isLocalhost ? (
-                        <>
-                          <option value="auto">
-                            {t.studio.hwAuto} ({t.studio.hwDetectedPill}
-                            {hardwareInfo?.recommended ? `: ${hardwareInfo.recommended.toUpperCase()}` : ''})
-                          </option>
-                          {hasWebCodecs && (
-                            <option value="client_gpu">
-                              [GPU] Client GPU Acceleration ({clientGpuName})
-                            </option>
-                          )}
-                          <option value="browser_wasm">
-                            [WASM] {t.studio.hwWasm || 'Browser Engine (Client-Side WASM · 0% Server CPU)'}
-                          </option>
-                          <option value="nvenc" disabled={hardwareInfo?.support && !hardwareInfo.support.nvenc}>
-                            {t.studio.hwNvenc} {hardwareInfo?.support?.nvenc ? `(${t.studio.hwSupportedPill})` : `(${t.studio.hwUnavailablePill})`}
-                          </option>
-                          <option value="amf" disabled={hardwareInfo?.support && !hardwareInfo.support.amf}>
-                            {t.studio.hwAmf} {hardwareInfo?.support?.amf ? `(${t.studio.hwSupportedPill})` : `(${t.studio.hwUnavailablePill})`}
-                          </option>
-                          <option value="qsv" disabled={hardwareInfo?.support && !hardwareInfo.support.qsv}>
-                            {t.studio.hwQsv} {hardwareInfo?.support?.qsv ? `(${t.studio.hwSupportedPill})` : `(${t.studio.hwUnavailablePill})`}
-                          </option>
-                          <option value="cpu">
-                            {t.studio.hwCpu} ({t.studio.hwSupportedPill})
-                          </option>
-                        </>
-                      ) : (
-                        <>
-                          {hasWebCodecs && (
-                            <option value="client_gpu">
-                              [GPU] Client GPU Acceleration ({clientGpuName})
-                            </option>
-                          )}
-                          <option value="browser_wasm">
-                            [WASM] Browser Engine (Client-Side · 0% Server CPU)
-                          </option>
-                        </>
+                      <option value="auto">
+                        {t.studio.hwAuto} {hardwareInfo?.gpu_name ? `(${hardwareInfo.gpu_name})` : (hardwareInfo?.recommended ? `(${hardwareInfo.recommended.toUpperCase()})` : '')}
+                      </option>
+                      <option value="nvenc" disabled={hardwareInfo?.support && !hardwareInfo.support.nvenc}>
+                        {hardwareInfo?.gpu_name ? `NVIDIA NVENC (${hardwareInfo.gpu_name})` : t.studio.hwNvenc} {hardwareInfo?.support?.nvenc ? `(${t.studio.hwSupportedPill})` : `(${t.studio.hwUnavailablePill})`}
+                      </option>
+                      <option value="amf" disabled={hardwareInfo?.support && !hardwareInfo.support.amf}>
+                        {t.studio.hwAmf} {hardwareInfo?.support?.amf ? `(${t.studio.hwSupportedPill})` : `(${t.studio.hwUnavailablePill})`}
+                      </option>
+                      <option value="qsv" disabled={hardwareInfo?.support && !hardwareInfo.support.qsv}>
+                        {t.studio.hwQsv} {hardwareInfo?.support?.qsv ? `(${t.studio.hwSupportedPill})` : `(${t.studio.hwUnavailablePill})`}
+                      </option>
+                      <option value="cpu">
+                        {t.studio.hwCpu} ({t.studio.hwSupportedPill})
+                      </option>
+                      {hasWebCodecs && (
+                        <option value="client_gpu">
+                          [GPU] Browser Client GPU ({clientGpuName})
+                        </option>
                       )}
+                      <option value="browser_wasm">
+                        [WASM] {t.studio.hwWasm || 'Browser WASM Engine'}
+                      </option>
                     </select>
                   </div>
                 </div>

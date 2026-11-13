@@ -175,14 +175,24 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
 
   if (onProgress) onProgress(20, `Processing frames on GPU (${getClientGpuName()})...`);
 
-  // Frame stepping helper
+  // Frame stepping helper with safety timeout to avoid hanging indefinitely
   const seekTo = (time: number): Promise<void> => {
     return new Promise((resolve) => {
-      const onSeeked = () => {
-        video.removeEventListener('seeked', onSeeked);
+      let resolved = false;
+      let timer: any = null;
+
+      const finish = () => {
+        if (resolved) return;
+        resolved = true;
+        if (timer) clearTimeout(timer);
+        video.removeEventListener('seeked', finish);
+        video.removeEventListener('error', finish);
         resolve();
       };
-      video.addEventListener('seeked', onSeeked);
+
+      video.addEventListener('seeked', finish);
+      video.addEventListener('error', finish);
+      timer = setTimeout(finish, 800);
       video.currentTime = time;
     });
   };
