@@ -19,7 +19,7 @@ import { resilientFetch } from '../utils/api';
 import { getStoredCookies, hasStoredCookies } from '../utils/cookieUtils';
 import { detectFaceClientSide } from '../utils/clientFaceDetector';
 import { isMobileDevice } from '../utils/deviceUtils';
-import { isWebCodecsGpuSupported, getClientGpuName } from '../services/webcodecsRenderer';
+import { isWebCodecsGpuSupported, getClientGpuName, detectClientGpuAccurate } from '../services/webcodecsRenderer';
 import type {
   ViralClip,
   RenderSettings,
@@ -305,7 +305,7 @@ export const DEFAULT_STUDIO_PREFS: Required<StudioPreferences> = {
   subtitlePositionMode: 'bottom',
   titleDuration: 'entire',
   originalAudioVolume: 100,
-  hardwareAccel: 'auto',
+  hardwareAccel: 'nvenc',
   titleYPercent: 17,
   titleXPercent: 50,
   subtitleYPercent: 21,
@@ -475,18 +475,26 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [hasWebCodecs] = useState<boolean>(() => isWebCodecsGpuSupported());
 
   // Hardware acceleration / Video Encoder state:
-  // Defaults to 'auto' to leverage the host's dedicated GPU encoder (e.g. NVIDIA NVENC on RTX 3060 Ti)
+  // Defaults to 'nvenc' (dedicated NVIDIA GPU hardware encoder) and never defaults to CPU
   const [hardwareAccel, setHardwareAccel] = useState<HardwareAccelOption>(() => {
     const saved = getSavedStudioPreferences().hardwareAccel;
-    if (saved && saved !== 'browser_wasm' && saved !== 'client_gpu') {
+    if (saved && saved !== 'browser_wasm' && saved !== 'client_gpu' && saved !== 'cpu') {
       return saved;
     }
-    return 'auto';
+    return 'nvenc';
   });
   const [hardwareInfo, setHardwareInfo] = useState<HardwareAccelInfo | null>(null);
   const [hwDropdownOpen, setHwDropdownOpen] = useState<boolean>(false);
 
   useEffect(() => {
+    // 1. Asynchronously detect high-performance WebGPU / WebGL client GPU name
+    detectClientGpuAccurate().then(name => {
+      if (name && name !== 'Hardware GPU' && name !== 'Client Hardware GPU') {
+        setClientGpuName(name);
+      }
+    });
+
+    // 2. Fetch server hardware support and GPU info
     const fetchHardwareSupport = async () => {
       try {
         const res = await resilientFetch('/api/hardware-accel', { maxRetries: 4, retryDelay: 1000, silent: true });
@@ -497,8 +505,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             setClientGpuName(data.gpu_name);
           }
           const saved = getSavedStudioPreferences().hardwareAccel;
-          if (!saved || saved === 'browser_wasm' || saved === 'client_gpu') {
-            setHardwareAccel('auto');
+          // Never default to CPU or legacy WASM; prioritize dedicated NVIDIA NVENC GPU
+          if (!saved || saved === 'browser_wasm' || saved === 'client_gpu' || saved === 'cpu') {
+            setHardwareAccel(data.support?.nvenc ? 'nvenc' : (data.recommended as HardwareAccelOption || 'auto'));
           }
         }
       } catch {
@@ -1974,7 +1983,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       originalAudioVolume,
       // Hardware Acceleration / Video Encoder
       hardwareAccel,
-      renderEngine: isMobileDevice() ? 'server' : (hardwareAccel === 'browser_wasm' ? 'client' : 'server'),
+      renderEngine: isMobileDevice() ? 'server' : ((hardwareAccel === 'browser_wasm' || hardwareAccel === 'client_gpu') ? 'client' : 'server'),
       // Multi-Segment Merged Highlight Video
       renderMode,
       compilationTitle: compilationTitle.trim() || undefined,
@@ -4588,10 +4597,12 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 <span>
                   {hardwareAccel === 'browser_wasm'
                     ? (t.studio.hwWasmDesc || 'Client-side browser WASM engine (Zero server load · 100% private in browser)')
+                    : hardwareAccel === 'client_gpu'
+                    ? `Client GPU Hardware Acceleration (${clientGpuName}) · Native WebCodecs VideoEncoder (0% Server CPU)`
                     : hardwareAccel === 'auto'
-                    ? (hardwareInfo?.recommended ? `${t.studio.hwAutoDesc} · Recommended: ${hardwareInfo.recommended.toUpperCase()}` : t.studio.hwAutoDesc)
+                    ? (hardwareInfo?.gpu_name ? `${t.studio.hwAutoDesc} · Detected GPU: ${hardwareInfo.gpu_name}` : (hardwareInfo?.recommended ? `${t.studio.hwAutoDesc} · Recommended: ${hardwareInfo.recommended.toUpperCase()}` : t.studio.hwAutoDesc))
                     : hardwareAccel === 'nvenc'
-                    ? t.studio.hwNvencDesc
+                    ? (hardwareInfo?.gpu_name ? `Dedicated GPU Hardware Encoding using ${hardwareInfo.gpu_name}` : t.studio.hwNvencDesc)
                     : hardwareAccel === 'amf'
                     ? t.studio.hwAmfDesc
                     : hardwareAccel === 'qsv'

@@ -28,6 +28,16 @@ class TestHardwareAndRenderProgress(unittest.TestCase):
         self.assertEqual(codec, "h264_nvenc")
         self.assertIn("h264_nvenc", args)
 
+    def test_resolve_encoder_never_defaults_to_cpu_when_gpu_available(self):
+        # Auto, None, client_gpu must all route to NVENC, never falling back to server CPU
+        for sel in ["auto", None, "client_gpu", "browser_wasm", "nvenc"]:
+            codec, args = resolve_encoder(sel)
+            self.assertEqual(codec, "h264_nvenc", f"Expected NVENC for selection '{sel}', got '{codec}'")
+
+        # Only explicit 'cpu' should use libx264
+        cpu_codec, cpu_args = resolve_encoder("cpu")
+        self.assertEqual(cpu_codec, "libx264")
+
     def test_ffmpeg_progress_reporting(self):
         # Generate a test 1-second synthetic video in null format with progress
         progress_updates = []

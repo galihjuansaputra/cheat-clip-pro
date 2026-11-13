@@ -21,36 +21,98 @@ export function isWebCodecsGpuSupported(): boolean {
 }
 
 /**
- * Detects the client's GPU renderer information via WebGL or WebGPU.
+ * Detects the client's GPU renderer information via WebGL (synchronous fallback).
+ * Uses high-performance power preference to ensure discrete GPUs are selected.
  */
 export function getClientGpuName(): string {
   try {
     const canvas = document.createElement('canvas');
-    // Try WebGL2 first, then WebGL1
-    const gl = canvas.getContext('webgl2') ||
-      canvas.getContext('webgl') ||
-      canvas.getContext('experimental-webgl2') ||
-      canvas.getContext('experimental-webgl');
+    const glOptions = { powerPreference: 'high-performance' as const, failIfMajorPerformanceCaveat: false };
+    const gl = canvas.getContext('webgl2', glOptions) ||
+      canvas.getContext('webgl', glOptions) ||
+      canvas.getContext('experimental-webgl2', glOptions) ||
+      canvas.getContext('webgl2') ||
+      canvas.getContext('webgl');
     if (!gl) return 'Browser GPU';
     const debugInfo = (gl as any).getExtension('WEBGL_debug_renderer_info');
     if (debugInfo) {
       const renderer = (gl as any).getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
       if (renderer) return cleanGpuName(renderer);
     }
+    const stdRenderer = (gl as any).getParameter((gl as any).RENDERER);
+    if (stdRenderer) return cleanGpuName(stdRenderer);
     return 'Client Hardware GPU';
   } catch {
     return 'Client Hardware GPU';
   }
 }
 
-function cleanGpuName(raw: string): string {
-  // e.g. "ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Ti Direct3D11 vs_5_0 ps_5_0, D3D11)" -> "NVIDIA GeForce RTX 3060 Ti"
+/**
+ * Asynchronously detects the precise client GPU using WebGPU (Chrome 113+, Edge)
+ * or high-performance WebGL. Accurately identifies discrete GPUs like NVIDIA RTX.
+ */
+export async function detectClientGpuAccurate(): Promise<string> {
+  if (typeof navigator !== 'undefined' && 'gpu' in navigator && (navigator as any).gpu) {
+    try {
+      const gpu = (navigator as any).gpu;
+      const adapter = await gpu.requestAdapter({ powerPreference: 'high-performance' });
+      if (adapter) {
+        if (typeof (adapter as any).requestAdapterInfo === 'function') {
+          const info = await (adapter as any).requestAdapterInfo();
+          if (info?.description) return cleanGpuName(info.description);
+          if (info?.device) return cleanGpuName(info.device);
+        }
+        const info = (adapter as any).info;
+        if (info?.description) return cleanGpuName(info.description);
+        if (info?.device) return cleanGpuName(info.device);
+        if (info?.architecture) return cleanGpuName(info.architecture);
+      }
+    } catch {
+      // Fallback to WebGL
+    }
+  }
+  return getClientGpuName();
+}
+
+export function cleanGpuName(raw: string): string {
+  if (!raw) return 'Hardware GPU';
+
+  // 1. Check for NVIDIA pattern: e.g. "NVIDIA GeForce RTX 3060 Ti (0x00002489) Direct3D11..."
+  const nvidiaMatch = raw.match(/(?:NVIDIA\s+)?(GeForce\s+(?:RTX|GTX|GT|MX)\s+[A-Za-z0-9\s]+?)(?=\s+(?:\(0x|Direct3D|vs_|ps_|OpenGL|Vulkan|\)|$|,))/i);
+  if (nvidiaMatch) {
+    const model = nvidiaMatch[1].replace(/\s*\([0-9a-fxX]+\)/gi, '').trim();
+    return `NVIDIA ${model.replace(/^GeForce/i, 'GeForce')}`;
+  }
+
+  // 2. Check for AMD / Radeon pattern: e.g. "AMD Radeon RX 7900 XTX"
+  const amdMatch = raw.match(/(?:AMD\s+)?(Radeon\s+(?:RX|PRO|Vega|\(TM\))?\s*[A-Za-z0-9\s]+?)(?=\s+(?:\(0x|Direct3D|vs_|ps_|OpenGL|Vulkan|\)|$|,))/i);
+  if (amdMatch) {
+    const model = amdMatch[1].replace(/\s*\([0-9a-fxX]+\)/gi, '').trim();
+    return `AMD ${model.replace(/^Radeon/i, 'Radeon')}`;
+  }
+
+  // 3. Check for Intel Arc / Iris / UHD: e.g. "Intel Arc A770", "Intel(R) UHD Graphics 630"
+  const intelMatch = raw.match(/(Intel(?:\(R\))?\s+(?:Arc\s+[A-Za-z0-9]+|Iris(?:\(R\))?\s+[A-Za-z0-9\s]+|UHD\s+Graphics(?:\s+[A-Za-z0-9]+)?))/i);
+  if (intelMatch) {
+    return intelMatch[1].replace(/\(R\)/gi, '').replace(/\s*\([0-9a-fxX]+\)/gi, '').replace(/\s+/g, ' ').trim();
+  }
+
+  // 4. Check for Apple Silicon (M1/M2/M3/M4)
+  const appleMatch = raw.match(/(Apple\s+M\d+(?:\s+(?:Pro|Max|Ultra))?)/i);
+  if (appleMatch) {
+    return appleMatch[1].trim();
+  }
+
+  // 5. General fallback cleaning
   let clean = raw.replace(/^ANGLE\s*\(/i, '').replace(/\)$/, '');
   const parts = clean.split(',');
   if (parts.length > 1) {
     clean = parts[1].trim();
   }
-  clean = clean.split(' Direct3D')[0].split(' vs_')[0].split(' OpenGL')[0].split(' Vulkan')[0].trim();
+  // Strip PCI vendor / device IDs like (0x00002489)
+  clean = clean.replace(/\s*\([0-9a-fxX]+\)/gi, '');
+  // Strip Direct3D, vs_, ps_, OpenGL, Vulkan, D3D suffixes
+  clean = clean.split(' Direct3D')[0].split(' vs_')[0].split(' OpenGL')[0].split(' Vulkan')[0].split(' D3D')[0].trim();
   return clean || 'Hardware GPU';
 }
 

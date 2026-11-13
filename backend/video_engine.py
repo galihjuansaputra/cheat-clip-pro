@@ -436,11 +436,15 @@ def get_preferred_video_encoder() -> Tuple[str, List[str]]:
 
 def resolve_encoder(user_selection: Optional[str] = "auto") -> Tuple[str, List[str]]:
     """
-    Resolves user selection ('auto', 'nvenc', 'amf', 'qsv', 'cpu') to (codec_name, ffmpeg_args).
+    Resolves user selection ('auto', 'nvenc', 'amf', 'qsv', 'cpu', 'client_gpu') to (codec_name, ffmpeg_args).
+    Always prioritizes dedicated hardware GPU acceleration (e.g. h264_nvenc) and never defaults to CPU.
     """
     sel = (user_selection or "auto").lower().strip()
-    if sel == "auto":
+    if sel in ("auto", "client_gpu", "browser_wasm"):
         return get_preferred_video_encoder()
+
+    if sel in ("cpu", "libx264"):
+        return ENCODER_CONFIGS["cpu"]
 
     if sel in ENCODER_CONFIGS:
         return ENCODER_CONFIGS[sel]
@@ -450,7 +454,7 @@ def resolve_encoder(user_selection: Optional[str] = "auto") -> Tuple[str, List[s
         if sel == codec or sel == key:
             return codec, args
 
-    return ENCODER_CONFIGS["cpu"]
+    return get_preferred_video_encoder()
 
 
 ACTIVE_ENCODER_NAME, ACTIVE_ENCODER_ARGS = get_preferred_video_encoder()
