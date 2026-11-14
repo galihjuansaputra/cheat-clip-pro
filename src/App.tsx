@@ -563,7 +563,7 @@ export default function App() {
                 clipTimeOffset: isPreTrimmed ? clip.start_time : 0,
                 aspectRatio: settings.aspectRatio as any,
                 backgroundStyle: settings.backgroundStyle as any,
-                titleText: settings.titleText,
+                titleText: (clip as any).formatted_title || settings.titleText || (clip.title_suggestion || clip.title),
                 titleYPercent: settings.titleYPercent,
                 titleFont: settings.titleFont,
                 titleDuration: settings.titleDuration,
@@ -603,7 +603,7 @@ export default function App() {
                 endTime: (sourceMode === 'upload' && uploadedVideoFile) ? clip.end_time : undefined,
                 aspectRatio: settings.aspectRatio as any,
                 backgroundStyle: settings.backgroundStyle as any,
-                titleText: settings.titleText,
+                titleText: (clip as any).formatted_title || settings.titleText || (clip.title_suggestion || clip.title),
                 fileName: `${filename}.mp4`,
                 onProgress: (pct, stage) => {
                   setBatchProgress(prev => {
@@ -628,7 +628,7 @@ export default function App() {
               endTime: (sourceMode === 'upload' && uploadedVideoFile) ? clip.end_time : undefined,
               aspectRatio: settings.aspectRatio as any,
               backgroundStyle: settings.backgroundStyle as any,
-              titleText: settings.titleText,
+              titleText: (clip as any).formatted_title || settings.titleText || (clip.title_suggestion || clip.title),
               fileName: `${filename}.mp4`,
               onProgress: (pct, stage) => {
                 setBatchProgress(prev => {

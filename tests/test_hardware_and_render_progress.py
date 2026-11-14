@@ -1,5 +1,6 @@
 import unittest
 import os
+import re
 import subprocess
 from pathlib import Path
 from backend.video_engine import (
@@ -7,6 +8,7 @@ from backend.video_engine import (
     resolve_encoder,
     _run_ffmpeg_command_with_progress,
     generate_ass_file,
+    wrap_title_smart,
 )
 
 
@@ -114,6 +116,86 @@ class TestHardwareAndRenderProgress(unittest.TestCase):
             self.assertIn("Style: TitleStyle,Bebas Neue,", content)
             self.assertIn(",0,0,0,100,100", content)
             self.assertIn("Style: SubStyle,Bebas Neue,", content)
+        finally:
+            if output_ass.exists():
+                output_ass.unlink()
+
+    def test_wrap_title_smart_max_3_lines_and_no_orphans(self):
+        # 1. User sample: "Awal Mula Raditya Dika Kenal Js Hiren" (7 words)
+        title = "Awal Mula Raditya Dika Kenal Js Hiren"
+        res, count = wrap_title_smart(title)
+        self.assertEqual(count, 3)
+        lines = res.split(r"\N")
+        self.assertEqual(len(lines), 3)
+        for line in lines:
+            words = line.split()
+            self.assertGreaterEqual(len(words), 2, f"Line '{line}' has fewer than 2 words (orphan word detected)")
+        self.assertEqual(lines[0], "Awal Mula")
+        self.assertEqual(lines[1], "Raditya Dika")
+        self.assertEqual(lines[2], "Kenal Js Hiren")
+
+        # 2. 4 words -> 2 lines, no orphans
+        res4, count4 = wrap_title_smart("Kenapa Harus Belajar AI")
+        self.assertEqual(count4, 2)
+        lines4 = res4.split(r"\N")
+        self.assertEqual(len(lines4), 2)
+        for line in lines4:
+            self.assertGreaterEqual(len(line.split()), 2)
+
+        # 3. 10 words -> strictly 3 lines max (never 4 lines)
+        long_title = "Kisah Inspiratif Seorang Tukang Parkir Menjadi Miliarder Muda Sukses Banget"
+        res10, count10 = wrap_title_smart(long_title)
+        self.assertEqual(count10, 3)
+        lines10 = res10.split(r"\N")
+        self.assertEqual(len(lines10), 3)
+        for line in lines10:
+            self.assertGreaterEqual(len(line.split()), 2)
+
+        # 4. Manual 5 lines collapsed to 3 lines max
+        manual_title = "Baris1\nBaris2\nBaris3\nBaris4\nBaris5"
+        res_m, count_m = wrap_title_smart(manual_title)
+        self.assertEqual(count_m, 3)
+        self.assertEqual(len(res_m.split(r"\N")), 3)
+
+    def test_generate_ass_file_caption_anti_orphan(self):
+        output_ass = Path("temp_test_anti_orphan.ass")
+        # 4 words where standard 3-word chunking would leave 1 lonely word
+        words = [
+            {"word": "Ini", "start": 0.0, "end": 0.3},
+            {"word": "adalah", "start": 0.3, "end": 0.6},
+            {"word": "contoh", "start": 0.6, "end": 0.9},
+            {"word": "orphan", "start": 0.9, "end": 1.2},
+        ]
+        try:
+            generate_ass_file(
+                words=words,
+                style_preset="viral_pop",
+                font_name="Montserrat",
+                output_ass_path=str(output_ass),
+                target_aspect_ratio="9:16",
+                duration_seconds=2.0,
+            )
+            self.assertTrue(output_ass.exists())
+            content = output_ass.read_text(encoding="utf-8")
+            # In Dialogue lines, verify that no dialog line contains only 1 word
+            dialogue_lines = [l for l in content.splitlines() if l.startswith("Dialogue:")]
+            self.assertTrue(len(dialogue_lines) > 0)
+            # The 4 words must be balanced into 2 words + 2 words (INI ADALAH and CONTOH ORPHAN)
+            self.assertIn("CONTOH ORPHAN", content)
+            self.assertIn("ADALAH", content)
+            # Ensure every dialogue line has at least 2 words (no single orphan words)
+            for line in dialogue_lines:
+                # Strip ASS formatting tags {...}
+                clean_line = re.sub(r"\{.*?\}", "", line).strip()
+                # Text after last comma is the subtitle dialogue
+                text_content = clean_line.split(",")[-1].strip()
+                if text_content:
+                    words_in_line = text_content.split()
+                    self.assertGreaterEqual(
+                        len(words_in_line),
+                        2,
+                        f"Dialogue line '{text_content}' left an orphan word"
+                    )
         finally:
             if output_ass.exists():
                 output_ass.unlink()

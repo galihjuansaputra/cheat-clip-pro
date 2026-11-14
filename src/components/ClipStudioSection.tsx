@@ -40,7 +40,7 @@ import type {
   FontItem,
   TranscriptLine,
 } from '../types';
-import { getFontWeightForFamily, getFontFamilyWithFallback } from '../services/captionUtils';
+import { getFontWeightForFamily, getFontFamilyWithFallback, wrapTitleSmart } from '../services/captionUtils';
 
 interface CaptionWord {
   text: string;
@@ -1548,8 +1548,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   };
 
   /**
-   * Intelligently wraps title across 1, 2, 3, or up to 4 balanced lines,
-   * matching backend video_engine.wrap_title_smart logic.
+   * Intelligently wraps title across 1, 2, or 3 balanced lines (strictly max 3 lines),
+   * preventing orphan single-word lines, matching backend video_engine.wrap_title_smart logic.
    */
   const formatTitleSmart = (
     rawText: string,
@@ -1560,57 +1560,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     if (!raw) return { formatted: '', lineCount: 1 };
 
     const cased = applyLetterCase(raw, style);
-
-    // Preserve manual line breaks if user typed them
-    if (cased.includes('\n')) {
-      const manualLines = cased
-        .split('\n')
-        .map(l => l.trim())
-        .filter(Boolean);
-      return {
-        formatted: manualLines.join('\n'),
-        lineCount: Math.max(1, manualLines.length),
-      };
-    }
-
-    const words = cased.split(/\s+/).filter(Boolean);
-    const maxSingleLen = sizePreset === 'small' ? 24 : sizePreset === 'big' ? 13 : 19;
-    if (words.length <= 1 || cased.length <= maxSingleLen) {
-      return { formatted: cased, lineCount: 1 };
-    }
-
-    const totalLen = cased.length;
-    const targetLines = Math.min(4, Math.max(2, Math.ceil(totalLen / maxSingleLen)));
-
-    const targetPerLine = totalLen / targetLines;
-    const lines: string[] = [];
-    let currentLine: string[] = [];
-    let currentLen = 0;
-
-    for (let i = 0; i < words.length; i++) {
-      const w = words[i];
-      const remainingWords = words.length - i;
-      const remainingLines = targetLines - lines.length;
-
-      if (
-        remainingLines > 1 &&
-        currentLine.length > 0 &&
-        (currentLen + w.length > targetPerLine * 1.15 || remainingWords <= remainingLines - 1)
-      ) {
-        lines.push(currentLine.join(' '));
-        currentLine = [w];
-        currentLen = w.length;
-      } else {
-        currentLine.push(w);
-        currentLen += w.length + 1;
-      }
-    }
-
-    if (currentLine.length > 0) {
-      lines.push(currentLine.join(' '));
-    }
-
-    return { formatted: lines.join('\n'), lineCount: Math.max(1, lines.length) };
+    const maxSingleLen = sizePreset === 'small' ? 24 : sizePreset === 'big' ? 14 : 20;
+    return wrapTitleSmart(cased, maxSingleLen);
   };
 
   /**
@@ -1928,11 +1879,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       const key = `${c.start_time}_${c.end_time}`;
       const custom = customClipTitles[key];
       const effectiveTitle = (custom !== undefined && custom.trim()) ? custom.trim() : (c.title_suggestion || c.title);
+      const { formatted } = formatTitleSmart(effectiveTitle, titleTextCase);
       return {
         ...c,
         title: effectiveTitle,
         title_suggestion: effectiveTitle,
         custom_title: effectiveTitle,
+        formatted_title: formatted,
       };
     });
 
@@ -1942,7 +1895,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       enableFaceTracking,
       streamerPreset,
       facecamPosition,
-      titleText: enrichedSelectedClips.length === 1 ? activeTitle : undefined,
+      titleText: enrichedSelectedClips.length === 1 ? formattedTitle : undefined,
       titlePrefix,
       titleSuffix,
       fileNamePrefix,

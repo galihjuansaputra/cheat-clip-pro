@@ -1,5 +1,5 @@
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
-import { CAPTION_STYLE_CONFIG, applyLetterCase, getFontWeightForFamily, getFontFamilyWithFallback } from './captionUtils';
+import { CAPTION_STYLE_CONFIG, applyLetterCase, getFontWeightForFamily, getFontFamilyWithFallback, wrapTitleSmart } from './captionUtils';
 import type { CaptionChunk } from './captionUtils';
 import type { CaptionStyle, SubtitlePositionMode } from '../types';
 
@@ -165,7 +165,9 @@ function drawTitleOnCanvas(
   const titleY = Math.round(canvasHeight * (yPercent / 100.0));
   const centerX = canvasWidth / 2;
 
-  const lines = titleText.split('\n').map(l => l.trim()).filter(Boolean);
+  // Format title into 2-3 balanced lines max, strictly avoiding orphan words
+  const { formatted } = wrapTitleSmart(titleText);
+  const lines = formatted.split('\n').map(l => l.trim()).filter(Boolean);
   const lineHeight = fontSize * 1.15;
 
   lines.forEach((line, idx) => {

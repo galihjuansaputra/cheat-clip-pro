@@ -1503,50 +1503,87 @@ def apply_text_case(text: str, mode: str) -> str:
 
 def wrap_title_smart(text: str, max_single_len: int = 22) -> Tuple[str, int]:
     """
-    Wraps title cleanly into 1, 2, 3 or more balanced lines separated by \\N.
-    Preserves manual newlines if present, otherwise balances words across lines.
+    Wraps title cleanly into 1, 2, or 3 balanced lines separated by \\N.
+    Strictly caps at 3 lines max (never 4 lines).
+    Prevents orphan single-word lines (widow words) when total words >= 4.
+    Preserves manual newlines if present (collapsed to max 3 lines with anti-orphan balancing).
     Returns (formatted_title, line_count).
     """
     raw = text.strip()
     if not raw:
         return "", 1
 
-    # Preserve manual newlines if the user specifically broke lines
+    # Preserve manual newlines if the user specifically broke lines, capped at max 3 lines
     if "\n" in raw:
         lines = [l.strip() for l in raw.split("\n") if l.strip()]
+        while len(lines) > 3:
+            lines[-2] = lines[-2] + " " + lines[-1]
+            lines.pop()
+        # Prevent 1-word orphan line if multiple lines exist and total words >= 4
+        all_manual_words = sum(len(l.split()) for l in lines)
+        if all_manual_words >= 4:
+            for idx in range(len(lines)):
+                w_list = lines[idx].split()
+                if len(w_list) == 1:
+                    if idx > 0:
+                        prev_w = lines[idx - 1].split()
+                        if len(prev_w) > 2:
+                            w_list.insert(0, prev_w.pop())
+                            lines[idx - 1] = " ".join(prev_w)
+                            lines[idx] = " ".join(w_list)
+                    elif idx < len(lines) - 1:
+                        next_w = lines[idx + 1].split()
+                        if len(next_w) > 2:
+                            w_list.append(next_w.pop(0))
+                            lines[idx + 1] = " ".join(next_w)
+                            lines[idx] = " ".join(w_list)
         return "\\N".join(lines), len(lines)
 
     words = raw.split()
-    if len(words) <= 1:
-        return raw, 1
-
+    total_words = len(words)
     total_len = len(raw)
-    if total_len <= max_single_len:
+
+    if total_words <= 1 or total_len <= max_single_len:
         return raw, 1
+    if total_words == 2:
+        return "\\N".join(words), 2
+    if total_words == 3:
+        if total_len <= max_single_len:
+            return raw, 1
+        return f"{words[0]} {words[1]}\\N{words[2]}", 2
 
-    # Determine target line count dynamically based on character count and max_single_len
-    target_lines = min(4, max(2, math.ceil(total_len / max_single_len)))
+    # For >= 4 words: strictly 2 or 3 lines max, and NEVER leave 1 lonely word on any line
+    # (Each line will have at least 2 words)
+    target_lines = 3 if (total_words >= 6 and total_len > max_single_len * 1.2) else 2
 
-    target_per_line = total_len / target_lines
-    lines = []
-    current_line = []
-    current_len = 0
-
-    for i, w in enumerate(words):
-        remaining_words = len(words) - i
-        remaining_lines = target_lines - len(lines)
-        if remaining_lines > 1 and len(current_line) > 0 and (current_len + len(w) > target_per_line * 1.15 or remaining_words <= remaining_lines - 1):
-            lines.append(" ".join(current_line))
-            current_line = [w]
-            current_len = len(w)
-        else:
-            current_line.append(w)
-            current_len += len(w) + 1
-
-    if current_line:
-        lines.append(" ".join(current_line))
-
-    return "\\N".join(lines), len(lines)
+    if target_lines == 2:
+        best_diff = float("inf")
+        best_split = total_words // 2
+        for k in range(2, total_words - 1):
+            l1 = " ".join(words[:k])
+            l2 = " ".join(words[k:])
+            diff = abs(len(l1) - len(l2))
+            if diff < best_diff:
+                best_diff = diff
+                best_split = k
+        lines = [" ".join(words[:best_split]), " ".join(words[best_split:])]
+        return "\\N".join(lines), 2
+    else:
+        best_score = float("inf")
+        best_split = (2, 4)
+        for i in range(2, total_words - 3):
+            for j in range(i + 2, total_words - 1):
+                l1 = " ".join(words[:i])
+                l2 = " ".join(words[i:j])
+                l3 = " ".join(words[j:])
+                lengths = [len(l1), len(l2), len(l3)]
+                score = max(lengths) - min(lengths)
+                if score < best_score:
+                    best_score = score
+                    best_split = (i, j)
+        i, j = best_split
+        lines = [" ".join(words[:i]), " ".join(words[i:j]), " ".join(words[j:])]
+        return "\\N".join(lines), 3
 
 
 def is_emoji_char(ch: str) -> bool:
@@ -2278,6 +2315,39 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
                 current_chars += w_len + 1
         if current_chunk:
             chunks.append(current_chunk)
+
+        # Step B2: Anti-orphan balancing pass: strictly prevent single-word chunks
+        # If total words >= 2, no chunk should leave a single lonely word on screen.
+        if len(valid_words) >= 2 and len(chunks) > 1:
+            changed = True
+            passes = 0
+            while changed and passes < 10:
+                changed = False
+                passes += 1
+                i = 0
+                while i < len(chunks):
+                    if len(chunks[i]) == 1 and len(chunks) > 1:
+                        if i > 0:
+                            prev_chunk = chunks[i - 1]
+                            if len(prev_chunk) >= 3:
+                                chunks[i].insert(0, prev_chunk.pop())
+                                changed = True
+                            else:
+                                prev_chunk.extend(chunks[i])
+                                chunks.pop(i)
+                                changed = True
+                                continue
+                        elif i < len(chunks) - 1:
+                            next_chunk = chunks[i + 1]
+                            if len(next_chunk) >= 3:
+                                chunks[i].append(next_chunk.pop(0))
+                                changed = True
+                            else:
+                                chunks[i].extend(next_chunk)
+                                chunks.pop(i + 1)
+                                changed = True
+                                continue
+                    i += 1
 
         # Step C: Enforce strictly non-overlapping, monotonically increasing chunk boundaries
         chunk_bounds = []

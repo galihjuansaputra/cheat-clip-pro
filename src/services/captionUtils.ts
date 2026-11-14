@@ -194,5 +194,161 @@ export function buildCaptionChunksForClip(
     });
   }
 
+  // Anti-orphan balancing pass: strictly prevent single-word chunks when total words >= 2
+  if (allWords.length >= 2 && chunks.length > 1) {
+    let changed = true;
+    let passes = 0;
+    while (changed && passes < 10) {
+      changed = false;
+      passes++;
+      let i = 0;
+      while (i < chunks.length) {
+        if (chunks[i].words.length === 1 && chunks.length > 1) {
+          if (i > 0) {
+            const prevChunk = chunks[i - 1];
+            if (prevChunk.words.length >= 3) {
+              const movedWord = prevChunk.words.pop()!;
+              chunks[i].words.unshift(movedWord);
+              prevChunk.end = prevChunk.words[prevChunk.words.length - 1].end;
+              chunks[i].start = chunks[i].words[0].start;
+              changed = true;
+            } else {
+              prevChunk.words.push(...chunks[i].words);
+              prevChunk.end = prevChunk.words[prevChunk.words.length - 1].end;
+              chunks.splice(i, 1);
+              changed = true;
+              continue;
+            }
+          } else if (i < chunks.length - 1) {
+            const nextChunk = chunks[i + 1];
+            if (nextChunk.words.length >= 3) {
+              const movedWord = nextChunk.words.shift()!;
+              chunks[i].words.push(movedWord);
+              chunks[i].end = chunks[i].words[chunks[i].words.length - 1].end;
+              nextChunk.start = nextChunk.words[0].start;
+              changed = true;
+            } else {
+              chunks[i].words.push(...nextChunk.words);
+              chunks[i].end = chunks[i].words[chunks[i].words.length - 1].end;
+              chunks.splice(i + 1, 1);
+              changed = true;
+              continue;
+            }
+          }
+        }
+        i++;
+      }
+    }
+  }
+
   return chunks;
+}
+
+/**
+ * Wraps title cleanly into 1, 2, or 3 balanced lines separated by newline '\n'.
+ * Strictly caps at 3 lines max (never 4 lines).
+ * Prevents orphan single-word lines when total words >= 4 (each line has at least 2 words).
+ * Preserves manual newlines (capped to max 3 lines with orphan balancing).
+ */
+export function wrapTitleSmart(
+  text: string,
+  maxSingleLen: number = 22
+): { formatted: string; lineCount: number } {
+  const raw = text.trim();
+  if (!raw) return { formatted: '', lineCount: 1 };
+
+  // Preserve manual newlines if the user specifically broke lines, capped at max 3 lines
+  if (raw.includes('\n')) {
+    const lines = raw
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean);
+    while (lines.length > 3) {
+      lines[lines.length - 2] = lines[lines.length - 2] + ' ' + lines[lines.length - 1];
+      lines.pop();
+    }
+    const allManualWords = lines.reduce((acc, l) => acc + l.split(/\s+/).filter(Boolean).length, 0);
+    if (allManualWords >= 4) {
+      for (let idx = 0; idx < lines.length; idx++) {
+        const wList = lines[idx].split(/\s+/).filter(Boolean);
+        if (wList.length === 1) {
+          if (idx > 0) {
+            const prevW = lines[idx - 1].split(/\s+/).filter(Boolean);
+            if (prevW.length > 2) {
+              wList.unshift(prevW.pop()!);
+              lines[idx - 1] = prevW.join(' ');
+              lines[idx] = wList.join(' ');
+            }
+          } else if (idx < lines.length - 1) {
+            const nextW = lines[idx + 1].split(/\s+/).filter(Boolean);
+            if (nextW.length > 2) {
+              wList.push(nextW.shift()!);
+              lines[idx + 1] = nextW.join(' ');
+              lines[idx] = wList.join(' ');
+            }
+          }
+        }
+      }
+    }
+    return { formatted: lines.join('\n'), lineCount: Math.max(1, lines.length) };
+  }
+
+  const words = raw.split(/\s+/).filter(Boolean);
+  const totalWords = words.length;
+  const totalLen = raw.length;
+
+  if (totalWords <= 1 || totalLen <= maxSingleLen) {
+    return { formatted: raw, lineCount: 1 };
+  }
+  if (totalWords === 2) {
+    return { formatted: words.join('\n'), lineCount: 2 };
+  }
+  if (totalWords === 3) {
+    if (totalLen <= maxSingleLen) {
+      return { formatted: raw, lineCount: 1 };
+    }
+    return { formatted: `${words[0]} ${words[1]}\n${words[2]}`, lineCount: 2 };
+  }
+
+  // For >= 4 words: strictly 2 or 3 lines max, and NEVER leave 1 lonely word on any line
+  const targetLines = totalWords >= 6 && totalLen > maxSingleLen * 1.2 ? 3 : 2;
+
+  if (targetLines === 2) {
+    let bestDiff = Infinity;
+    let bestSplit = Math.floor(totalWords / 2);
+    for (let k = 2; k <= totalWords - 2; k++) {
+      const l1 = words.slice(0, k).join(' ');
+      const l2 = words.slice(k).join(' ');
+      const diff = Math.abs(l1.length - l2.length);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestSplit = k;
+      }
+    }
+    const lines = [words.slice(0, bestSplit).join(' '), words.slice(bestSplit).join(' ')];
+    return { formatted: lines.join('\n'), lineCount: 2 };
+  } else {
+    let bestScore = Infinity;
+    let bestSplit = [2, 4];
+    for (let i = 2; i <= totalWords - 4; i++) {
+      for (let j = i + 2; j <= totalWords - 2; j++) {
+        const l1 = words.slice(0, i).join(' ');
+        const l2 = words.slice(i, j).join(' ');
+        const l3 = words.slice(j).join(' ');
+        const lengths = [l1.length, l2.length, l3.length];
+        const score = Math.max(...lengths) - Math.min(...lengths);
+        if (score < bestScore) {
+          bestScore = score;
+          bestSplit = [i, j];
+        }
+      }
+    }
+    const [i, j] = bestSplit;
+    const lines = [
+      words.slice(0, i).join(' '),
+      words.slice(i, j).join(' '),
+      words.slice(j).join(' '),
+    ];
+    return { formatted: lines.join('\n'), lineCount: 3 };
+  }
 }
