@@ -19,7 +19,7 @@ import { resilientFetch } from '../utils/api';
 import { getStoredCookies, hasStoredCookies } from '../utils/cookieUtils';
 import { detectFaceClientSide } from '../utils/clientFaceDetector';
 import { isMobileDevice } from '../utils/deviceUtils';
-import { isWebCodecsGpuSupported, getClientGpuName, detectClientGpuAccurate } from '../services/webcodecsRenderer';
+import { isWebCodecsGpuSupported } from '../services/webcodecsRenderer';
 import type {
   ViralClip,
   RenderSettings,
@@ -472,7 +472,6 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [isWatermarkDragging, setIsWatermarkDragging] = useState<boolean>(false);
   const phoneContainerRef = useRef<HTMLDivElement | null>(null);
 
-  const [clientGpuName, setClientGpuName] = useState<string>(() => getClientGpuName());
   const [hasWebCodecs] = useState<boolean>(() => isWebCodecsGpuSupported());
 
   // Hardware acceleration / Video Encoder state:
@@ -490,14 +489,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [hwDropdownOpen, setHwDropdownOpen] = useState<boolean>(false);
 
   useEffect(() => {
-    // 1. Asynchronously detect high-performance WebGPU / WebGL client GPU name
-    detectClientGpuAccurate().then(name => {
-      if (name && name !== 'Hardware GPU' && name !== 'Client Hardware GPU') {
-        setClientGpuName(name);
-      }
-    });
-
-    // 2. Fetch server hardware support and GPU info
+    // Fetch server hardware support and GPU info
     const fetchHardwareSupport = async () => {
       try {
         const res = await resilientFetch('/api/hardware-accel', { maxRetries: 4, retryDelay: 1000, silent: true });
@@ -4418,7 +4410,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         : hardwareAccel === 'nvenc'
                         ? (hardwareInfo?.gpu_name ? `NVIDIA NVENC (${hardwareInfo.gpu_name})` : t.studio.hwNvenc)
                         : hardwareAccel === 'client_gpu'
-                        ? `Client GPU (${clientGpuName})`
+                        ? 'Client GPU'
                         : hardwareAccel === 'browser_wasm'
                         ? t.studio.hwWasm
                         : hardwareAccel === 'amf'
@@ -4464,7 +4456,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       ...(hasWebCodecs ? [{
                         value: 'client_gpu' as HardwareAccelOption,
                         badge: 'GPU',
-                        title: `Browser Client GPU (${clientGpuName})`,
+                        title: 'Browser Client GPU',
                         desc: 'Native WebCodecs VideoEncoder running in browser (0% Server CPU · Client GPU Accel)',
                         status: 'Default (Client GPU)',
                         isReady: true,
@@ -4568,7 +4560,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   {hardwareAccel === 'browser_wasm'
                     ? (t.studio.hwWasmDesc || 'Client-side browser WASM engine (Zero server load · 100% private in browser)')
                     : hardwareAccel === 'client_gpu'
-                    ? `Client GPU Hardware Acceleration (${clientGpuName}) · Native WebCodecs VideoEncoder (0% Server CPU)`
+                    ? 'Client GPU Hardware Acceleration · Native WebCodecs VideoEncoder (0% Server CPU)'
                     : hardwareAccel === 'auto'
                     ? (hardwareInfo?.gpu_name ? `${t.studio.hwAutoDesc} · Detected GPU: ${hardwareInfo.gpu_name}` : (hardwareInfo?.recommended ? `${t.studio.hwAutoDesc} · Recommended: ${hardwareInfo.recommended.toUpperCase()}` : t.studio.hwAutoDesc))
                     : hardwareAccel === 'nvenc'
@@ -5152,7 +5144,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     >
                       {hasWebCodecs && (
                         <option value="client_gpu">
-                          [GPU] Browser Client GPU ({clientGpuName})
+                          [GPU] Browser Client GPU
                         </option>
                       )}
                       <option value="browser_wasm">

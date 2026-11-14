@@ -578,7 +578,7 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
     }
   }
 
-  if (onProgress) onProgress(20, `Processing video frames with Client GPU (${getClientGpuName()})...`);
+  if (onProgress) onProgress(20, 'Processing video frames with Client GPU...');
 
   // Frame stepping helper with safety timeout
   const seekTo = (time: number): Promise<void> => {
