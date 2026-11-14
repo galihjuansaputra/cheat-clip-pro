@@ -25,6 +25,9 @@ from backend.schemas.render import (
 from backend.services.render_service import (
     BATCH_REQUESTS,
     RENDER_BATCHES,
+    CANCELLED_BATCH_IDS,
+    cancel_batch_rendering,
+    is_batch_cancelled,
     process_batch_rendering,
     process_batch_retry,
     save_render_batches,
@@ -39,6 +42,7 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
         raise HTTPException(status_code=400, detail="No clips provided for rendering")
 
     batch_id = f"batch_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+    CANCELLED_BATCH_IDS.discard(batch_id)
 
     is_merged = bool(request.settings and getattr(request.settings, "render_mode", "separate") == "merged")
     pfx = (request.settings.title_prefix or "") if request.settings else ""
@@ -99,6 +103,28 @@ async def start_batch_render(request: RenderBatchRequest, background_tasks: Back
     return {"batch_id": batch_id, "total_clips": 1 if is_merged else len(request.clips), "is_merged": is_merged}
 
 
+@router.post("/api/render-batch/{batch_id}/cancel")
+async def cancel_batch_rendering_endpoint(batch_id: str):
+    if batch_id not in RENDER_BATCHES:
+        raise HTTPException(status_code=404, detail="Batch not found")
+
+    batch = RENDER_BATCHES[batch_id]
+    curr_status = batch.get("overall_status")
+    if curr_status in ["completed", "error", "cancelled"]:
+        return {
+            "status": "ignored",
+            "message": f"Batch is not actively running (status: {curr_status})",
+            "batch_id": batch_id,
+        }
+
+    cancel_batch_rendering(batch_id)
+    return {
+        "status": "cancelled",
+        "message": "Render batch cancelled successfully",
+        "batch_id": batch_id,
+    }
+
+
 @router.post("/api/render-batch/{batch_id}/retry")
 async def retry_batch_rendering(
     batch_id: str,
@@ -110,6 +136,8 @@ async def retry_batch_rendering(
     batch = RENDER_BATCHES[batch_id]
     if batch_id not in BATCH_REQUESTS:
         raise HTTPException(status_code=400, detail="Batch configuration expired. Please start a new render.")
+
+    CANCELLED_BATCH_IDS.discard(batch_id)
 
     if batch.get("overall_status") == "running":
         # Check if any clip is actively running
@@ -124,7 +152,7 @@ async def retry_batch_rendering(
     if body and body.clip_indices:
         indices_to_retry = [i for i in body.clip_indices if 0 <= i < len(batch["clips"])]
     else:
-        indices_to_retry = [i for i, c in enumerate(batch["clips"]) if c.get("status") == "error"]
+        indices_to_retry = [i for i, c in enumerate(batch["clips"]) if c.get("status") in ["error", "cancelled"]]
 
     if not indices_to_retry:
         raise HTTPException(status_code=400, detail="No failed clips to retry in this batch.")
@@ -169,7 +197,7 @@ async def get_render_progress(batch_id: str):
                 # Send SSE keep-alive comment every 5 iterations (~2.5s) to prevent client/proxy timeout during lag
                 if idle_count % 5 == 0:
                     yield ": keep-alive\n\n"
-            if batch.get("overall_status") in ["completed", "error"]:
+            if batch.get("overall_status") in ["completed", "error", "cancelled"]:
                 # Yield final state once and break
                 yield f"data: {batch_json}\n\n"
                 break

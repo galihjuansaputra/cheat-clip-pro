@@ -27,6 +27,71 @@ BATCH_REQUESTS: Dict[str, RenderBatchRequest] = {}
 # Concurrency gate: serialize video rendering (1 active render job at a time) to prevent CPU starvation on low-spec servers
 _RENDER_SEMAPHORE = asyncio.Semaphore(1)
 
+ACTIVE_BATCH_PROCESSES: Dict[str, subprocess.Popen] = {}
+ACTIVE_BATCH_TASKS: Dict[str, asyncio.Task] = {}
+CANCELLED_BATCH_IDS: set = set()
+
+
+def kill_process_tree(pid: int):
+    """Cleanly terminates a process and all its child subprocesses (FFmpeg, yt-dlp)."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(pid)], capture_output=True)
+        else:
+            try:
+                import signal
+                os.kill(pid, signal.SIGKILL)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"Error terminating process {pid}: {e}")
+
+
+def register_batch_process(batch_id: str, proc: subprocess.Popen):
+    ACTIVE_BATCH_PROCESSES[batch_id] = proc
+
+
+def unregister_batch_process(batch_id: str, proc: Optional[subprocess.Popen] = None):
+    if batch_id in ACTIVE_BATCH_PROCESSES:
+        if proc is None or ACTIVE_BATCH_PROCESSES[batch_id] == proc:
+            ACTIVE_BATCH_PROCESSES.pop(batch_id, None)
+
+
+def is_batch_cancelled(batch_id: str) -> bool:
+    return batch_id in CANCELLED_BATCH_IDS
+
+
+def cancel_batch_rendering(batch_id: str) -> bool:
+    """Terminates active render subprocesses and flags the batch as cancelled."""
+    CANCELLED_BATCH_IDS.add(batch_id)
+    logger.info(f"Cancellation initiated for batch {batch_id}")
+
+    # 1. Kill active subprocess if any
+    proc = ACTIVE_BATCH_PROCESSES.get(batch_id)
+    if proc:
+        logger.info(f"Terminating active render process {proc.pid} for batch {batch_id}")
+        kill_process_tree(proc.pid)
+        ACTIVE_BATCH_PROCESSES.pop(batch_id, None)
+
+    # 2. Cancel asyncio task if running
+    task = ACTIVE_BATCH_TASKS.get(batch_id)
+    if task and not task.done():
+        logger.info(f"Cancelling active asyncio task for batch {batch_id}")
+        task.cancel()
+
+    # 3. Update in-memory batch state immediately so UI updates right away
+    batch = RENDER_BATCHES.get(batch_id)
+    if batch:
+        batch["overall_status"] = "cancelled"
+        batch["error_message"] = "Render process was cancelled by the user."
+        for clip in batch.get("clips", []):
+            if clip.get("status") in ["pending", "downloading", "transcribing", "rendering"]:
+                clip["status"] = "cancelled"
+                clip["error_message"] = "Cancelled by user"
+        save_render_batches()
+
+    return True
+
 BATCH_STATE_FILE = TEMP_DIR / "render_batches_state.json"
 
 
@@ -90,6 +155,11 @@ async def render_single_batch_clip(
         return
 
     clip_status = batch["clips"][idx]
+    if is_batch_cancelled(batch_id):
+        clip_status["status"] = "cancelled"
+        clip_status["error_message"] = "Cancelled by user"
+        return
+
     clip_status["status"] = "downloading"
     clip_status["progress_percent"] = 15
     clip_status["error_message"] = None
@@ -98,6 +168,7 @@ async def render_single_batch_clip(
     raw_path = None
     ass_path = None
     title_overlay_path = None
+    out_path = None
 
     try:
         # 1. Download
@@ -111,8 +182,20 @@ async def render_single_batch_clip(
             start_t,
             end_t,
             seg_filename,
-            cookies_content
+            cookies_content,
+            lambda p: register_batch_process(batch_id, p)
         )
+        unregister_batch_process(batch_id)
+
+        if is_batch_cancelled(batch_id):
+            clip_status["status"] = "cancelled"
+            clip_status["error_message"] = "Cancelled by user"
+            if raw_path and os.path.exists(raw_path):
+                try:
+                    os.unlink(raw_path)
+                except Exception:
+                    pass
+            return
 
         if not raw_path or not os.path.exists(raw_path) or not is_valid_mp4(raw_path):
             raise RuntimeError(
@@ -235,6 +318,16 @@ async def render_single_batch_clip(
             )
 
         # 3. Render Final Vertical MP4
+        if is_batch_cancelled(batch_id):
+            clip_status["status"] = "cancelled"
+            clip_status["error_message"] = "Cancelled by user"
+            if raw_path and os.path.exists(raw_path):
+                try:
+                    os.unlink(raw_path)
+                except Exception:
+                    pass
+            return
+
         clip_status["status"] = "rendering"
         clip_status["progress_percent"] = 50
 
@@ -279,8 +372,20 @@ async def render_single_batch_clip(
             title_y_percent=settings.title_y_percent,
             crop_x_percent=getattr(settings, "crop_x_percent", None),
             title_x_percent=getattr(settings, "title_x_percent", 50.0),
-            progress_callback=_on_single_clip_progress
+            progress_callback=_on_single_clip_progress,
+            on_process_spawned=lambda p: register_batch_process(batch_id, p)
         )
+        unregister_batch_process(batch_id)
+
+        if is_batch_cancelled(batch_id):
+            clip_status["status"] = "cancelled"
+            clip_status["error_message"] = "Cancelled by user"
+            if out_path and os.path.exists(out_path):
+                try:
+                    os.unlink(out_path)
+                except Exception:
+                    pass
+            return
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):
             raise RuntimeError("Rendered MP4 file is incomplete or missing. Please retry rendering.")
@@ -291,6 +396,23 @@ async def render_single_batch_clip(
         clip_status["output_path"] = out_path
 
     except Exception as e:
+        if is_batch_cancelled(batch_id):
+            logger.info(f"Render clip {idx} in batch {batch_id} cancelled.")
+            clip_status["status"] = "cancelled"
+            clip_status["error_message"] = "Cancelled by user"
+            clip_status["error"] = "Cancelled by user"
+            if raw_path and os.path.exists(raw_path):
+                try:
+                    os.unlink(raw_path)
+                except Exception:
+                    pass
+            if out_path and os.path.exists(out_path):
+                try:
+                    os.unlink(out_path)
+                except Exception:
+                    pass
+            return
+
         logger.error(f"Error rendering clip {idx} in batch {batch_id}: {e}")
         clip_status["status"] = "error"
         err_msg = str(e)
@@ -318,6 +440,11 @@ def update_batch_summary_and_zip(batch_id: str, settings: RenderSettingsModel):
     """
     batch = RENDER_BATCHES.get(batch_id)
     if not batch:
+        return
+
+    if is_batch_cancelled(batch_id) or batch.get("overall_status") == "cancelled":
+        batch["overall_status"] = "cancelled"
+        save_render_batches()
         return
 
     # Generate/update ZIP bundle for the batch with title-based filenames and duplicate handling
@@ -379,6 +506,11 @@ async def render_merged_batch_clips(
         return
 
     clip_status = batch["clips"][0]
+    if is_batch_cancelled(batch_id):
+        clip_status["status"] = "cancelled"
+        clip_status["error_message"] = "Cancelled by user"
+        return
+
     clip_status["status"] = "downloading"
     clip_status["progress_percent"] = 10
     clip_status["error_message"] = None
@@ -388,11 +520,17 @@ async def render_merged_batch_clips(
     raw_merged_path: Optional[str] = None
     ass_path: Optional[str] = None
     title_overlay_path: Optional[str] = None
+    out_path: Optional[str] = None
 
     try:
         total_segments = len(clips)
         # 1. Download / slice each segment
         for i, seg in enumerate(clips):
+            if is_batch_cancelled(batch_id):
+                clip_status["status"] = "cancelled"
+                clip_status["error_message"] = "Cancelled by user"
+                return
+
             clip_status["progress_percent"] = 10 + int((i / max(1, total_segments)) * 25)
             s_t = float(seg.get("start_time", 0.0))
             e_t = float(seg.get("end_time", s_t + 30.0))
@@ -403,8 +541,16 @@ async def render_merged_batch_clips(
                 s_t,
                 e_t,
                 part_filename,
-                cookies_content
+                cookies_content,
+                lambda p: register_batch_process(batch_id, p)
             )
+            unregister_batch_process(batch_id)
+
+            if is_batch_cancelled(batch_id):
+                clip_status["status"] = "cancelled"
+                clip_status["error_message"] = "Cancelled by user"
+                return
+
             if not p_path or not os.path.exists(p_path) or not is_valid_mp4(p_path):
                 raise RuntimeError(
                     f"Segment #{i+1} ({s_t:.1f}s - {e_t:.1f}s) is incomplete or corrupted. Please retry rendering."
@@ -412,6 +558,11 @@ async def render_merged_batch_clips(
             part_paths.append(p_path)
 
         # 2. Concatenate raw video segments
+        if is_batch_cancelled(batch_id):
+            clip_status["status"] = "cancelled"
+            clip_status["error_message"] = "Cancelled by user"
+            return
+
         clip_status["status"] = "transcribing"
         clip_status["progress_percent"] = 40
 
@@ -440,7 +591,19 @@ async def render_merged_batch_clips(
             ]
             concat_timeout = max(180, total_segments * 60)
             logger.info(f"Concatenating {len(part_paths)} segments into {raw_merged_path}")
-            await asyncio.to_thread(subprocess.run, concat_cmd, check=True, timeout=concat_timeout)
+            concat_p = subprocess.Popen(concat_cmd)
+            register_batch_process(batch_id, concat_p)
+            try:
+                await asyncio.to_thread(concat_p.communicate, timeout=concat_timeout)
+            finally:
+                unregister_batch_process(batch_id)
+
+            if is_batch_cancelled(batch_id):
+                clip_status["status"] = "cancelled"
+                clip_status["error_message"] = "Cancelled by user"
+                return
+            if concat_p.returncode != 0:
+                raise RuntimeError("Failed to concatenate video segments")
 
         # 3. Transcribe & generate time-shifted subtitles
         target_lang = None
@@ -544,6 +707,11 @@ async def render_merged_batch_clips(
             )
 
         # 4. Render Final Single MP4
+        if is_batch_cancelled(batch_id):
+            clip_status["status"] = "cancelled"
+            clip_status["error_message"] = "Cancelled by user"
+            return
+
         clip_status["status"] = "rendering"
         clip_status["progress_percent"] = 55
 
@@ -590,8 +758,20 @@ async def render_merged_batch_clips(
             title_y_percent=settings.title_y_percent,
             crop_x_percent=getattr(settings, "crop_x_percent", None),
             title_x_percent=getattr(settings, "title_x_percent", 50.0),
-            progress_callback=_on_compilation_progress
+            progress_callback=_on_compilation_progress,
+            on_process_spawned=lambda p: register_batch_process(batch_id, p)
         )
+        unregister_batch_process(batch_id)
+
+        if is_batch_cancelled(batch_id):
+            clip_status["status"] = "cancelled"
+            clip_status["error_message"] = "Cancelled by user"
+            if out_path and os.path.exists(out_path):
+                try:
+                    os.unlink(out_path)
+                except Exception:
+                    pass
+            return
 
         if not os.path.exists(out_path) or not is_valid_mp4(out_path):
             raise RuntimeError("Merged MP4 file is incomplete or missing. Please retry rendering.")
@@ -602,6 +782,13 @@ async def render_merged_batch_clips(
         clip_status["output_path"] = out_path
 
     except Exception as e:
+        if is_batch_cancelled(batch_id):
+            logger.info(f"Merged batch {batch_id} cancelled.")
+            clip_status["status"] = "cancelled"
+            clip_status["error_message"] = "Cancelled by user"
+            clip_status["error"] = "Cancelled by user"
+            return
+
         logger.error(f"Error rendering merged batch {batch_id}: {e}")
         clip_status["status"] = "error"
         err_msg = str(e)
@@ -625,62 +812,93 @@ async def render_merged_batch_clips(
 async def process_batch_rendering(batch_id: str, request: RenderBatchRequest):
     async with _RENDER_SEMAPHORE:
         batch = RENDER_BATCHES.get(batch_id)
-        if not batch:
+        if not batch or is_batch_cancelled(batch_id):
             return
 
-        clips = request.clips
-        settings = request.settings
+        curr_t = asyncio.current_task()
+        if curr_t:
+            ACTIVE_BATCH_TASKS[batch_id] = curr_t
 
-        # Normalize video URL for history or direct URL
-        target_url = (request.video_url or "").strip()
-        if "yt_audio_" in target_url:
-            match_yt = re.search(r'yt_audio_([a-zA-Z0-9_-]{11})', target_url)
-            if match_yt:
-                target_url = f"https://www.youtube.com/watch?v={match_yt.group(1)}"
-        elif request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
-            if not target_url.startswith("/api/video/"):
-                target_url = f"/api/video/{request.video_id}"
-        elif request.video_id and is_twitch_url(request.video_id):
-            tw_info = extract_twitch_info(request.video_id)
-            target_url = get_twitch_canonical_url(tw_info) if tw_info else request.video_id
-        elif target_url and is_twitch_url(target_url):
-            tw_info = extract_twitch_info(target_url)
-            target_url = get_twitch_canonical_url(tw_info) if tw_info else target_url
-        elif not target_url:
-            if request.video_id:
-                target_url = f"https://www.youtube.com/watch?v={request.video_id}"
-        elif not target_url.startswith("http") and not target_url.startswith("/api/video/"):
-            target_url = f"https://www.youtube.com/watch?v={target_url}"
+        try:
+            clips = request.clips
+            settings = request.settings
 
-        cookies_content = getattr(request, "cookies", None)
-        is_merged = bool(settings and getattr(settings, "render_mode", "separate") == "merged")
-        if is_merged:
-            batch["current_clip_index"] = 0
-            await render_merged_batch_clips(
-                batch_id=batch_id,
-                clips=clips,
-                settings=settings,
-                target_url=target_url,
-                transcript=request.transcript,
-                cookies_content=cookies_content
-            )
-            batch["current_clip_index"] = 1
-        else:
-            for idx, clip in enumerate(clips):
-                batch["current_clip_index"] = idx
-                await render_single_batch_clip(
+            # Normalize video URL for history or direct URL
+            target_url = (request.video_url or "").strip()
+            if "yt_audio_" in target_url:
+                match_yt = re.search(r'yt_audio_([a-zA-Z0-9_-]{11})', target_url)
+                if match_yt:
+                    target_url = f"https://www.youtube.com/watch?v={match_yt.group(1)}"
+            elif request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
+                if not target_url.startswith("/api/video/"):
+                    target_url = f"/api/video/{request.video_id}"
+            elif request.video_id and is_twitch_url(request.video_id):
+                tw_info = extract_twitch_info(request.video_id)
+                target_url = get_twitch_canonical_url(tw_info) if tw_info else request.video_id
+            elif target_url and is_twitch_url(target_url):
+                tw_info = extract_twitch_info(target_url)
+                target_url = get_twitch_canonical_url(tw_info) if tw_info else target_url
+            elif not target_url:
+                if request.video_id:
+                    target_url = f"https://www.youtube.com/watch?v={request.video_id}"
+            elif not target_url.startswith("http") and not target_url.startswith("/api/video/"):
+                target_url = f"https://www.youtube.com/watch?v={target_url}"
+
+            cookies_content = getattr(request, "cookies", None)
+            is_merged = bool(settings and getattr(settings, "render_mode", "separate") == "merged")
+            if is_merged:
+                batch["current_clip_index"] = 0
+                await render_merged_batch_clips(
                     batch_id=batch_id,
-                    idx=idx,
-                    clip=clip,
+                    clips=clips,
                     settings=settings,
                     target_url=target_url,
                     transcript=request.transcript,
-                    total_clips=len(clips),
                     cookies_content=cookies_content
                 )
-                batch["current_clip_index"] = idx + 1
+                batch["current_clip_index"] = 1
+            else:
+                for idx, clip in enumerate(clips):
+                    if is_batch_cancelled(batch_id):
+                        break
+                    batch["current_clip_index"] = idx
+                    await render_single_batch_clip(
+                        batch_id=batch_id,
+                        idx=idx,
+                        clip=clip,
+                        settings=settings,
+                        target_url=target_url,
+                        transcript=request.transcript,
+                        total_clips=len(clips),
+                        cookies_content=cookies_content
+                    )
+                    batch["current_clip_index"] = idx + 1
+                    if is_batch_cancelled(batch_id):
+                        break
 
-        update_batch_summary_and_zip(batch_id, settings)
+            if is_batch_cancelled(batch_id):
+                batch["overall_status"] = "cancelled"
+                batch["error_message"] = "Render process was cancelled by the user."
+                for c in batch.get("clips", []):
+                    if c.get("status") in ["pending", "downloading", "transcribing", "rendering"]:
+                        c["status"] = "cancelled"
+                        c["error_message"] = "Cancelled by user"
+                save_render_batches()
+                return
+
+            update_batch_summary_and_zip(batch_id, settings)
+        except asyncio.CancelledError:
+            logger.info(f"Batch {batch_id} cancelled via asyncio task cancellation")
+            batch["overall_status"] = "cancelled"
+            batch["error_message"] = "Render process was cancelled by the user."
+            for c in batch.get("clips", []):
+                if c.get("status") in ["pending", "downloading", "transcribing", "rendering"]:
+                    c["status"] = "cancelled"
+                    c["error_message"] = "Cancelled by user"
+            save_render_batches()
+        finally:
+            ACTIVE_BATCH_TASKS.pop(batch_id, None)
+            ACTIVE_BATCH_PROCESSES.pop(batch_id, None)
 
 
 async def process_batch_retry(batch_id: str, clip_indices: List[int]):
@@ -691,49 +909,81 @@ async def process_batch_retry(batch_id: str, clip_indices: List[int]):
             logger.error(f"Cannot retry batch {batch_id}: batch or request data not found")
             return
 
-        batch["overall_status"] = "running"
-        clips = request.clips
-        settings = request.settings
-        target_url = (request.video_url or "").strip()
-        if "yt_audio_" in target_url:
-            match_yt = re.search(r'yt_audio_([a-zA-Z0-9_-]{11})', target_url)
-            if match_yt:
-                target_url = f"https://www.youtube.com/watch?v={match_yt.group(1)}"
-        elif request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
-            if not target_url.startswith("/api/video/"):
-                target_url = f"/api/video/{request.video_id}"
-        elif not target_url:
-            if request.video_id:
-                target_url = f"https://www.youtube.com/watch?v={request.video_id}"
-        elif not target_url.startswith("http") and not target_url.startswith("/api/video/"):
-            target_url = f"https://www.youtube.com/watch?v={target_url}"
+        CANCELLED_BATCH_IDS.discard(batch_id)
+        curr_t = asyncio.current_task()
+        if curr_t:
+            ACTIVE_BATCH_TASKS[batch_id] = curr_t
 
-        cookies_content = getattr(request, "cookies", None)
-        is_merged = bool(batch.get("is_merged")) or bool(settings and getattr(settings, "render_mode", "separate") == "merged")
-        if is_merged:
-            batch["current_clip_index"] = 0
-            await render_merged_batch_clips(
-                batch_id=batch_id,
-                clips=clips,
-                settings=settings,
-                target_url=target_url,
-                transcript=request.transcript,
-                cookies_content=cookies_content
-            )
-            batch["current_clip_index"] = 1
-        else:
-            for idx in clip_indices:
-                if 0 <= idx < len(clips):
-                    batch["current_clip_index"] = idx
-                    await render_single_batch_clip(
-                        batch_id=batch_id,
-                        idx=idx,
-                        clip=clips[idx],
-                        settings=settings,
-                        target_url=target_url,
-                        transcript=request.transcript,
-                        total_clips=len(clips),
-                        cookies_content=cookies_content
-                    )
+        try:
+            batch["overall_status"] = "running"
+            clips = request.clips
+            settings = request.settings
+            target_url = (request.video_url or "").strip()
+            if "yt_audio_" in target_url:
+                match_yt = re.search(r'yt_audio_([a-zA-Z0-9_-]{11})', target_url)
+                if match_yt:
+                    target_url = f"https://www.youtube.com/watch?v={match_yt.group(1)}"
+            elif request.video_id and (request.video_id.startswith("gdrive_") or request.video_id.startswith("upload_")):
+                if not target_url.startswith("/api/video/"):
+                    target_url = f"/api/video/{request.video_id}"
+            elif not target_url:
+                if request.video_id:
+                    target_url = f"https://www.youtube.com/watch?v={request.video_id}"
+            elif not target_url.startswith("http") and not target_url.startswith("/api/video/"):
+                target_url = f"https://www.youtube.com/watch?v={target_url}"
 
-        update_batch_summary_and_zip(batch_id, settings)
+            cookies_content = getattr(request, "cookies", None)
+            is_merged = bool(batch.get("is_merged")) or bool(settings and getattr(settings, "render_mode", "separate") == "merged")
+            if is_merged:
+                batch["current_clip_index"] = 0
+                await render_merged_batch_clips(
+                    batch_id=batch_id,
+                    clips=clips,
+                    settings=settings,
+                    target_url=target_url,
+                    transcript=request.transcript,
+                    cookies_content=cookies_content
+                )
+                batch["current_clip_index"] = 1
+            else:
+                for idx in clip_indices:
+                    if is_batch_cancelled(batch_id):
+                        break
+                    if 0 <= idx < len(clips):
+                        batch["current_clip_index"] = idx
+                        await render_single_batch_clip(
+                            batch_id=batch_id,
+                            idx=idx,
+                            clip=clips[idx],
+                            settings=settings,
+                            target_url=target_url,
+                            transcript=request.transcript,
+                            total_clips=len(clips),
+                            cookies_content=cookies_content
+                        )
+                    if is_batch_cancelled(batch_id):
+                        break
+
+            if is_batch_cancelled(batch_id):
+                batch["overall_status"] = "cancelled"
+                batch["error_message"] = "Render process was cancelled by the user."
+                for c in batch.get("clips", []):
+                    if c.get("status") in ["pending", "downloading", "transcribing", "rendering"]:
+                        c["status"] = "cancelled"
+                        c["error_message"] = "Cancelled by user"
+                save_render_batches()
+                return
+
+            update_batch_summary_and_zip(batch_id, settings)
+        except asyncio.CancelledError:
+            logger.info(f"Retry for batch {batch_id} cancelled via asyncio task cancellation")
+            batch["overall_status"] = "cancelled"
+            batch["error_message"] = "Render process was cancelled by the user."
+            for c in batch.get("clips", []):
+                if c.get("status") in ["pending", "downloading", "transcribing", "rendering"]:
+                    c["status"] = "cancelled"
+                    c["error_message"] = "Cancelled by user"
+            save_render_batches()
+        finally:
+            ACTIVE_BATCH_TASKS.pop(batch_id, None)
+            ACTIVE_BATCH_PROCESSES.pop(batch_id, None)

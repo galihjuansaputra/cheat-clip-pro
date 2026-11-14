@@ -324,7 +324,9 @@ export default function App() {
   // Clip Studio & Auto-Clipper states
   const [batchProgress, setBatchProgress] = useState<BatchRenderProgress | null>(null);
   const [isLaunchingRender, setIsLaunchingRender] = useState(false);
+  const [isCancellingRender, setIsCancellingRender] = useState(false);
   const batchEventSourceRef = useRef<EventSource | null>(null);
+  const clientRenderCancelledRef = useRef(false);
 
   const listenToBatchProgress = useCallback((batchId: string) => {
     if (batchEventSourceRef.current) {
@@ -338,7 +340,7 @@ export default function App() {
       try {
         const progressData: BatchRenderProgress = JSON.parse(event.data);
         setBatchProgress(progressData);
-        if (progressData.overall_status === 'completed' || progressData.overall_status === 'error') {
+        if (progressData.overall_status === 'completed' || progressData.overall_status === 'error' || progressData.overall_status === 'cancelled') {
           eventSource.close();
           if (batchEventSourceRef.current === eventSource) {
             batchEventSourceRef.current = null;
@@ -471,8 +473,10 @@ export default function App() {
         });
 
         setIsLaunchingRender(false);
+        clientRenderCancelledRef.current = false;
 
         for (let i = 0; i < selectedClips.length; i++) {
+          if (clientRenderCancelledRef.current) break;
           const clip = selectedClips[i];
           const base = (clip.title_suggestion || clip.title || `Clip #${i + 1}`).trim();
           const pfx = (settings.fileNamePrefix || '').replace(/[\\/*?:"<>|]/g, '');
@@ -665,6 +669,10 @@ export default function App() {
           });
         }
 
+        if (clientRenderCancelledRef.current) {
+          return;
+        }
+
         setBatchProgress(prev => prev ? { ...prev, overall_status: 'completed' } : null);
         return;
       } catch (clientErr: any) {
@@ -800,6 +808,69 @@ export default function App() {
     }
   };
 
+  const handleCancelRender = useCallback(async () => {
+    if (!batchProgress?.batch_id) return;
+    const batchId = batchProgress.batch_id;
+
+    setIsCancellingRender(true);
+
+    if (batchId.startsWith('client_')) {
+      clientRenderCancelledRef.current = true;
+      setBatchProgress(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          overall_status: 'cancelled',
+          error_message: 'Render process was cancelled by the user.',
+          clips: prev.clips.map(c =>
+            (c.status === 'downloading' || c.status === 'transcribing' || c.status === 'rendering' || c.status === 'pending')
+              ? { ...c, status: 'cancelled', error_message: 'Cancelled by user' }
+              : c
+          )
+        };
+      });
+      setIsCancellingRender(false);
+      return;
+    }
+
+    try {
+      setBatchProgress(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          overall_status: 'cancelling',
+        };
+      });
+
+      await fetch(`/api/render-batch/${batchId}/cancel`, {
+        method: 'POST',
+      });
+
+      if (batchEventSourceRef.current) {
+        batchEventSourceRef.current.close();
+        batchEventSourceRef.current = null;
+      }
+
+      setBatchProgress(prev => {
+        if (!prev) return prev;
+        return {
+          ...prev,
+          overall_status: 'cancelled',
+          error_message: 'Render process was cancelled by the user.',
+          clips: prev.clips.map(c =>
+            (c.status === 'downloading' || c.status === 'transcribing' || c.status === 'rendering' || c.status === 'pending')
+              ? { ...c, status: 'cancelled', error_message: 'Cancelled by user' }
+              : c
+          )
+        };
+      });
+    } catch (err) {
+      console.error('Failed to cancel render batch:', err);
+    } finally {
+      setIsCancellingRender(false);
+    }
+  }, [batchProgress?.batch_id]);
+
   const handleRetryBatchClip = async (clipIndex?: number) => {
     if (!batchProgress?.batch_id) return;
     const batchId = batchProgress.batch_id;
@@ -812,7 +883,7 @@ export default function App() {
           overall_status: 'running',
           clips: prev.clips.map(c => {
             if (clipIndex === undefined || c.clip_index === clipIndex) {
-              if (c.status === 'error' || c.status === 'pending') {
+              if (c.status === 'error' || c.status === 'cancelled' || c.status === 'pending') {
                 return { ...c, status: 'pending', progress_percent: 0, error: undefined };
               }
             }
@@ -6278,6 +6349,8 @@ Transcript:
                   setBatchProgress(null);
                 }}
                 onRetryClip={handleRetryBatchClip}
+                onCancelRender={handleCancelRender}
+                isCancellingRender={isCancellingRender}
                 allowAppUpdates={allowAppUpdates}
                 onOpenCookiesModal={() => setIsCookiesModalOpen(true)}
                 onBackToClips={() => setWorkflowTab('clips')}

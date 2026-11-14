@@ -813,7 +813,8 @@ def download_clip_segment(
     start_time: float,
     end_time: float,
     output_filename: str,
-    cookies_content: Optional[str] = None
+    cookies_content: Optional[str] = None,
+    on_process_spawned: Optional[Callable[[subprocess.Popen], None]] = None
 ) -> str:
     """
     Downloads or slices the requested time slice in high definition (1080p).
@@ -826,6 +827,27 @@ def download_clip_segment(
             output_path.unlink()
         except Exception:
             pass
+
+    def _run_subproc(sub_cmd: List[str], timeout: float) -> subprocess.CompletedProcess:
+        proc = subprocess.Popen(sub_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if on_process_spawned:
+            try:
+                on_process_spawned(proc)
+            except Exception:
+                pass
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+            return subprocess.CompletedProcess(sub_cmd, proc.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            try:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+                else:
+                    proc.kill()
+            except Exception:
+                pass
+            proc.communicate()
+            raise
 
     # Check if video_url points to a local file (e.g. uploaded or Google Drive cached video)
     clean_raw = urllib.parse.unquote(video_url.strip())
@@ -905,7 +927,7 @@ def download_clip_segment(
             "-movflags", "+faststart",
             str(output_path)
         ]
-        res = subprocess.run(slice_cmd, capture_output=True, text=True, timeout=slice_timeout)
+        res = _run_subproc(slice_cmd, timeout=slice_timeout)
         if output_path.exists() and is_valid_mp4(output_path):
             return str(output_path)
         if output_path.exists():
@@ -975,7 +997,7 @@ def download_clip_segment(
                 clean_url
             ]
             try:
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_sec)
+                res = _run_subproc(cmd, timeout=timeout_sec)
                 if res.returncode == 0 and is_valid_mp4(output_path):
                     logger.info(f"Successfully downloaded section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
                     return str(output_path)
@@ -1018,7 +1040,7 @@ def download_clip_segment(
                     "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
                     clean_url
                 ]
-                url_res = subprocess.run(url_cmd, capture_output=True, text=True, timeout=30)
+                url_res = _run_subproc(url_cmd, timeout=30)
                 if url_res.returncode == 0 and url_res.stdout.strip():
                     urls = url_res.stdout.strip().split("\n")
                     video_stream = urls[0]
@@ -1044,7 +1066,7 @@ def download_clip_segment(
                         "-movflags", "+faststart",
                         str(output_path)
                     ]
-                    trim_res = subprocess.run(trim_cmd, capture_output=True, text=True, timeout=trim_timeout)
+                    trim_res = _run_subproc(trim_cmd, timeout=trim_timeout)
                     if trim_res.returncode == 0 and is_valid_mp4(output_path):
                         logger.info(f"Successfully trimmed stream URLs with FFmpeg ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
                         return str(output_path)
@@ -1087,7 +1109,7 @@ def download_clip_segment(
                     clean_url
                 ]
                 timeout_720p = max(200, min(600, int(clip_duration * 4) + 60))
-                res_720p = subprocess.run(cmd_720p, capture_output=True, text=True, timeout=timeout_720p)
+                res_720p = _run_subproc(cmd_720p, timeout=timeout_720p)
                 if res_720p.returncode == 0 and is_valid_mp4(output_path):
                     logger.info(f"Successfully downloaded 720p fallback section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
                     return str(output_path)
@@ -1130,7 +1152,7 @@ def download_clip_segment(
                     clean_url
                 ]
                 timeout_480p = max(150, min(450, int(clip_duration * 3) + 45))
-                res_480p = subprocess.run(cmd_480p, capture_output=True, text=True, timeout=timeout_480p)
+                res_480p = _run_subproc(cmd_480p, timeout=timeout_480p)
                 if res_480p.returncode == 0 and is_valid_mp4(output_path):
                     logger.info(f"Successfully downloaded 480p fallback section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
                     return str(output_path)
@@ -2991,7 +3013,8 @@ def _run_ffmpeg_command_with_progress(
     cmd: List[str],
     total_duration: float,
     timeout: float,
-    progress_callback: Optional[Callable[[float], None]] = None
+    progress_callback: Optional[Callable[[float], None]] = None,
+    on_process_spawned: Optional[Callable[[subprocess.Popen], None]] = None
 ) -> Tuple[int, str]:
     """
     Executes an FFmpeg command with -progress pipe:1 and streams progress to callback.
@@ -3010,6 +3033,11 @@ def _run_ffmpeg_command_with_progress(
         text=True,
         bufsize=1
     )
+    if on_process_spawned:
+        try:
+            on_process_spawned(process)
+        except Exception:
+            pass
     stderr_lines: List[str] = []
 
     def _read_stderr():
@@ -3106,7 +3134,8 @@ def render_clip_to_mp4(
     title_y_percent: Optional[float] = None,
     crop_x_percent: Optional[float] = None,
     title_x_percent: Optional[float] = 50.0,
-    progress_callback: Optional[Callable[[float], None]] = None
+    progress_callback: Optional[Callable[[float], None]] = None,
+    on_process_spawned: Optional[Callable[[subprocess.Popen], None]] = None
 ) -> str:
     """
     Renders the final 1080x1920 short-form video with layout, aspect ratio, titles, subtitles,
@@ -3348,7 +3377,8 @@ def render_clip_to_mp4(
             cmd,
             total_duration=dur,
             timeout=render_timeout,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            on_process_spawned=on_process_spawned
         )
     except subprocess.TimeoutExpired:
         logger.warning(f"Hardware encoder ({chosen_encoder_name}) timed out after {render_timeout}s.")
@@ -3382,7 +3412,8 @@ def render_clip_to_mp4(
                     cpu_cmd,
                     total_duration=dur,
                     timeout=cpu_render_timeout,
-                    progress_callback=progress_callback
+                    progress_callback=progress_callback,
+                    on_process_spawned=on_process_spawned
                 )
             except subprocess.TimeoutExpired:
                 logger.error(f"FFmpeg CPU fallback timed out after {cpu_render_timeout}s.")

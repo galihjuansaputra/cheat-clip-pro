@@ -9,6 +9,7 @@ interface BatchRenderProgressModalProps {
   onClose: () => void;
   progress: BatchRenderProgress | null;
   onRetryClip?: (clipIndex?: number) => void;
+  onCancel?: () => void;
 }
 
 export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> = ({
@@ -16,12 +17,13 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
   onClose,
   progress,
   onRetryClip,
+  onCancel,
 }) => {
   const { t } = useLanguage();
   if (!isOpen || !progress) return null;
 
-  const isAllDone = progress.overall_status === 'completed' || progress.overall_status === 'error';
-  const isProcessing = progress.overall_status === 'running';
+  const isAllDone = progress.overall_status === 'completed' || progress.overall_status === 'error' || progress.overall_status === 'cancelled';
+  const isProcessing = progress.overall_status === 'running' || progress.overall_status === 'cancelling';
   const completedCount = progress.clips.filter(c => c.status === 'completed').length;
   const overallPercent = Math.round((completedCount / (progress.total_clips || 1)) * 100);
 
@@ -34,16 +36,27 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
             <p className={styles.subtitle}>
               {progress.overall_status === 'error'
                 ? (progress.error_message || t.batchProgress.statusFailed)
-                : isAllDone
-                  ? t.batchProgress.allDoneSubtitle(progress.total_clips)
-                  : t.batchProgress.processingSubtitle((progress.current_clip_index || 0) + 1, progress.total_clips)}
+                : progress.overall_status === 'cancelled'
+                  ? (progress.error_message || t.batchProgress.statusCancelled)
+                  : isAllDone
+                    ? t.batchProgress.allDoneSubtitle(progress.total_clips)
+                    : t.batchProgress.processingSubtitle((progress.current_clip_index || 0) + 1, progress.total_clips)}
             </p>
           </div>
-          {isAllDone && (
+          {isAllDone ? (
             <button className={styles.closeBtn} onClick={onClose}>
               ✕
             </button>
-          )}
+          ) : onCancel ? (
+            <button
+              className={styles.closeBtn}
+              onClick={onCancel}
+              title={t.batchProgress.cancelRender || "Batal Render"}
+              style={{ color: '#f87171' }}
+            >
+              ✕
+            </button>
+          ) : null}
         </div>
 
         {/* Global Progress Bar */}
@@ -94,6 +107,11 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
                       </a>
                     )}
                   </div>
+                )}
+                {clip.status === 'cancelled' && (
+                  <span className={`${styles.statusBadge} ${styles.badgeError}`} style={{ borderColor: '#ef4444', color: '#f87171' }}>
+                    {t.batchProgress.statusCancelled || '[x] Dibatalkan'}
+                  </span>
                 )}
                 {clip.status === 'error' && (
                   <div className={styles.itemErrorCol}>
@@ -164,9 +182,31 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
               </button>
             </>
           ) : (
-            <div className={styles.inProgressHint}>
-              <span className="spinner-dots"></span>
-              <span>{t.batchProgress.hardwareEncodingHint}</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: '1rem' }}>
+              <div className={styles.inProgressHint}>
+                <span className="spinner-dots"></span>
+                <span>{t.batchProgress.hardwareEncodingHint}</span>
+              </div>
+              {onCancel && (
+                <button
+                  type="button"
+                  onClick={onCancel}
+                  style={{
+                    background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
+                    border: '1px solid #ef4444',
+                    color: '#fff',
+                    fontWeight: 700,
+                    fontSize: '0.8rem',
+                    padding: '0.45rem 0.9rem',
+                    borderRadius: '6px',
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
+                  }}
+                >
+                  ✕ {t.batchProgress.cancelRender || 'Batal Render'}
+                </button>
+              )}
             </div>
           )}
         </div>

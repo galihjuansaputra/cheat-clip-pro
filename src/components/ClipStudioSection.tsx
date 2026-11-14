@@ -9,6 +9,7 @@ import {
   ArrowLeft, 
   ArrowRight, 
   X,
+  XCircle,
   Music,
   FileCode,
   Play,
@@ -95,6 +96,8 @@ interface ClipStudioSectionProps {
   batchProgress?: BatchRenderProgress | null;
   onDismissProgress?: () => void;
   onRetryClip?: (clipIndex?: number) => void;
+  onCancelRender?: () => void;
+  isCancellingRender?: boolean;
   allowAppUpdates?: boolean;
   onOpenCookiesModal?: () => void;
   onBackToClips?: () => void;
@@ -346,6 +349,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   batchProgress,
   onDismissProgress,
   onRetryClip,
+  onCancelRender,
+  isCancellingRender = false,
   allowAppUpdates = false,
   onOpenCookiesModal,
   onBackToClips,
@@ -5356,30 +5361,75 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           </div>
         )}
 
-        <button
-          className="studio-btn-render glowing-btn big-render-cta"
-          onClick={handleLaunch}
-          disabled={isRendering || batchProgress?.overall_status === 'running' || selectedClips.length === 0}
-        >
-          {batchProgress?.overall_status === 'running' ? (
-            <>{t.studio.renderingInProgressBadge}</>
-          ) : isRendering ? (
-            <>{t.studio.launchingRenderBtn}</>
-          ) : selectedClips.length === 0 ? (
-            <>{t.studio.selectClipWarning}</>
-          ) : renderMode === 'merged' ? (
-            <>{t.studio.mergedRenderCta(selectedClips.length, totalSelectedDuration)}</>
-          ) : (
-            <>
-              {t.studio.batchRenderCta(selectedClips.length)}
-            </>
+        <div style={{ display: 'flex', gap: '0.65rem', width: '100%', alignItems: 'stretch' }}>
+          <button
+            className="studio-btn-render glowing-btn big-render-cta"
+            onClick={handleLaunch}
+            disabled={isRendering || batchProgress?.overall_status === 'running' || batchProgress?.overall_status === 'cancelling' || selectedClips.length === 0}
+            style={{ flex: (batchProgress?.overall_status === 'running' || batchProgress?.overall_status === 'cancelling') ? '1 1 auto' : '1 1 100%' }}
+          >
+            {batchProgress?.overall_status === 'cancelling' ? (
+              <>{t.studio.cancellingRender || 'Membatalkan...'}</>
+            ) : batchProgress?.overall_status === 'running' ? (
+              <>{t.studio.renderingInProgressBadge}</>
+            ) : isRendering ? (
+              <>{t.studio.launchingRenderBtn}</>
+            ) : selectedClips.length === 0 ? (
+              <>{t.studio.selectClipWarning}</>
+            ) : renderMode === 'merged' ? (
+              <>{t.studio.mergedRenderCta(selectedClips.length, totalSelectedDuration)}</>
+            ) : (
+              <>
+                {t.studio.batchRenderCta(selectedClips.length)}
+              </>
+            )}
+          </button>
+
+          {(batchProgress?.overall_status === 'running' || batchProgress?.overall_status === 'cancelling') && onCancelRender && (
+            <button
+              type="button"
+              className="studio-btn-cancel-render"
+              onClick={onCancelRender}
+              disabled={isCancellingRender || batchProgress?.overall_status === 'cancelling'}
+              style={{
+                flex: '0 0 auto',
+                minWidth: '150px',
+                background: 'linear-gradient(135deg, #dc2626 0%, #991b1b 100%)',
+                border: '1px solid #ef4444',
+                color: '#ffffff',
+                fontWeight: 800,
+                fontSize: '0.84rem',
+                padding: '0.75rem 1.25rem',
+                borderRadius: '8px',
+                cursor: (isCancellingRender || batchProgress?.overall_status === 'cancelling') ? 'not-allowed' : 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '0.45rem',
+                boxShadow: '0 0 16px rgba(220, 38, 38, 0.45)',
+                transition: 'all 0.2s ease',
+              }}
+              title={t.studio.cancelRenderBtn || "Batal Render"}
+            >
+              {(isCancellingRender || batchProgress?.overall_status === 'cancelling') ? (
+                <>
+                  <RefreshCw className="animate-spin" size={15} />
+                  <span>{t.studio.cancellingRender || "Membatalkan..."}</span>
+                </>
+              ) : (
+                <>
+                  <XCircle size={16} />
+                  <span>{t.studio.cancelRenderBtn || "Batal Render"}</span>
+                </>
+              )}
+            </button>
           )}
-        </button>
+        </div>
       </div>
 
       {/* Batch Render Queue & Results Dashboard Card - Located below bottom action bar */}
       {batchProgress && (
-        <div className={`bottom-batch-dashboard-card ${batchProgress.overall_status === 'running' ? 'is-processing' : ''}`}>
+        <div className={`bottom-batch-dashboard-card ${(batchProgress.overall_status === 'running' || batchProgress.overall_status === 'cancelling') ? 'is-processing' : ''}`}>
           <div className="batch-progress-header">
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -5389,12 +5439,26 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     <span className="queue-pulse-dot"></span> * GENERATING VIDEO...
                   </span>
                 )}
+                {batchProgress.overall_status === 'cancelling' && (
+                  <span className="queue-generating-pill" style={{ borderColor: '#ef4444', color: '#fca5a5' }}>
+                    <span className="queue-pulse-dot" style={{ background: '#ef4444' }}></span> {t.studio.cancellingRender || "Membatalkan..."}
+                  </span>
+                )}
+                {batchProgress.overall_status === 'cancelled' && (
+                  <span className="queue-generating-pill" style={{ borderColor: '#ef4444', color: '#fca5a5' }}>
+                    {t.studio.statusCancelledShort || "[x] Dibatalkan"}
+                  </span>
+                )}
               </div>
               <p className="batch-subtitle">
                 {batchProgress.overall_status === 'completed'
                   ? (batchProgress.clips.some(c => c.status === 'error')
                       ? t.studio.someClipsFailed(batchProgress.clips.filter(c => c.status === 'error').length, batchProgress.total_clips)
                       : t.studio.allClipsRendered(batchProgress.total_clips))
+                  : batchProgress.overall_status === 'cancelled'
+                  ? (batchProgress.error_message || t.studio.renderCancelled || 'Render dibatalkan oleh pengguna')
+                  : batchProgress.overall_status === 'cancelling'
+                  ? (t.studio.cancellingRender || 'Membatalkan proses render...')
                   : batchProgress.overall_status === 'error'
                   ? (batchProgress.error_message || t.studio.allClipsFailed)
                   : t.studio.processingClip((batchProgress.current_clip_index || 0) + 1, batchProgress.total_clips)}
@@ -5402,7 +5466,36 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
-              {batchProgress.clips.some(c => c.status === 'error') && batchProgress.overall_status !== 'running' && onRetryClip && (
+              {(batchProgress.overall_status === 'running' || batchProgress.overall_status === 'cancelling') && onCancelRender && (
+                <button
+                  type="button"
+                  onClick={onCancelRender}
+                  disabled={isCancellingRender || batchProgress.overall_status === 'cancelling'}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.35rem',
+                    background: 'rgba(239, 68, 68, 0.2)',
+                    border: '1px solid #ef4444',
+                    color: '#fca5a5',
+                    fontWeight: 700,
+                    fontSize: '0.72rem',
+                    padding: '0.3rem 0.65rem',
+                    borderRadius: '6px',
+                    cursor: (isCancellingRender || batchProgress.overall_status === 'cancelling') ? 'not-allowed' : 'pointer',
+                    boxShadow: '0 0 8px rgba(239, 68, 68, 0.3)',
+                    transition: 'all 0.2s ease',
+                  }}
+                  title={t.studio.cancelRenderBtn || "Batal Render"}
+                >
+                  <XCircle size={12} />
+                  {isCancellingRender || batchProgress.overall_status === 'cancelling'
+                    ? (t.studio.cancellingRender || 'Membatalkan...')
+                    : (t.studio.cancelRenderBtn || 'Batal Render')}
+                </button>
+              )}
+
+              {batchProgress.clips.some(c => c.status === 'error' || c.status === 'cancelled') && batchProgress.overall_status !== 'running' && batchProgress.overall_status !== 'cancelling' && onRetryClip && (
                 <button
                   type="button"
                   onClick={() => onRetryClip()}
@@ -5421,11 +5514,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     boxShadow: '0 0 10px rgba(245, 158, 11, 0.35)',
                     transition: 'all 0.2s ease',
                   }}
-                  title="Retry all failed clips in this batch"
+                  title="Retry failed or cancelled clips in this batch"
                 >
                   {t.studio.retryAllFailedBtn
-                    ? t.studio.retryAllFailedBtn(batchProgress.clips.filter(c => c.status === 'error').length)
-                    : `[~] Retry Failed (${batchProgress.clips.filter(c => c.status === 'error').length})`}
+                    ? t.studio.retryAllFailedBtn(batchProgress.clips.filter(c => c.status === 'error' || c.status === 'cancelled').length)
+                    : `[~] Retry (${batchProgress.clips.filter(c => c.status === 'error' || c.status === 'cancelled').length})`}
                 </button>
               )}
 
@@ -5454,7 +5547,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 </a>
               )}
 
-              {(batchProgress.overall_status === 'completed' || batchProgress.overall_status === 'error') && onDismissProgress && (
+              {(batchProgress.overall_status === 'completed' || batchProgress.overall_status === 'error' || batchProgress.overall_status === 'cancelled') && onDismissProgress && (
                 <button
                   type="button"
                   className="studio-close-btn"
@@ -5621,6 +5714,50 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                             ✓ Done
                           </span>
                         )
+                      )}
+                      {clip.status === 'cancelled' && (
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <span
+                            style={{
+                              fontSize: '0.68rem',
+                              fontWeight: 800,
+                              color: '#f87171',
+                              background: 'rgba(239, 68, 68, 0.15)',
+                              padding: '2px 8px',
+                              borderRadius: 0,
+                              border: '1px solid #ef4444',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.25rem'
+                            }}
+                          >
+                            <X size={11} /> {t.studio.statusCancelledShort || '[x] Dibatalkan'}
+                          </span>
+                          {onRetryClip && batchProgress.overall_status !== 'running' && batchProgress.overall_status !== 'cancelling' && (
+                            <button
+                              type="button"
+                              onClick={() => onRetryClip(idx)}
+                              style={{
+                                background: 'rgba(245, 158, 11, 0.18)',
+                                border: '1px solid rgba(245, 158, 11, 0.5)',
+                                borderRadius: 0,
+                                color: '#fbbf24',
+                                fontSize: '0.68rem',
+                                fontWeight: 700,
+                                padding: '2px 8px',
+                                cursor: 'pointer',
+                                transition: 'all 0.2s ease',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem'
+                              }}
+                              title="Retry rendering this clip"
+                            >
+                              <RefreshCw size={11} />
+                              {t.studio.retryClipBtn || 'Retry'}
+                            </button>
+                          )}
+                        </div>
                       )}
                       {isError && (
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>

@@ -1,5 +1,6 @@
 import unittest
 import os
+import sys
 import re
 import subprocess
 from pathlib import Path
@@ -199,6 +200,51 @@ class TestHardwareAndRenderProgress(unittest.TestCase):
         finally:
             if output_ass.exists():
                 output_ass.unlink()
+
+    def test_cancel_batch_rendering(self):
+        from backend.services.render_service import (
+            RENDER_BATCHES,
+            cancel_batch_rendering,
+            is_batch_cancelled,
+            register_batch_process,
+            CANCELLED_BATCH_IDS
+        )
+        test_batch_id = "test_cancel_batch_123"
+        CANCELLED_BATCH_IDS.discard(test_batch_id)
+
+        # Set up a mock running batch
+        RENDER_BATCHES[test_batch_id] = {
+            "batch_id": test_batch_id,
+            "overall_status": "running",
+            "total_clips": 2,
+            "clips": [
+                {"clip_index": 0, "status": "rendering", "progress_percent": 60},
+                {"clip_index": 1, "status": "pending", "progress_percent": 0},
+            ]
+        }
+
+        # Spawn a dummy long-running subprocess to verify termination
+        dummy_proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+        register_batch_process(test_batch_id, dummy_proc)
+
+        # Cancel the batch
+        cancelled = cancel_batch_rendering(test_batch_id)
+        self.assertTrue(cancelled)
+        self.assertTrue(is_batch_cancelled(test_batch_id))
+
+        # Check process was killed
+        time_waited = 0
+        while dummy_proc.poll() is None and time_waited < 3:
+            import time
+            time.sleep(0.1)
+            time_waited += 0.1
+        self.assertIsNotNone(dummy_proc.poll(), "Active subprocess was not terminated on batch cancellation")
+
+        # Check in-memory status
+        batch_state = RENDER_BATCHES[test_batch_id]
+        self.assertEqual(batch_state["overall_status"], "cancelled")
+        self.assertEqual(batch_state["clips"][0]["status"], "cancelled")
+        self.assertEqual(batch_state["clips"][1]["status"], "cancelled")
 
 
 if __name__ == "__main__":
