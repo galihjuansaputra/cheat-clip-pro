@@ -232,7 +232,7 @@ async function start() {
 
   if (!selectedCandidate) {
     console.error('\x1b[31m%s\x1b[0m', '❌ No working Python installation found!');
-    console.error('\x1b[33m%s\x1b[0m', '💡 Please install Python 3.10+ from https://www.python.org/downloads/');
+    console.error('\x1b[33m%s\x1b[0m', '💡 Please install Python 3.11 or 3.12 (Python < 3.13 required) from https://www.python.org/downloads/');
     console.error('\x1b[33m%s\x1b[0m', '   Make sure to check "Add Python to PATH" during installation.');
     process.exit(1);
   }

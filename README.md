@@ -18,10 +18,11 @@ Make sure you have the following installed:
    * **Linux:** `sudo apt install git`
 2. **[Node.js](https://nodejs.org/)** (v18 or newer)
    * Download from [nodejs.org](https://nodejs.org/) or install via your package manager.
-3. **[Python](https://www.python.org/)** (v3.10 or newer)
-   * **Windows:** Install from [python.org](https://www.python.org/downloads/) (make sure to check *"Add Python to PATH"* during setup) or from Microsoft Store.
-   * **macOS:** `brew install python`
-   * **Linux:** `sudo apt install python3 python3-pip python3-venv`
+3. **[Python](https://www.python.org/)** (v3.10 – v3.12 recommended; **Python < 3.13 required**)
+   * ⚠️ **Important:** Dependencies like **PyTorch**, **OpenCV**, and **Whisper** do **not** support Python 3.13, 3.14, or 3.15+ yet. You must use **Python 3.10, 3.11 (recommended), or 3.12**.
+   * **Windows:** Download Python 3.11 from [python.org](https://www.python.org/downloads/release/python-3119/) (ensure you check *"Add Python to PATH"* during setup).
+   * **macOS:** `brew install python@3.11`
+   * **Linux:** `sudo apt install python3.11 python3.11-venv python3-pip`
 4. **FFmpeg & yt-dlp** (Required to download, slice, and render clips)
    * **Windows (PowerShell):**
      ```powershell
@@ -169,6 +170,10 @@ Cheat Clip PRO uses Google's AI to find the best viral moments for free:
   * **Intel** (`h264_qsv` on Arc & UHD Graphics)
   * **Apple Mac & CPU Software** (`libx264` universal high-speed fallback)
 * You can switch your preferred hardware acceleration encoder anytime in the Render Settings or History card.
+
+### 5. `pip install` fails with build errors on PyTorch or OpenCV
+* **Cause:** You are running an unsupported version of Python (such as Python 3.13, 3.14, or 3.15+). PyTorch and OpenCV wheels are not yet distributed for these versions.
+* **Fix:** Install **Python 3.11** or **3.12**, recreate your virtual environment (`python3.11 -m venv venv`), and run `pip install -r backend/requirements.txt`.
 
 ---
 
