@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 import re
+import subprocess
+import urllib.parse
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -192,6 +194,95 @@ def _find_video_file_on_disk(file_name: str) -> Optional[Path]:
             return f
 
     return None
+
+
+def resolve_media_source_path(source_str: str) -> Optional[Path]:
+    """
+    Resolves a file path on disk from raw filename, relative API path, or URL.
+    Handles /api/download-rendered/, /api/video/, /api/audio/, and raw filenames.
+    """
+    if not source_str:
+        return None
+    clean = source_str.strip()
+    if "://" in clean:
+        clean = urllib.parse.urlparse(clean).path
+    if clean.startswith("/api/download-rendered/"):
+        clean = clean[len("/api/download-rendered/"):]
+    elif clean.startswith("/api/video/"):
+        clean = clean[len("/api/video/"):]
+    elif clean.startswith("/api/audio/"):
+        clean = clean[len("/api/audio/"):]
+
+    clean = clean.split("?")[0]
+    clean = urllib.parse.unquote(os.path.basename(clean)).strip()
+    return _find_video_file_on_disk(clean)
+
+
+@router.get("/api/clip-audio")
+async def extract_clip_audio_stream(
+    source_url: Optional[str] = None,
+    file_name: Optional[str] = None,
+    start_time: float = 0.0,
+    duration: Optional[float] = None,
+):
+    """
+    Extracts high-fidelity uncompressed 44.1kHz stereo WAV audio from a media file on the server.
+    Used by Client GPU (WebCodecs) renderer to reliably decode and mux audio without container errors.
+    """
+    target = file_name or source_url
+    if not target:
+        raise HTTPException(status_code=400, detail="Missing source_url or file_name parameter")
+
+    file_path = resolve_media_source_path(target)
+    if not file_path or not file_path.exists() or not _is_safe_path(file_path):
+        raise HTTPException(status_code=404, detail="Media source file not found on server")
+
+    cmd = [
+        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+        "-ss", str(max(0.0, start_time)),
+        "-i", str(file_path),
+    ]
+    if duration and duration > 0:
+        cmd.extend(["-t", str(duration)])
+
+    cmd.extend([
+        "-vn",
+        "-c:a", "pcm_s16le",
+        "-ar", "44100",
+        "-ac", "2",
+        "-f", "wav",
+        "pipe:1"
+    ])
+
+    try:
+        proc = await asyncio.to_thread(
+            subprocess.run,
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=max(30, int((duration or 10) * 2) + 15)
+        )
+        if proc.returncode != 0 or not proc.stdout:
+            err = proc.stderr.decode("utf-8", errors="ignore")
+            logger.warning(f"Audio extraction ffmpeg error for {file_path.name}: {err}")
+            raise HTTPException(status_code=500, detail="Failed to extract audio track")
+
+        return Response(
+            content=proc.stdout,
+            media_type="audio/wav",
+            headers={
+                "Content-Disposition": f'inline; filename="{file_path.stem}_audio.wav"',
+                "Content-Type": "audio/wav",
+                "Cache-Control": "public, max-age=3600"
+            }
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(status_code=504, detail="Audio extraction timed out")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in extract_clip_audio_stream: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/api/video/{file_name:path}")

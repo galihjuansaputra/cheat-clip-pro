@@ -329,38 +329,170 @@ function drawCaptionsOnCanvas(
 }
 
 /**
+ * Normalizes an AudioBuffer to standard 44.1kHz stereo/mono Float32Array channels.
+ * Uses OfflineAudioContext for pristine sample-rate conversion without clicks or distortion.
+ */
+async function normalizeAudioBuffer(
+  audioBuffer: AudioBuffer,
+  alreadyTrimmed: boolean,
+  startTime: number,
+  duration: number
+): Promise<{ channelData: Float32Array[]; sampleRate: number; numberOfChannels: number }> {
+  const targetSampleRate = 44100;
+  const numChannels = Math.min(2, Math.max(1, audioBuffer.numberOfChannels));
+
+  let startSample = 0;
+  let endSample = audioBuffer.length;
+
+  if (!alreadyTrimmed) {
+    startSample = Math.max(0, Math.floor(startTime * audioBuffer.sampleRate));
+    endSample = Math.min(audioBuffer.length, Math.floor((startTime + duration) * audioBuffer.sampleRate));
+  }
+
+  // If already at target sample rate and channels <= 2 and pre-trimmed
+  if (audioBuffer.sampleRate === targetSampleRate && audioBuffer.numberOfChannels <= 2 && alreadyTrimmed) {
+    const channels: Float32Array[] = [];
+    for (let c = 0; c < numChannels; c++) {
+      channels.push(audioBuffer.getChannelData(c).slice(startSample, endSample));
+    }
+    return {
+      channelData: channels,
+      sampleRate: targetSampleRate,
+      numberOfChannels: numChannels,
+    };
+  }
+
+  // Resample/render through OfflineAudioContext
+  const sourceDuration = Math.max(0.1, (endSample - startSample) / audioBuffer.sampleRate);
+  const targetFrames = Math.max(1, Math.round(sourceDuration * targetSampleRate));
+  const offlineCtx = new OfflineAudioContext(numChannels, targetFrames, targetSampleRate);
+
+  let bufferToRender = audioBuffer;
+  if (!alreadyTrimmed) {
+    const subFrames = Math.max(1, endSample - startSample);
+    const subBuffer = offlineCtx.createBuffer(audioBuffer.numberOfChannels, subFrames, audioBuffer.sampleRate);
+    for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
+      subBuffer.copyToChannel(audioBuffer.getChannelData(c).subarray(startSample, endSample), c);
+    }
+    bufferToRender = subBuffer;
+  }
+
+  const sourceNode = offlineCtx.createBufferSource();
+  sourceNode.buffer = bufferToRender;
+  sourceNode.connect(offlineCtx.destination);
+  sourceNode.start(0);
+
+  const renderedBuffer = await offlineCtx.startRendering();
+  const channels: Float32Array[] = [];
+  for (let c = 0; c < numChannels; c++) {
+    channels.push(renderedBuffer.getChannelData(c));
+  }
+
+  return {
+    channelData: channels,
+    sampleRate: targetSampleRate,
+    numberOfChannels: numChannels,
+  };
+}
+
+/**
  * Extracts and decodes audio data from the source video URL for WebCodecs muxing.
+ * Multi-tiered strategy:
+ * 1. Fast dedicated backend /api/clip-audio endpoint (returns raw WAV stream from server FFmpeg)
+ * 2. Client-side WASM FFmpeg extraction (for local blob: URLs or offline)
+ * 3. Direct Web Audio API decodeAudioData fallback
  */
 async function extractAudioData(
   videoSourceUrl: string,
   startTime: number,
   duration: number
 ): Promise<{ channelData: Float32Array[]; sampleRate: number; numberOfChannels: number } | null> {
+  const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+  if (!AudioContextClass) return null;
+  const audioCtx = new AudioContextClass();
+
   try {
-    const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
-    if (!AudioContextClass) return null;
-    const audioCtx = new AudioContextClass({ sampleRate: 44100 });
-    const response = await fetch(videoSourceUrl);
-    const arrayBuffer = await response.arrayBuffer();
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    let audioBuffer: AudioBuffer | null = null;
+    let isAlreadyTrimmed = false;
 
-    const sampleRate = audioBuffer.sampleRate;
-    const startSample = Math.max(0, Math.floor(startTime * sampleRate));
-    const endSample = Math.min(audioBuffer.length, Math.floor((startTime + duration) * sampleRate));
-
-    const channels: Float32Array[] = [];
-    for (let c = 0; c < audioBuffer.numberOfChannels; c++) {
-      const channel = audioBuffer.getChannelData(c).slice(startSample, endSample);
-      channels.push(channel);
+    // Strategy 1: Server-side audio extraction endpoint
+    // Extracts clean PCM WAV stream in ~30ms; eliminates browser MP4-container WebAudio decoding errors
+    if (typeof videoSourceUrl === 'string' && !videoSourceUrl.startsWith('blob:')) {
+      try {
+        const audioUrl = `/api/clip-audio?source_url=${encodeURIComponent(videoSourceUrl)}&start_time=${startTime}&duration=${duration}`;
+        const res = await fetch(audioUrl);
+        if (res.ok) {
+          const arrayBuffer = await res.arrayBuffer();
+          if (arrayBuffer.byteLength > 44) {
+            audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+            isAlreadyTrimmed = true;
+          }
+        }
+      } catch (backendErr) {
+        console.warn('[WebCodecs] Backend audio extraction attempt failed, trying fallback:', backendErr);
+      }
     }
+
+    // Strategy 2: Client-side WASM FFmpeg extraction
+    // Essential for local blob: URLs (uploaded files) or when backend is unreachable
+    if (!audioBuffer && (videoSourceUrl.startsWith('blob:') || !audioBuffer)) {
+      try {
+        const { getFFmpeg } = await import('./clientRenderer');
+        const { fetchFile } = await import('@ffmpeg/util');
+        const ffmpeg = await getFFmpeg();
+        const inputData = await fetchFile(videoSourceUrl);
+        const tempIn = `audio_in_${Date.now()}.mp4`;
+        const tempOut = `audio_out_${Date.now()}.wav`;
+        await ffmpeg.writeFile(tempIn, inputData);
+        await ffmpeg.exec([
+          '-ss', String(startTime),
+          '-t', String(duration),
+          '-i', tempIn,
+          '-vn',
+          '-c:a', 'pcm_s16le',
+          '-ar', '44100',
+          '-ac', '2',
+          tempOut
+        ]);
+        const wavData = await ffmpeg.readFile(tempOut);
+        try {
+          await ffmpeg.deleteFile(tempIn);
+          await ffmpeg.deleteFile(tempOut);
+        } catch (_) {}
+        const rawWavBytes = wavData as Uint8Array;
+        const arrayBufferCopy = new ArrayBuffer(rawWavBytes.byteLength);
+        new Uint8Array(arrayBufferCopy).set(new Uint8Array(rawWavBytes.buffer, rawWavBytes.byteOffset, rawWavBytes.byteLength));
+        audioBuffer = await audioCtx.decodeAudioData(arrayBufferCopy);
+        isAlreadyTrimmed = true;
+      } catch (wasmErr) {
+        console.warn('[WebCodecs] Client WASM audio extraction attempt failed:', wasmErr);
+      }
+    }
+
+    // Strategy 3: Direct Web Audio decodeAudioData (e.g. pure audio sources or Safari)
+    if (!audioBuffer) {
+      try {
+        const response = await fetch(videoSourceUrl);
+        const arrayBuffer = await response.arrayBuffer();
+        audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+        isAlreadyTrimmed = false;
+      } catch (directErr) {
+        console.warn('[WebCodecs] Direct Web Audio decode failed:', directErr);
+      }
+    }
+
+    if (!audioBuffer) {
+      console.warn('[WebCodecs] No audio track could be extracted; video may have no audio.');
+      await audioCtx.close();
+      return null;
+    }
+
+    const normalized = await normalizeAudioBuffer(audioBuffer, isAlreadyTrimmed, startTime, duration);
     await audioCtx.close();
-    return {
-      channelData: channels,
-      sampleRate,
-      numberOfChannels: audioBuffer.numberOfChannels,
-    };
+    return normalized;
   } catch (err) {
-    console.warn('[WebCodecs] Audio extraction warning (proceeding):', err);
+    console.warn('[WebCodecs] Audio extraction unexpected failure:', err);
+    try { await audioCtx.close(); } catch (_) {}
     return null;
   }
 }
@@ -444,8 +576,43 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
   if (onProgress) onProgress(12, 'Preparing audio tracks...');
   const hasAudioEncoder = typeof (window as any).AudioEncoder === 'function';
   let audioData: { channelData: Float32Array[]; sampleRate: number; numberOfChannels: number } | null = null;
+  let audioCodec: 'aac' | 'opus' | null = null;
+  let audioEncoderCodec = 'mp4a.40.2';
+  const audioBitrate = 192000;
+
   if (hasAudioEncoder) {
     audioData = await extractAudioData(videoSourceUrl, startTime, totalDuration);
+    if (audioData && audioData.channelData.length > 0 && audioData.channelData[0].length > 0) {
+      try {
+        const aacConfig = {
+          codec: 'mp4a.40.2',
+          numberOfChannels: audioData.numberOfChannels,
+          sampleRate: audioData.sampleRate,
+          bitrate: audioBitrate,
+        };
+        const aacSupport = await (window as any).AudioEncoder.isConfigSupported(aacConfig);
+        if (aacSupport && aacSupport.supported) {
+          audioCodec = 'aac';
+          audioEncoderCodec = 'mp4a.40.2';
+        } else {
+          const opusConfig = {
+            codec: 'opus',
+            numberOfChannels: audioData.numberOfChannels,
+            sampleRate: 48000,
+            bitrate: audioBitrate,
+          };
+          const opusSupport = await (window as any).AudioEncoder.isConfigSupported(opusConfig);
+          if (opusSupport && opusSupport.supported) {
+            audioCodec = 'opus';
+            audioEncoderCodec = 'opus';
+          }
+        }
+      } catch (chkErr) {
+        console.warn('[WebCodecs GPU] AudioEncoder config check warning:', chkErr);
+        audioCodec = 'aac';
+        audioEncoderCodec = 'mp4a.40.2';
+      }
+    }
   }
 
   // 4. Setup offscreen canvas
@@ -464,8 +631,8 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
       width: targetWidth,
       height: targetHeight
     },
-    audio: (audioData && audioData.channelData.length > 0) ? {
-      codec: 'aac',
+    audio: (audioData && audioCodec) ? {
+      codec: audioCodec,
       numberOfChannels: audioData.numberOfChannels,
       sampleRate: audioData.sampleRate,
     } : undefined,
@@ -513,29 +680,40 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
     videoEncoder.configure(encoderConfig);
   }
 
-  // 7. Setup AudioEncoder if audio data is present
-  let audioEncoder: any = null;
-  if (audioData && hasAudioEncoder) {
+  // 7. Setup AudioEncoder and encode all audio packets if audio is present
+  if (audioData && audioCodec && hasAudioEncoder) {
+    let audioEncodeError: Error | null = null;
+    let audioChunksCount = 0;
+
     try {
-      audioEncoder = new (window as any).AudioEncoder({
+      const audioEncoder = new (window as any).AudioEncoder({
         output: (chunk: any, meta: any) => {
-          muxer.addAudioChunk(chunk, meta);
+          audioChunksCount++;
+          const chunkData = new Uint8Array(chunk.byteLength);
+          chunk.copyTo(chunkData);
+          const chunkDuration = (typeof chunk.duration === 'number' && Number.isFinite(chunk.duration) && chunk.duration >= 0)
+            ? chunk.duration
+            : Math.round((1024 / audioData!.sampleRate) * 1_000_000);
+          muxer.addAudioChunkRaw(chunkData, chunk.type, chunk.timestamp, chunkDuration, meta);
         },
         error: (e: any) => {
+          audioEncodeError = e instanceof Error ? e : new Error(String(e));
           console.warn('[WebCodecs GPU] AudioEncoder error:', e);
         }
       });
+
       audioEncoder.configure({
-        codec: 'mp4a.40.2',
+        codec: audioEncoderCodec,
         numberOfChannels: audioData.numberOfChannels,
         sampleRate: audioData.sampleRate,
-        bitrate: 128000,
+        bitrate: audioBitrate,
       });
 
       // Encode audio chunks (1024 samples per frame)
       const chunkSize = 1024;
       const totalAudioFrames = audioData.channelData[0].length;
       for (let offset = 0; offset < totalAudioFrames; offset += chunkSize) {
+        if (audioEncodeError) throw audioEncodeError;
         const end = Math.min(totalAudioFrames, offset + chunkSize);
         const length = end - offset;
         const timestampUs = Math.round((offset / audioData.sampleRate) * 1_000_000);
@@ -556,10 +734,18 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
         audioEncoder.encode(audioFrame);
         audioFrame.close();
       }
+
       await audioEncoder.flush();
       audioEncoder.close();
+
+      if (audioEncodeError) throw audioEncodeError;
+      if (audioChunksCount === 0) {
+        throw new Error('No audio chunks were output by AudioEncoder.');
+      }
+      console.info(`[WebCodecs GPU] Successfully muxed ${audioChunksCount} audio frames with ${audioCodec.toUpperCase()}.`);
     } catch (aErr) {
-      console.warn('[WebCodecs GPU] Audio encoding fallback:', aErr);
+      console.warn('[WebCodecs GPU] Audio encoding failure:', aErr);
+      throw new Error(`WebCodecs audio encoding failed: ${aErr instanceof Error ? aErr.message : String(aErr)}`);
     }
   }
 
