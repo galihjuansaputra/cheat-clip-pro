@@ -1595,21 +1595,24 @@ def split_text_and_emojis(text: str) -> List[Tuple[str, str]]:
 
 
 def get_font(font_name: str, size: int) -> ImageFont.FreeTypeFont:
-    """Resolves font with fallback to Montserrat or default font."""
+    """Resolves font with fallback to Outfit, Montserrat, or default font."""
     fonts_dir = str(FONTS_DIR)
+    clean_name = font_name.replace(".ttf", "").replace(".otf", "").strip() if font_name else "Outfit"
     for ext in [".ttf", ".otf", ""]:
-        p = os.path.join(fonts_dir, f"{font_name}{ext}")
-        if os.path.exists(p):
+        for name_candidate in [clean_name, font_name]:
+            p = os.path.join(fonts_dir, f"{name_candidate}{ext}")
+            if os.path.exists(p):
+                try:
+                    return ImageFont.truetype(p, size)
+                except Exception:
+                    pass
+    for fb in ["Outfit.ttf", "Montserrat.ttf", "Inter.ttf"]:
+        p_fb = os.path.join(fonts_dir, fb)
+        if os.path.exists(p_fb):
             try:
-                return ImageFont.truetype(p, size)
+                return ImageFont.truetype(p_fb, size)
             except Exception:
                 pass
-    p_fallback = os.path.join(fonts_dir, "Montserrat.ttf")
-    if os.path.exists(p_fallback):
-        try:
-            return ImageFont.truetype(p_fallback, size)
-        except Exception:
-            pass
     return ImageFont.load_default()
 
 
@@ -2195,6 +2198,14 @@ def generate_ass_file(
     title_box_back = "&H00000000"
     title_border_style = 1
 
+    eff_title_font = (title_font_name or font_name or "Outfit").replace(".ttf", "").replace(".otf", "").strip()
+    eff_sub_font = (font_name or "Outfit").replace(".ttf", "").replace(".otf", "").strip()
+
+    # Single-weight display fonts (Anton, Bebas Neue, Impact) must use Bold: 0
+    # because forcing Bold: -1 causes libass to mismatch and fallback to Arial
+    t_bold = 0 if any(k in eff_title_font.lower() for k in ["anton", "bebas", "impact"]) else -1
+    s_bold = 0 if any(k in eff_sub_font.lower() for k in ["anton", "bebas", "impact"]) else -1
+
     ass_header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {canvas_w}
@@ -2205,8 +2216,8 @@ Collisions: Reverse
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: TitleStyle,{title_font_name or font_name},{title_font_size},&H00FFFFFF,&H000000FF,&H00000000,{title_box_back},-1,0,0,0,100,100,0,0,{title_border_style},4.4,2.0,8,40,40,0,1
-Style: SubStyle,{font_name},{sub_font_size},{primary_color},&H000000FF,{outline_color},{back_color},-1,0,0,0,100,100,0,0,1,{outline_w},{shadow_w},2,40,40,0,1
+Style: TitleStyle,{eff_title_font},{title_font_size},&H00FFFFFF,&H000000FF,&H00000000,{title_box_back},{t_bold},0,0,0,100,100,0,0,{title_border_style},4.4,2.0,8,40,40,0,1
+Style: SubStyle,{eff_sub_font},{sub_font_size},{primary_color},&H000000FF,{outline_color},{back_color},{s_bold},0,0,0,100,100,0,0,1,{outline_w},{shadow_w},2,40,40,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text

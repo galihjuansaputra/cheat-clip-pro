@@ -96,6 +96,28 @@ class TestHardwareAndRenderProgress(unittest.TestCase):
             if output_ass.exists():
                 output_ass.unlink()
 
+    def test_generate_ass_file_font_weight_handling(self):
+        output_ass = Path("temp_test_bebas_font.ass")
+        try:
+            generate_ass_file(
+                words=[{"word": "Test", "start": 0.0, "end": 1.0}],
+                style_preset="viral_pop",
+                font_name="Bebas Neue",
+                title_font_name="Bebas Neue",
+                title_text="VIRAL TITLE",
+                output_ass_path=str(output_ass),
+                target_aspect_ratio="9:16",
+            )
+            self.assertTrue(output_ass.exists())
+            content = output_ass.read_text(encoding="utf-8")
+            # Bebas Neue is single-weight display font, so bold must be 0 to match TTF without falling back to Arial
+            self.assertIn("Style: TitleStyle,Bebas Neue,", content)
+            self.assertIn(",0,0,0,100,100", content)
+            self.assertIn("Style: SubStyle,Bebas Neue,", content)
+        finally:
+            if output_ass.exists():
+                output_ass.unlink()
+
 
 if __name__ == "__main__":
     unittest.main()

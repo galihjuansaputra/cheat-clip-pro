@@ -40,6 +40,7 @@ import type {
   FontItem,
   TranscriptLine,
 } from '../types';
+import { getFontWeightForFamily, getFontFamilyWithFallback } from '../services/captionUtils';
 
 interface CaptionWord {
   text: string;
@@ -528,10 +529,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
   const loadCustomFontFace = (name: string, url: string) => {
     try {
-      // Isolate custom font face name or specify descriptors so it does not overwrite global UI font definitions (e.g. 'Inter' 400)
-      const isSystemUiFont = ['inter', 'outfit', 'jetbrains mono', 'roboto', 'segoe ui'].includes(name.trim().toLowerCase());
-      const familyName = isSystemUiFont ? `Preview-${name}` : name;
-      const font = new FontFace(familyName, `url(${url})`);
+      const font = new FontFace(name, `url(${url})`, {
+        weight: '100 900',
+        style: 'normal',
+      });
       font.load().then(loaded => {
         (document.fonts as Set<FontFace>).add(loaded);
       }).catch(err => console.warn(`Font '${name}' load error:`, err));
@@ -2589,7 +2590,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         type="button"
                         className={`pill-btn ${titleFont === font.name ? 'active' : ''}`}
                         onClick={() => setTitleFont(font.name)}
-                        style={{ fontFamily: font.name, fontSize: '0.78rem', fontWeight: titleFont === font.name ? 700 : 400 }}
+                        style={{
+                          fontFamily: getFontFamilyWithFallback(font.name),
+                          fontSize: '0.78rem',
+                          fontWeight: getFontWeightForFamily(font.name),
+                        }}
                       >
                         {font.name}
                         {font.is_custom && <span style={{ marginLeft: '4px', fontSize: '0.62rem', opacity: 0.85, color: '#fbbf24' }}>[*]</span>}
@@ -3060,7 +3065,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         type="button"
                         className={`pill-btn ${captionFont === font.name ? 'active' : ''}`}
                         onClick={() => setCaptionFont(font.name)}
-                        style={{ fontFamily: font.name, fontSize: '0.78rem', fontWeight: captionFont === font.name ? 700 : 400 }}
+                        style={{
+                          fontFamily: getFontFamilyWithFallback(font.name),
+                          fontSize: '0.78rem',
+                          fontWeight: getFontWeightForFamily(font.name),
+                        }}
                       >
                         {font.name}
                         {font.is_custom && <span style={{ marginLeft: '4px', fontSize: '0.62rem', opacity: 0.85, color: '#fbbf24' }}>[*]</span>}
@@ -4871,7 +4880,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     <span
                       className="wireframe-title-text"
                       style={{
-                        fontFamily: `'${titleFont}', sans-serif`,
+                        fontFamily: getFontFamilyWithFallback(titleFont),
                         fontSize: (() => {
                           const scale = isLandscape ? (320 / 1920) : (320 / 1080);
                           const px = Math.round(titleFontSizePx * scale);
@@ -4883,7 +4892,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         whiteSpace: 'pre-line',
                         textAlign: 'center',
                         color: '#ffffff',
-                        fontWeight: 800,
+                        fontWeight: getFontWeightForFamily(titleFont) as any,
                         textShadow: '0 0 2px #000, 0 1px 3px rgba(0,0,0,0.95), 0 0 5px rgba(0,0,0,0.8)',
                         background: 'transparent',
                         padding: '0 8px',
@@ -4924,14 +4933,14 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     <span
                       className="wireframe-caption-text"
                       style={{
-                        fontFamily: `'${captionFont}', sans-serif`,
+                        fontFamily: getFontFamilyWithFallback(captionFont),
                         fontSize: (() => {
                           const scale = isLandscape ? (320 / 1920) : (320 / 1080);
                           const px = Math.round(fontSizePx * scale);
                           const minPx = 4;
                           return `${Math.max(minPx, px)}px`;
                         })(),
-                        fontWeight: 800,
+                        fontWeight: getFontWeightForFamily(captionFont) as any,
                         letterSpacing: '0.03em',
                         textAlign: 'center',
                         textShadow: '0 0 2px #000, 0 1px 3px rgba(0,0,0,0.95), 0 0 5px rgba(0,0,0,0.8)',

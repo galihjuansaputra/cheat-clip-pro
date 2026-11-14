@@ -51,6 +51,37 @@ export function applyLetterCase(text: string, style?: TextCaseOption | string): 
 }
 
 /**
+ * Returns the proper font-weight for a given font family.
+ * Single-weight display fonts (Bebas Neue, Anton, Impact) require '400' / normal to match
+ * Google Fonts @font-face rules, whereas standard sans fonts (Outfit, Montserrat, Inter) use 800.
+ */
+export function getFontWeightForFamily(fontName?: string): string {
+  const norm = (fontName || '').toLowerCase().trim();
+  if (norm.includes('anton') || norm.includes('bebas') || norm.includes('impact')) {
+    return '400';
+  }
+  if (norm.includes('arial black')) {
+    return '900';
+  }
+  return '800';
+}
+
+/**
+ * Returns a CSS-safe font-family string with quotes and fallback font family.
+ */
+export function getFontFamilyWithFallback(fontName?: string): string {
+  const clean = (fontName || 'Outfit').replace(/['"]/g, '').trim();
+  const lower = clean.toLowerCase();
+  if (lower.includes('impact')) {
+    return `"${clean}", "Anton", sans-serif`;
+  }
+  if (lower.includes('arial black')) {
+    return `"${clean}", "Montserrat", sans-serif`;
+  }
+  return `"${clean}", sans-serif`;
+}
+
+/**
  * Builds aligned 1-to-3 word chunks for a given video segment [clipStart, clipEnd],
  * perfectly matching the preview and backend subtitle generator.
  */

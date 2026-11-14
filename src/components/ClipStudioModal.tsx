@@ -14,6 +14,7 @@ import type {
   FontSizeOption,
   TextCaseOption
 } from '../types';
+import { getFontWeightForFamily, getFontFamilyWithFallback } from '../services/captionUtils';
 
 interface ClipStudioModalProps {
   isOpen: boolean;
@@ -511,7 +512,11 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                           type="button"
                           className={`pill-btn ${captionFont === font ? 'active' : ''}`}
                           onClick={() => setCaptionFont(font)}
-                          style={{ fontFamily: font, fontSize: '0.78rem', fontWeight: captionFont === font ? 700 : 400 }}
+                          style={{
+                            fontFamily: getFontFamilyWithFallback(font),
+                            fontSize: '0.78rem',
+                            fontWeight: getFontWeightForFamily(font) as any,
+                          }}
                         >
                           {font}
                         </button>
@@ -752,7 +757,8 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                     <span
                       className="wireframe-caption-text"
                       style={{
-                        fontFamily: `'${captionFont}', sans-serif`,
+                        fontFamily: getFontFamilyWithFallback(captionFont),
+                        fontWeight: getFontWeightForFamily(captionFont) as any,
                         fontSize: fontSize === 'small' ? '0.72rem' : fontSize === 'big' ? '0.96rem' : '0.82rem',
                       }}
                     >

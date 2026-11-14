@@ -1,5 +1,5 @@
 import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
-import { CAPTION_STYLE_CONFIG, applyLetterCase } from './captionUtils';
+import { CAPTION_STYLE_CONFIG, applyLetterCase, getFontWeightForFamily, getFontFamilyWithFallback } from './captionUtils';
 import type { CaptionChunk } from './captionUtils';
 import type { CaptionStyle, SubtitlePositionMode } from '../types';
 
@@ -155,7 +155,7 @@ function drawTitleOnCanvas(
 
   const scaleFactor = canvasWidth / 1080;
   const fontSize = Math.max(24, Math.round(baseFontSizePx * scaleFactor));
-  const fontStr = `800 ${fontSize}px '${titleFont}', sans-serif`;
+  const fontStr = `${getFontWeightForFamily(titleFont)} ${fontSize}px ${getFontFamilyWithFallback(titleFont)}`;
 
   ctx.save();
   ctx.font = fontStr;
@@ -251,7 +251,7 @@ function drawCaptionsOnCanvas(
   // 3. Compute position and font sizing
   const scaleFactor = canvasWidth / 1080;
   const fontSize = Math.max(26, Math.round(baseFontSizePx * scaleFactor));
-  const fontStr = `800 ${fontSize}px '${fontFamily}', sans-serif`;
+  const fontStr = `${getFontWeightForFamily(fontFamily)} ${fontSize}px ${getFontFamilyWithFallback(fontFamily)}`;
 
   ctx.save();
   ctx.font = fontStr;
@@ -558,6 +558,21 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
       audioEncoder.close();
     } catch (aErr) {
       console.warn('[WebCodecs GPU] Audio encoding fallback:', aErr);
+    }
+  }
+
+  if (onProgress) onProgress(18, 'Preparing fonts for canvas rendering...');
+  if (typeof document !== 'undefined' && document.fonts) {
+    try {
+      const tWeight = getFontWeightForFamily(titleFont);
+      const sWeight = getFontWeightForFamily(captionFont);
+      await Promise.allSettled([
+        document.fonts.load(`${tWeight} 36px "${titleFont}"`),
+        document.fonts.load(`${sWeight} 36px "${captionFont}"`),
+        document.fonts.ready,
+      ]);
+    } catch (fontErr) {
+      console.warn('[WebCodecs GPU] Font preload warning:', fontErr);
     }
   }
 
