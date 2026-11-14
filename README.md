@@ -172,6 +172,8 @@ Cheat Clip PRO uses Google's AI to find the best viral moments for free:
 
 ---
 
-## 📄 License
+## 📄 License & Attribution
 
-Distributed under the **MIT License**. Free for personal and commercial use!
+Distributed under the **MIT License**. Free for personal and commercial use.
+
+Any copies, forks, or substantial portions of this software must retain the original copyright notice and permission notice found in the LICENSE file.
