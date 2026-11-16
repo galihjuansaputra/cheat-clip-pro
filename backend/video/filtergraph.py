@@ -22,6 +22,7 @@ def build_ffmpeg_filtergraph(
     Canvas is always 1080x1920 (9:16).
     """
     filters = []
+    aspect_ratio = (aspect_ratio or "9:16").strip().lower()
     # Guarantee video presentation timestamp strictly begins at 0.000 to eliminate initial subtitle offset / delay
     filters.append("[0:v]setpts=PTS-STARTPTS[v_pts]")
 
@@ -298,16 +299,24 @@ def build_ffmpeg_filtergraph(
     # 2. Subtitles & Title Burning via libass (.ass)
     # (If ass_subtitles_path is provided, it contains BOTH the title and subtitles rendered with exact matching fonts)
     if ass_subtitles_path and os.path.exists(ass_subtitles_path):
-        raw_ass = str(Path(ass_subtitles_path).resolve()).replace("\\", "/")
-        escaped_ass = raw_ass.replace(":", "\\:").replace("'", "'\\''")
-        if FONTS_DIR.exists() and (any(FONTS_DIR.glob("*.ttf")) or any(FONTS_DIR.glob("*.otf")) or any(FONTS_DIR.glob("*.woff*"))):
-            raw_fonts = str(FONTS_DIR.resolve()).replace("\\", "/")
-            escaped_fonts = raw_fonts.replace("'", "'\\''").replace(":", "\\:")
-            sub_filter = f"{current_v}subtitles=filename='{escaped_ass}':fontsdir='{escaped_fonts}'[v_final]"
-        else:
-            sub_filter = f"{current_v}subtitles=filename='{escaped_ass}'[v_final]"
-        filters.append(sub_filter)
-        current_v = "[v_final]"
+        has_dialogue = False
+        try:
+            with open(ass_subtitles_path, "r", encoding="utf-8", errors="ignore") as f_ass:
+                has_dialogue = any(line.strip().startswith("Dialogue:") for line in f_ass)
+        except Exception:
+            has_dialogue = True
+
+        if has_dialogue:
+            raw_ass = str(Path(ass_subtitles_path).resolve()).replace("\\", "/")
+            escaped_ass = raw_ass.replace(":", "\\:").replace("'", "'\\''")
+            if FONTS_DIR.exists() and (any(FONTS_DIR.glob("*.ttf")) or any(FONTS_DIR.glob("*.otf")) or any(FONTS_DIR.glob("*.woff*"))):
+                raw_fonts = str(FONTS_DIR.resolve()).replace("\\", "/")
+                escaped_fonts = raw_fonts.replace("'", "'\\''").replace(":", "\\:")
+                sub_filter = f"{current_v}subtitles=filename='{escaped_ass}':fontsdir='{escaped_fonts}'[v_final]"
+            else:
+                sub_filter = f"{current_v}subtitles=filename='{escaped_ass}'[v_final]"
+            filters.append(sub_filter)
+            current_v = "[v_final]"
     elif title_text and title_position != "none":
         # Fallback drawtext if no ASS was generated
         clean_title = title_text.replace("'", "").replace(":", "-").replace('"', "").strip()

@@ -9,8 +9,8 @@ export interface ClientRenderOptions {
   videoSourceUrl: string; // URL or Blob URL of the source clip
   startTime?: number;
   endTime?: number;
-  aspectRatio: '9:16' | '1:1' | '16:9' | '4:5' | '4:3';
-  backgroundStyle: 'blur' | 'black' | 'fit' | 'crop';
+  aspectRatio: '9:16' | '1:1' | '16:9' | '4:5' | '4:3' | '16:9_landscape';
+  backgroundStyle: 'blur' | 'black' | 'fit' | 'crop' | 'blurred';
   titleText?: string;
   titlePosition?: 'top' | 'center' | 'bottom';
   subtitles?: Array<{ start: number; end: number; text: string }>;
@@ -105,10 +105,14 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
   };
   ffmpeg.on('log', logHandler);
 
-  if (aspectRatio === '9:16') {
+  if (aspectRatio === '16:9_landscape') {
+    targetWidth = 1920;
+    targetHeight = 1080;
+    filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2:black[v]`;
+  } else if (aspectRatio === '9:16') {
     targetWidth = 1080;
     targetHeight = 1920;
-    if (backgroundStyle === 'blur') {
+    if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
       filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=increase,crop=${targetWidth}:${targetHeight},gblur=sigma=12[bg];[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v]`;
     } else if (backgroundStyle === 'black') {
       filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2:black[v]`;
@@ -116,28 +120,31 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
       // Direct center crop
       filterStr = `[0:v]scale=ih*9/16:ih,scale=${targetWidth}:${targetHeight}[v]`;
     }
-  } else if (aspectRatio === '4:3') {
-    // 4:3 Classic Format (1440x1080)
-    targetWidth = 1440;
-    targetHeight = 1080;
-    if (backgroundStyle === 'blur') {
-      filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=increase,crop=${targetWidth}:${targetHeight},gblur=sigma=12[bg];[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v]`;
-    } else {
-      filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2:black[v]`;
-    }
   } else if (aspectRatio === '1:1') {
     targetWidth = 1080;
-    targetHeight = 1080;
-    filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2:black[v]`;
-  } else if (aspectRatio === '4:5') {
+    targetHeight = 1920;
+    if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
+      filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=increase,crop=${targetWidth}:${targetHeight},boxblur=12:2[bg];[0:v]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg];[bg][fg]overlay=0:420[v]`;
+    } else {
+      filterStr = `[0:v]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg];[fg]pad=1080:1920:0:420:black[v]`;
+    }
+  } else if (aspectRatio === '4:3') {
     targetWidth = 1080;
-    targetHeight = 1350;
-    filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2:black[v]`;
+    targetHeight = 1920;
+    if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
+      filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=increase,crop=${targetWidth}:${targetHeight},boxblur=12:2[bg];[0:v]scale=1080:810:force_original_aspect_ratio=increase,crop=1080:810[fg];[bg][fg]overlay=0:555[v]`;
+    } else {
+      filterStr = `[0:v]scale=1080:810:force_original_aspect_ratio=increase,crop=1080:810[fg];[fg]pad=1080:1920:0:555:black[v]`;
+    }
   } else {
-    // 16:9 Landscape
-    targetWidth = 1920;
-    targetHeight = 1080;
-    filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2:black[v]`;
+    // 16:9 Letterbox on 1080x1920 vertical canvas
+    targetWidth = 1080;
+    targetHeight = 1920;
+    if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
+      filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=increase,crop=${targetWidth}:${targetHeight},boxblur=12:2[bg];[0:v]scale=1080:608:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=0:656[v]`;
+    } else {
+      filterStr = `[0:v]scale=1080:608:force_original_aspect_ratio=decrease[fg];[fg]pad=1080:1920:0:656:black[v]`;
+    }
   }
 
   const outputName = 'output.mp4';

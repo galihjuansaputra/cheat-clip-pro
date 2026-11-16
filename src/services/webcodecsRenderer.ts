@@ -210,7 +210,7 @@ function drawCaptionsOnCanvas(
   positionMode: SubtitlePositionMode = 'bottom',
   centerYPercent: number = 50
 ) {
-  if (!chunks || !chunks.length || style === 'none') return;
+  if (!chunks || !chunks.length || !style || style === 'none') return;
 
   // 1. Locate active chunk (with inter-chunk pause bridging and frame 0 intro)
   let activeChunk: CaptionChunk | null = null;
@@ -535,26 +535,11 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
   if (onProgress) onProgress(5, 'Initializing Client GPU Hardware Encoder...');
 
   // 1. Setup target dimensions based on aspect ratio
-  let targetWidth = 1080;
-  let targetHeight = 1920;
-
-  if (aspectRatio === '9:16') {
-    targetWidth = 1080;
-    targetHeight = 1920;
-  } else if (aspectRatio === '4:3') {
-    targetWidth = 1440;
-    targetHeight = 1080;
-  } else if (aspectRatio === '1:1') {
-    targetWidth = 1080;
-    targetHeight = 1080;
-  } else if (aspectRatio === '4:5') {
-    targetWidth = 1080;
-    targetHeight = 1350;
-  } else {
-    // 16:9 Landscape
-    targetWidth = 1920;
-    targetHeight = 1080;
-  }
+  // Only '16:9_landscape' is true 1920x1080 landscape. All other modes (9:16, 16:9 letterbox, 1:1, 4:3)
+  // render onto a 1080x1920 vertical canvas, perfectly matching the server NVENC engine.
+  const isLandscape = (aspectRatio === '16:9_landscape');
+  const targetWidth = isLandscape ? 1920 : 1080;
+  const targetHeight = isLandscape ? 1080 : 1920;
 
   // 2. Load video element to inspect metadata and extract frames
   if (onProgress) onProgress(8, 'Loading media source into GPU canvas pipeline...');
@@ -653,14 +638,16 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
   });
 
   const fps = 30;
-  const bitrate = 4_500_000; // 4.5 Mbps crisp 1080p
+  const bitrate = 8_500_000; // 8.5 Mbps crisp 1080p high quality
 
   // Check hardware acceleration support
   const encoderConfig = {
-    codec: 'avc1.640028', // H.264 High Profile Level 4.0
+    codec: 'avc1.64002a', // H.264 High Profile Level 4.2
     width: targetWidth,
     height: targetHeight,
     bitrate,
+    bitrateMode: 'variable' as const,
+    latencyMode: 'quality' as const,
     framerate: fps,
     hardwareAcceleration: 'prefer-hardware' as const,
   };
@@ -814,13 +801,59 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
       ctx.restore();
     }
 
-    // Composite Foreground Video
-    const scaleFg = Math.min(targetWidth / video.videoWidth, targetHeight / video.videoHeight);
-    const fgW = video.videoWidth * scaleFg;
-    const fgH = video.videoHeight * scaleFg;
-    const fgX = (targetWidth - fgW) / 2;
-    const fgY = (targetHeight - fgH) / 2;
-    ctx.drawImage(video, fgX, fgY, fgW, fgH);
+    // Composite Foreground Video according to Aspect Ratio (100% parity with server NVENC engine)
+    if (isLandscape) {
+      // 16:9 Landscape: fit inside 1920x1080
+      const scaleFg = Math.min(targetWidth / video.videoWidth, targetHeight / video.videoHeight);
+      const fgW = video.videoWidth * scaleFg;
+      const fgH = video.videoHeight * scaleFg;
+      const fgX = (targetWidth - fgW) / 2;
+      const fgY = (targetHeight - fgH) / 2;
+      ctx.drawImage(video, fgX, fgY, fgW, fgH);
+    } else if (aspectRatio === '9:16') {
+      // 9:16 Full Bleed Vertical: Crop to cover 1080x1920 full screen
+      const scaleCover = Math.max(targetWidth / video.videoWidth, targetHeight / video.videoHeight);
+      const fgW = video.videoWidth * scaleCover;
+      const fgH = video.videoHeight * scaleCover;
+      const fgX = (targetWidth - fgW) / 2;
+      const fgY = (targetHeight - fgH) / 2;
+      ctx.drawImage(video, fgX, fgY, fgW, fgH);
+    } else if (aspectRatio === '1:1') {
+      // 1:1 Square on 1080x1920 vertical canvas: video is 1080x1080 centered at Y=420 (matching backend content_top=420)
+      const squareSize = 1080;
+      const scaleSquare = Math.max(squareSize / video.videoWidth, squareSize / video.videoHeight);
+      const cropW = video.videoWidth * scaleSquare;
+      const cropH = video.videoHeight * scaleSquare;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 420, squareSize, squareSize);
+      ctx.clip();
+      ctx.drawImage(video, (squareSize - cropW) / 2, 420 + (squareSize - cropH) / 2, cropW, cropH);
+      ctx.restore();
+    } else if (aspectRatio === '4:3') {
+      // 4:3 on 1080x1920 vertical canvas: video is 1080x810 centered at Y=555 (matching backend content_top=555)
+      const boxW = 1080;
+      const boxH = 810;
+      const scale43 = Math.max(boxW / video.videoWidth, boxH / video.videoHeight);
+      const cropW = video.videoWidth * scale43;
+      const cropH = video.videoHeight * scale43;
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, 555, boxW, boxH);
+      ctx.clip();
+      ctx.drawImage(video, (boxW - cropW) / 2, 555 + (boxH - cropH) / 2, cropW, cropH);
+      ctx.restore();
+    } else {
+      // 16:9 Letterbox on 1080x1920 vertical canvas (Foto 1!): video is 1080x608 centered at Y=656
+      const boxW = 1080;
+      const boxH = 608;
+      const scale169 = Math.min(boxW / video.videoWidth, boxH / video.videoHeight);
+      const fgW = video.videoWidth * scale169;
+      const fgH = video.videoHeight * scale169;
+      const fgX = (targetWidth - fgW) / 2;
+      const fgY = 656 + (boxH - fgH) / 2;
+      ctx.drawImage(video, fgX, fgY, fgW, fgH);
+    }
 
     const elapsedSec = currentSec - startTime;
     const captionTimestamp = (clipTimeOffset > 0 ? (clipTimeOffset + elapsedSec) : currentSec) - subtitleOffsetSeconds;
@@ -838,8 +871,9 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
       elapsedSec
     );
 
-    // Draw Bouncing Subtitles Overlay
-    if (subtitlesEnabled) {
+    // Draw Bouncing Subtitles Overlay (Strict check: only when subtitles are enabled and style is not none)
+    const isSubtitleActive = Boolean(subtitlesEnabled) && captionStyle !== 'none' && Boolean(captionChunks?.length);
+    if (isSubtitleActive) {
       drawCaptionsOnCanvas(
         ctx,
         captionChunks,
