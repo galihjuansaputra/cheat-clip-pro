@@ -276,9 +276,12 @@ async def render_single_batch_clip(
             except Exception:
                 pass
 
-        if settings.caption_style != "none" or (display_title and settings.title_position != "none" and not skip_ass_title):
+        # Check if subtitles are actively enabled (must be enabled AND not set to style 'none')
+        subtitles_active = bool(getattr(settings, "subtitles_enabled", True)) and (settings.caption_style != "none")
+
+        if subtitles_active or (display_title and settings.title_position != "none" and not skip_ass_title):
             words = []
-            if settings.caption_style != "none":
+            if subtitles_active:
                 words = await asyncio.to_thread(
                     transcribe_clip_words,
                     raw_path,
@@ -291,8 +294,8 @@ async def render_single_batch_clip(
             ass_path = str(TEMP_DIR / ass_filename)
             await asyncio.to_thread(
                 generate_ass_file,
-                words=words,
-                style_preset=settings.caption_style,
+                words=words if subtitles_active else [],
+                style_preset=settings.caption_style if subtitles_active else "none",
                 font_name=settings.caption_font or "Outfit",
                 output_ass_path=ass_path,
                 target_aspect_ratio=settings.aspect_ratio,
@@ -618,11 +621,12 @@ async def render_merged_batch_clips(
 
         total_duration_sec = 0.0
         merged_words = []
+        subtitles_active = bool(getattr(settings, "subtitles_enabled", True)) and (settings.caption_style != "none")
         for i, seg in enumerate(clips):
             s_t = float(seg.get("start_time", 0.0))
             e_t = float(seg.get("end_time", s_t + 30.0))
             seg_dur = max(0.1, e_t - s_t)
-            if settings.caption_style != "none":
+            if subtitles_active:
                 seg_words = await asyncio.to_thread(
                     transcribe_clip_words,
                     part_paths[i],

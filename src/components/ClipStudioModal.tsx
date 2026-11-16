@@ -83,6 +83,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
       titleText,
       titlePosition,
       titleFontSize,
+      subtitlesEnabled: captionStyle !== 'none',
       captionStyle,
       captionFont,
       fontSize,

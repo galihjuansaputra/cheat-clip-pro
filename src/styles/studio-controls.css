@@ -319,8 +319,10 @@
 }
 
 .subtitles-dimmed {
-  opacity: 0.5;
-  pointer-events: auto;
+  opacity: 0.35;
+  pointer-events: none;
+  filter: grayscale(0.85);
+  cursor: not-allowed;
   transition: opacity 0.2s ease;
 }
 
