@@ -1346,7 +1346,9 @@ def _stable_words(video_path, language):
     global _STABLE_MODEL
     import stable_whisper
     if _STABLE_MODEL is None:
-        _STABLE_MODEL = stable_whisper.load_model("turbo", device="cpu")
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _STABLE_MODEL = stable_whisper.load_model("turbo", device=device)
     result = _STABLE_MODEL.transcribe(
         video_path,
         language=language,
