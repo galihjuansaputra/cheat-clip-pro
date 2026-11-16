@@ -22,6 +22,7 @@ torch>=2.0.0
 openai-whisper>=20231117
 numpy>=1.24.0
 tqdm>=4.65.0
+stable-ts
 
 # Computer Vision & Image / Emoji Overlay Rendering
 opencv-python>=4.8.0
