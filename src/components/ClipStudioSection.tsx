@@ -4833,7 +4833,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         fontFamily: getFontFamilyWithFallback(titleFont),
                         fontSize: (() => {
                           const scale = isLandscape ? (320 / 1920) : (320 / 1080);
-                          const px = Math.round(titleFontSizePx * scale);
+                          let px = Math.round(titleFontSizePx * scale);
+                          if (titleLineCount >= 3) {
+                            px = Math.round(px * 0.88);
+                          }
                           const minPx = 4;
                           return `${Math.max(minPx, px)}px`;
                         })(),
@@ -4852,7 +4855,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         boxShadow: 'none',
                         display: 'inline-block',
                         maxWidth: '96%',
-                        wordBreak: 'break-word',
+                        wordBreak: 'normal',
+                        overflowWrap: 'normal',
                       }}
                     >
                       {formattedTitle}

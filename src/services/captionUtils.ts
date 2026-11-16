@@ -259,7 +259,7 @@ export function wrapTitleSmart(
 
   // Preserve manual newlines if the user specifically broke lines, capped at max 3 lines
   if (raw.includes('\n')) {
-    const lines = raw
+    let lines = raw
       .split('\n')
       .map(l => l.trim())
       .filter(Boolean);
@@ -268,24 +268,45 @@ export function wrapTitleSmart(
       lines.pop();
     }
     const allManualWords = lines.reduce((acc, l) => acc + l.split(/\s+/).filter(Boolean).length, 0);
-    if (allManualWords >= 4) {
+    if (allManualWords >= 6 && lines.length === 3) {
+      // Rebalance so each of the 3 lines has at least 2 words
+      const wordsAll = lines.flatMap(l => l.split(/\s+/).filter(Boolean));
+      const totalW = wordsAll.length;
+      let bestScore = Infinity;
+      let bestSplit = [2, 4];
+      for (let i = 2; i <= totalW - 4; i++) {
+        for (let j = i + 2; j <= totalW - 2; j++) {
+          const l1 = wordsAll.slice(0, i).join(' ');
+          const l2 = wordsAll.slice(i, j).join(' ');
+          const l3 = wordsAll.slice(j).join(' ');
+          const lengths = [l1.length, l2.length, l3.length];
+          const score = (Math.max(...lengths) - Math.min(...lengths)) + Math.abs(l1.length - l3.length) * 0.4;
+          if (score < bestScore) {
+            bestScore = score;
+            bestSplit = [i, j];
+          }
+        }
+      }
+      const [i, j] = bestSplit;
+      lines = [
+        wordsAll.slice(0, i).join(' '),
+        wordsAll.slice(i, j).join(' '),
+        wordsAll.slice(j).join(' '),
+      ];
+    } else if (allManualWords >= 4) {
       for (let idx = 0; idx < lines.length; idx++) {
         const wList = lines[idx].split(/\s+/).filter(Boolean);
         if (wList.length === 1) {
-          if (idx > 0) {
+          if (idx > 0 && lines[idx - 1].split(/\s+/).filter(Boolean).length > 2) {
             const prevW = lines[idx - 1].split(/\s+/).filter(Boolean);
-            if (prevW.length > 2) {
-              wList.unshift(prevW.pop()!);
-              lines[idx - 1] = prevW.join(' ');
-              lines[idx] = wList.join(' ');
-            }
-          } else if (idx < lines.length - 1) {
+            wList.unshift(prevW.pop()!);
+            lines[idx - 1] = prevW.join(' ');
+            lines[idx] = wList.join(' ');
+          } else if (idx < lines.length - 1 && lines[idx + 1].split(/\s+/).filter(Boolean).length > 2) {
             const nextW = lines[idx + 1].split(/\s+/).filter(Boolean);
-            if (nextW.length > 2) {
-              wList.push(nextW.shift()!);
-              lines[idx + 1] = nextW.join(' ');
-              lines[idx] = wList.join(' ');
-            }
+            wList.push(nextW.shift()!);
+            lines[idx + 1] = nextW.join(' ');
+            lines[idx] = wList.join(' ');
           }
         }
       }
@@ -304,14 +325,15 @@ export function wrapTitleSmart(
     return { formatted: words.join('\n'), lineCount: 2 };
   }
   if (totalWords === 3) {
-    if (totalLen <= maxSingleLen) {
+    if (totalLen <= Math.round(maxSingleLen * 1.35)) {
       return { formatted: raw, lineCount: 1 };
     }
     return { formatted: `${words[0]} ${words[1]}\n${words[2]}`, lineCount: 2 };
   }
 
   // For >= 4 words: strictly 2 or 3 lines max, and NEVER leave 1 lonely word on any line
-  const targetLines = totalWords >= 6 && totalLen > maxSingleLen * 1.2 ? 3 : 2;
+  // (Each line must have at least 2 words)
+  const targetLines = totalWords >= 6 && totalLen > maxSingleLen * 1.25 ? 3 : 2;
 
   if (targetLines === 2) {
     let bestDiff = Infinity;
@@ -336,7 +358,7 @@ export function wrapTitleSmart(
         const l2 = words.slice(i, j).join(' ');
         const l3 = words.slice(j).join(' ');
         const lengths = [l1.length, l2.length, l3.length];
-        const score = Math.max(...lengths) - Math.min(...lengths);
+        const score = (Math.max(...lengths) - Math.min(...lengths)) + Math.abs(l1.length - l3.length) * 0.4;
         if (score < bestScore) {
           bestScore = score;
           bestSplit = [i, j];

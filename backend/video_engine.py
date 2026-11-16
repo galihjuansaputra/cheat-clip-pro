@@ -294,14 +294,21 @@ def get_whisper_model():
         if _WHISPER_MODEL is None:
             try:
                 import whisper
-                # Prefer 'small' model (better vocabulary & multi-lingual accuracy, esp. Indonesian speech)
-                # Falls back to 'base' if 'small' cannot be loaded
-                try:
-                    logger.info("Loading Whisper 'small' model for high-accuracy word-level timestamps...")
-                    _WHISPER_MODEL = whisper.load_model("small")
-                except Exception as e_small:
-                    logger.warning(f"Could not load Whisper 'small' model ({e_small}). Falling back to 'base'...")
-                    _WHISPER_MODEL = whisper.load_model("base")
+                import torch
+                device = "cuda" if torch.cuda.is_available() else "cpu"
+                # Prefer 'large-v3-turbo' / 'turbo' for state-of-the-art accuracy on mixed Indonesian-English speech
+                # Falls back to 'small', then 'base' if larger models cannot be loaded
+                loaded = False
+                for model_candidate in ["large-v3-turbo", "turbo", "small", "base"]:
+                    try:
+                        logger.info(f"Loading Whisper '{model_candidate}' model on {device.upper()} for high-accuracy bilingual transcription...")
+                        _WHISPER_MODEL = whisper.load_model(model_candidate, device=device)
+                        loaded = True
+                        break
+                    except Exception as e_cand:
+                        logger.warning(f"Could not load Whisper '{model_candidate}' model ({e_cand}). Trying next candidate...")
+                if not loaded:
+                    _WHISPER_MODEL = False
             except Exception as e:
                 logger.warning(f"Could not load Whisper model: {e}")
                 _WHISPER_MODEL = False
@@ -751,13 +758,16 @@ def transcribe_local_video_file(
 
     logger.info(f"Transcribing local file with Whisper: {p} (target_language={target_language})")
     whisper_prompt = (
-        "Transkrip video percakapan dalam Bahasa Indonesia." if target_language == "id"
-        else "Video dialogue transcript in English." if target_language == "en"
-        else "Transkrip video percakapan dalam Bahasa Indonesia atau English."
+        "Transkrip percakapan video bilingual Bahasa Indonesia dan English (bahasa gaul, campur, Jaksel). "
+        "Pertahankan ejaan yang tepat untuk istilah teknologi, gaming, internet, dan kata serapan bahasa Inggris." if target_language == "id"
+        else "Video dialogue transcript in English. Conversational, gaming, slang, and clear speech." if target_language == "en"
+        else "Transkrip video percakapan bilingual Bahasa Indonesia dan English."
     )
+    import torch
+    use_fp16 = bool(torch.cuda.is_available())
     transcribe_kwargs: Dict[str, Any] = {
         "word_timestamps": False,  # Dialogue segment detection does not need word timestamps; avoids find_alignment DTW tensor shape mismatch
-        "fp16": False,
+        "fp16": use_fp16,
         "verbose": False,
         "condition_on_previous_text": False,
         "initial_prompt": whisper_prompt,
@@ -1372,17 +1382,19 @@ def transcribe_clip_words(
                     context_hint = " ".join(matching_lines[:6])[:200]
 
             if target_language == "id":
-                base_prompt = "Transkrip percakapan video dalam Bahasa Indonesia. Kosakata percakapan, gaming, dan santai."
+                base_prompt = "Transkrip video percakapan bilingual Bahasa Indonesia dan English (bahasa gaul, campur, Jaksel). Pertahankan ejaan yang tepat untuk istilah teknologi, gaming, internet, dan kata serapan."
             elif target_language == "en":
-                base_prompt = "Video dialogue transcript in English. Conversational, gaming, and clear speech."
+                base_prompt = "Video dialogue transcript in English. Conversational, gaming, slang, and clear speech."
             else:
-                base_prompt = "Transkrip video percakapan Bahasa Indonesia atau English."
+                base_prompt = "Transkrip video percakapan bilingual Bahasa Indonesia dan English."
 
             initial_prompt = f"{base_prompt} {context_hint}".strip() if context_hint else base_prompt
 
+            import torch
+            use_fp16 = bool(torch.cuda.is_available())
             transcribe_kwargs: Dict[str, Any] = {
                 "word_timestamps": True,
-                "fp16": False,
+                "fp16": use_fp16,
                 "verbose": False,
                 "condition_on_previous_text": False,  # Prevents repetition loops and hallucinations across silence
                 "initial_prompt": initial_prompt,
@@ -1541,24 +1553,39 @@ def wrap_title_smart(text: str, max_single_len: int = 22) -> Tuple[str, int]:
         while len(lines) > 3:
             lines[-2] = lines[-2] + " " + lines[-1]
             lines.pop()
-        # Prevent 1-word orphan line if multiple lines exist and total words >= 4
         all_manual_words = sum(len(l.split()) for l in lines)
-        if all_manual_words >= 4:
+        if all_manual_words >= 6 and len(lines) == 3:
+            # Rebalance so each of the 3 lines has at least 2 words
+            words_all = [w for l in lines for w in l.split()]
+            total_w = len(words_all)
+            best_score = float("inf")
+            best_split = (2, 4)
+            for i in range(2, total_w - 3):
+                for j in range(i + 2, total_w - 1):
+                    l1 = " ".join(words_all[:i])
+                    l2 = " ".join(words_all[i:j])
+                    l3 = " ".join(words_all[j:])
+                    lengths = [len(l1), len(l2), len(l3)]
+                    score = (max(lengths) - min(lengths)) + abs(len(l1) - len(l3)) * 0.4
+                    if score < best_score:
+                        best_score = score
+                        best_split = (i, j)
+            i, j = best_split
+            lines = [" ".join(words_all[:i]), " ".join(words_all[i:j]), " ".join(words_all[j:])]
+        elif all_manual_words >= 4:
             for idx in range(len(lines)):
                 w_list = lines[idx].split()
                 if len(w_list) == 1:
-                    if idx > 0:
+                    if idx > 0 and len(lines[idx - 1].split()) > 2:
                         prev_w = lines[idx - 1].split()
-                        if len(prev_w) > 2:
-                            w_list.insert(0, prev_w.pop())
-                            lines[idx - 1] = " ".join(prev_w)
-                            lines[idx] = " ".join(w_list)
-                    elif idx < len(lines) - 1:
+                        w_list.insert(0, prev_w.pop())
+                        lines[idx - 1] = " ".join(prev_w)
+                        lines[idx] = " ".join(w_list)
+                    elif idx < len(lines) - 1 and len(lines[idx + 1].split()) > 2:
                         next_w = lines[idx + 1].split()
-                        if len(next_w) > 2:
-                            w_list.append(next_w.pop(0))
-                            lines[idx + 1] = " ".join(next_w)
-                            lines[idx] = " ".join(w_list)
+                        w_list.append(next_w.pop(0))
+                        lines[idx + 1] = " ".join(next_w)
+                        lines[idx] = " ".join(w_list)
         return "\\N".join(lines), len(lines)
 
     words = raw.split()
@@ -1570,13 +1597,13 @@ def wrap_title_smart(text: str, max_single_len: int = 22) -> Tuple[str, int]:
     if total_words == 2:
         return "\\N".join(words), 2
     if total_words == 3:
-        if total_len <= max_single_len:
+        if total_len <= int(max_single_len * 1.35):
             return raw, 1
         return f"{words[0]} {words[1]}\\N{words[2]}", 2
 
     # For >= 4 words: strictly 2 or 3 lines max, and NEVER leave 1 lonely word on any line
-    # (Each line will have at least 2 words)
-    target_lines = 3 if (total_words >= 6 and total_len > max_single_len * 1.2) else 2
+    # (Each line must have at least 2 words)
+    target_lines = 3 if (total_words >= 6 and total_len > max_single_len * 1.25) else 2
 
     if target_lines == 2:
         best_diff = float("inf")
@@ -1599,7 +1626,7 @@ def wrap_title_smart(text: str, max_single_len: int = 22) -> Tuple[str, int]:
                 l2 = " ".join(words[i:j])
                 l3 = " ".join(words[j:])
                 lengths = [len(l1), len(l2), len(l3)]
-                score = max(lengths) - min(lengths)
+                score = (max(lengths) - min(lengths)) + abs(len(l1) - len(l3)) * 0.4
                 if score < best_score:
                     best_score = score
                     best_split = (i, j)
