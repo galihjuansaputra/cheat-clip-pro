@@ -154,20 +154,36 @@ function drawTitleOnCanvas(
   if (titleDuration === '10s' && elapsedSec > 10.0) return;
 
   const scaleFactor = canvasWidth / 1080;
-  const fontSize = Math.max(24, Math.round(baseFontSizePx * scaleFactor));
-  const fontStr = `${getFontWeightForFamily(titleFont)} ${fontSize}px ${getFontFamilyWithFallback(titleFont)}`;
+  let fontSize = Math.max(24, Math.round(baseFontSizePx * scaleFactor));
 
+  // Format title into strictly max 2 balanced lines, avoiding orphan words
+  const { formatted } = wrapTitleSmart(titleText);
+  const lines = formatted.split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lines.length) return;
+
+  // Exact parity with video_engine.py: auto-scale down font if any line exceeds safe width
+  const maxAllowedW = canvasWidth - Math.round(70 * scaleFactor);
+  let fontStr = `${getFontWeightForFamily(titleFont)} ${fontSize}px ${getFontFamilyWithFallback(titleFont)}`;
   ctx.save();
   ctx.font = fontStr;
+
+  let maxLineW = 0;
+  for (const line of lines) {
+    const w = ctx.measureText(line).width;
+    if (w > maxLineW) maxLineW = w;
+  }
+  if (maxLineW > maxAllowedW && maxLineW > 0) {
+    const fitFactor = maxAllowedW / maxLineW;
+    fontSize = Math.max(20, Math.round(fontSize * fitFactor));
+    fontStr = `${getFontWeightForFamily(titleFont)} ${fontSize}px ${getFontFamilyWithFallback(titleFont)}`;
+    ctx.font = fontStr;
+  }
+
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
 
   const titleY = Math.round(canvasHeight * (yPercent / 100.0));
   const centerX = canvasWidth / 2;
-
-  // Format title into 2-3 balanced lines max, strictly avoiding orphan words
-  const { formatted } = wrapTitleSmart(titleText);
-  const lines = formatted.split('\n').map(l => l.trim()).filter(Boolean);
   const lineHeight = fontSize * 1.15;
 
   lines.forEach((line, idx) => {

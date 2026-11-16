@@ -1545,7 +1545,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   };
 
   /**
-   * Intelligently wraps title across 1, 2, or 3 balanced lines (strictly max 3 lines),
+   * Intelligently wraps title across 1 or 2 balanced lines (strictly max 2 lines),
    * preventing orphan single-word lines, matching backend video_engine.wrap_title_smart logic.
    */
   const formatTitleSmart = (
@@ -4812,57 +4812,80 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 </div>
 
                 {/* Title Overlay with Real-time Up/Down/Left/Right Position, Duration & Scaled Font */}
-                {isTitleVisible && (
-                  <div
-                    className="wireframe-title-overlay"
-                    style={{
-                      top: `${safeTitleY}%`,
-                      left: `${safeTitleX}%`,
-                      transform: 'translateX(-50%)',
-                      width: 'max-content',
-                      maxWidth: '92%',
-                      zIndex: 35,
-                      pointerEvents: 'none',
-                      display: 'flex',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <span
-                      className="wireframe-title-text"
+                {isTitleVisible && (() => {
+                  const titleLines = formattedTitle ? formattedTitle.split('\n').filter(Boolean) : [];
+                  const scale = isLandscape ? (phoneWidth / 1920) : (phoneWidth / 1080);
+                  let calculatedPx = Math.round(titleFontSizePx * scale);
+
+                  // Exact WYSIWYG parity with video_engine.py:
+                  // video_engine.py auto-downscales font size if any line exceeds max safe canvas width (canvas_w - 70).
+                  // In preview, safe container width is phoneWidth * 0.92
+                  const safePreviewW = phoneWidth * 0.92;
+                  const maxLineLen = titleLines.reduce((max, l) => Math.max(max, l.length), 0);
+                  const estLineW = maxLineLen * calculatedPx * 0.62;
+                  if (estLineW > safePreviewW && estLineW > 0) {
+                    const fitRatio = safePreviewW / estLineW;
+                    calculatedPx = Math.max(6, Math.round(calculatedPx * fitRatio));
+                  }
+                  const finalFontSizePx = Math.max(4, calculatedPx);
+
+                  return (
+                    <div
+                      className="wireframe-title-overlay"
                       style={{
-                        fontFamily: getFontFamilyWithFallback(titleFont),
-                        fontSize: (() => {
-                          const scale = isLandscape ? (320 / 1920) : (320 / 1080);
-                          let px = Math.round(titleFontSizePx * scale);
-                          if (titleLineCount >= 3) {
-                            px = Math.round(px * 0.88);
-                          }
-                          const minPx = 4;
-                          return `${Math.max(minPx, px)}px`;
-                        })(),
-                        lineHeight: titleLineCount >= 3 ? 1.10 : 1.08,
-                        letterSpacing: '0.02em',
-                        whiteSpace: 'pre-line',
-                        textAlign: 'center',
-                        color: '#ffffff',
-                        fontWeight: getFontWeightForFamily(titleFont) as any,
-                        textShadow: '0 0 2px #000, 0 1px 3px rgba(0,0,0,0.95), 0 0 5px rgba(0,0,0,0.8)',
-                        background: 'transparent',
-                        padding: '0 8px',
-                        boxSizing: 'border-box',
-                        borderRadius: '0',
-                        border: 'none',
-                        boxShadow: 'none',
-                        display: 'inline-block',
-                        maxWidth: '96%',
-                        wordBreak: 'normal',
-                        overflowWrap: 'normal',
+                        top: `${safeTitleY}%`,
+                        left: `${safeTitleX}%`,
+                        transform: 'translateX(-50%)',
+                        width: 'max-content',
+                        maxWidth: '92%',
+                        zIndex: 35,
+                        pointerEvents: 'none',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'center',
+                        justifyContent: 'center',
                       }}
                     >
-                      {formattedTitle}
-                    </span>
-                  </div>
-                )}
+                      <span
+                        className="wireframe-title-text"
+                        style={{
+                          fontFamily: getFontFamilyWithFallback(titleFont),
+                          fontSize: `${finalFontSizePx}px`,
+                          lineHeight: 1.08,
+                          letterSpacing: '0.02em',
+                          textAlign: 'center',
+                          color: '#ffffff',
+                          fontWeight: getFontWeightForFamily(titleFont) as any,
+                          textShadow: '0 0 2px #000, 0 1px 3px rgba(0,0,0,0.95), 0 0 5px rgba(0,0,0,0.8)',
+                          background: 'transparent',
+                          padding: '0 4px',
+                          boxSizing: 'border-box',
+                          borderRadius: '0',
+                          border: 'none',
+                          boxShadow: 'none',
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          maxWidth: '100%',
+                        }}
+                      >
+                        {titleLines.map((line, idx) => (
+                          <span
+                            key={idx}
+                            style={{
+                              display: 'block',
+                              whiteSpace: 'nowrap',
+                              textAlign: 'center',
+                              maxWidth: '100%',
+                            }}
+                          >
+                            {line}
+                          </span>
+                        ))}
+                      </span>
+                    </div>
+                  );
+                })()}
 
                 {/* Subtitle Overlay with Real-time Up/Down Position & Scaled Font */}
                 {captionStyle !== 'none' && (

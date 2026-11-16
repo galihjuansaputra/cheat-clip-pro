@@ -14,7 +14,7 @@ import type {
   FontSizeOption,
   TextCaseOption
 } from '../types';
-import { getFontWeightForFamily, getFontFamilyWithFallback } from '../services/captionUtils';
+import { getFontWeightForFamily, getFontFamilyWithFallback, wrapTitleSmart } from '../services/captionUtils';
 
 interface ClipStudioModalProps {
   isOpen: boolean;
@@ -100,23 +100,7 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
 
   const formatTitlePreview = (rawText: string, style: TextCaseOption): string => {
     const text = applyLetterCase(rawText, style);
-    if (text.length > 24) {
-      const mid = Math.floor(text.length / 2);
-      const leftSpace = text.lastIndexOf(' ', mid);
-      const rightSpace = text.indexOf(' ', mid);
-      let splitIdx = -1;
-      if (leftSpace !== -1 && rightSpace !== -1) {
-        splitIdx = (mid - leftSpace < rightSpace - mid) ? leftSpace : rightSpace;
-      } else if (leftSpace !== -1) {
-        splitIdx = leftSpace;
-      } else if (rightSpace !== -1) {
-        splitIdx = rightSpace;
-      }
-      if (splitIdx !== -1) {
-        return text.substring(0, splitIdx) + '\n' + text.substring(splitIdx + 1);
-      }
-    }
-    return text;
+    return wrapTitleSmart(text, 20).formatted;
   };
 
   // Preview dimensions for the wireframe mock
@@ -723,21 +707,33 @@ export const ClipStudioModal: React.FC<ClipStudioModalProps> = ({
                       })(),
                     }}
                   >
-                    <span
-                      className="wireframe-title-text"
-                      style={{
-                        fontFamily: captionFont,
-                        fontSize: (titleFontSize || fontSize) === 'small' ? '0.66rem' : (titleFontSize || fontSize) === 'big' ? '0.88rem' : '0.74rem',
-                        lineHeight: 1.25,
-                        whiteSpace: 'pre-line',
-                        textAlign: 'center',
-                        background: 'transparent',
-                        boxShadow: 'none',
-                        border: 'none',
-                      }}
-                    >
-                      {formatTitlePreview(titleText || 'YOUR VIRAL HOOK TITLE', textCase)}
-                    </span>
+                    {(() => {
+                      const formatted = formatTitlePreview(titleText || 'YOUR VIRAL HOOK TITLE', textCase);
+                      const lines = formatted.split('\n').filter(Boolean);
+                      return (
+                        <span
+                          className="wireframe-title-text"
+                          style={{
+                            fontFamily: captionFont,
+                            fontSize: (titleFontSize || fontSize) === 'small' ? '0.66rem' : (titleFontSize || fontSize) === 'big' ? '0.88rem' : '0.74rem',
+                            lineHeight: 1.25,
+                            textAlign: 'center',
+                            background: 'transparent',
+                            boxShadow: 'none',
+                            border: 'none',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                          }}
+                        >
+                          {lines.map((l, idx) => (
+                            <span key={idx} style={{ display: 'block', whiteSpace: 'nowrap', textAlign: 'center' }}>
+                              {l}
+                            </span>
+                          ))}
+                        </span>
+                      );
+                    })()}
                   </div>
                 )}
 

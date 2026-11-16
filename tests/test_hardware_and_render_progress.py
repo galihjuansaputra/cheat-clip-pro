@@ -121,19 +121,18 @@ class TestHardwareAndRenderProgress(unittest.TestCase):
             if output_ass.exists():
                 output_ass.unlink()
 
-    def test_wrap_title_smart_max_3_lines_and_no_orphans(self):
-        # 1. User sample: "Awal Mula Raditya Dika Kenal Js Hiren" (7 words)
+    def test_wrap_title_smart_max_2_lines_and_no_orphans(self):
+        # 1. User sample: "Awal Mula Raditya Dika Kenal Js Hiren" (7 words) -> strictly 2 lines
         title = "Awal Mula Raditya Dika Kenal Js Hiren"
         res, count = wrap_title_smart(title)
-        self.assertEqual(count, 3)
+        self.assertEqual(count, 2)
         lines = res.split(r"\N")
-        self.assertEqual(len(lines), 3)
+        self.assertEqual(len(lines), 2)
         for line in lines:
             words = line.split()
             self.assertGreaterEqual(len(words), 2, f"Line '{line}' has fewer than 2 words (orphan word detected)")
-        self.assertEqual(lines[0], "Awal Mula")
-        self.assertEqual(lines[1], "Raditya Dika")
-        self.assertEqual(lines[2], "Kenal Js Hiren")
+        self.assertEqual(lines[0], "Awal Mula Raditya")
+        self.assertEqual(lines[1], "Dika Kenal Js Hiren")
 
         # 2. 4 words -> 2 lines, no orphans
         res4, count4 = wrap_title_smart("Kenapa Harus Belajar AI")
@@ -143,20 +142,20 @@ class TestHardwareAndRenderProgress(unittest.TestCase):
         for line in lines4:
             self.assertGreaterEqual(len(line.split()), 2)
 
-        # 3. 10 words -> strictly 3 lines max (never 4 lines)
+        # 3. 10 words -> strictly 2 lines max
         long_title = "Kisah Inspiratif Seorang Tukang Parkir Menjadi Miliarder Muda Sukses Banget"
         res10, count10 = wrap_title_smart(long_title)
-        self.assertEqual(count10, 3)
+        self.assertEqual(count10, 2)
         lines10 = res10.split(r"\N")
-        self.assertEqual(len(lines10), 3)
+        self.assertEqual(len(lines10), 2)
         for line in lines10:
             self.assertGreaterEqual(len(line.split()), 2)
 
-        # 4. Manual 5 lines collapsed to 3 lines max
+        # 4. Manual 5 lines collapsed to 2 lines max
         manual_title = "Baris1\nBaris2\nBaris3\nBaris4\nBaris5"
         res_m, count_m = wrap_title_smart(manual_title)
-        self.assertEqual(count_m, 3)
-        self.assertEqual(len(res_m.split(r"\N")), 3)
+        self.assertEqual(count_m, 2)
+        self.assertEqual(len(res_m.split(r"\N")), 2)
 
     def test_generate_ass_file_caption_anti_orphan(self):
         output_ass = Path("temp_test_anti_orphan.ass")

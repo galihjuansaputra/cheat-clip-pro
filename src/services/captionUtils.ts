@@ -245,10 +245,10 @@ export function buildCaptionChunksForClip(
 }
 
 /**
- * Wraps title cleanly into 1, 2, or 3 balanced lines separated by newline '\n'.
- * Strictly caps at 3 lines max (never 4 lines).
+ * Wraps title cleanly into at most 2 balanced lines separated by newline '\n'.
+ * Strictly caps at 2 lines max (never 3 or 4 lines).
  * Prevents orphan single-word lines when total words >= 4 (each line has at least 2 words).
- * Preserves manual newlines (capped to max 3 lines with orphan balancing).
+ * Preserves manual newlines (capped to max 2 lines with orphan balancing).
  */
 export function wrapTitleSmart(
   text: string,
@@ -257,58 +257,34 @@ export function wrapTitleSmart(
   const raw = text.trim();
   if (!raw) return { formatted: '', lineCount: 1 };
 
-  // Preserve manual newlines if the user specifically broke lines, capped at max 3 lines
+  // Preserve manual newlines if the user specifically broke lines, capped at max 2 lines
   if (raw.includes('\n')) {
     let lines = raw
       .split('\n')
       .map(l => l.trim())
       .filter(Boolean);
-    while (lines.length > 3) {
+    while (lines.length > 2) {
       lines[lines.length - 2] = lines[lines.length - 2] + ' ' + lines[lines.length - 1];
       lines.pop();
     }
     const allManualWords = lines.reduce((acc, l) => acc + l.split(/\s+/).filter(Boolean).length, 0);
-    if (allManualWords >= 6 && lines.length === 3) {
-      // Rebalance so each of the 3 lines has at least 2 words
+    if (lines.length === 2 && allManualWords >= 4) {
       const wordsAll = lines.flatMap(l => l.split(/\s+/).filter(Boolean));
-      const totalW = wordsAll.length;
-      let bestScore = Infinity;
-      let bestSplit = [2, 4];
-      for (let i = 2; i <= totalW - 4; i++) {
-        for (let j = i + 2; j <= totalW - 2; j++) {
-          const l1 = wordsAll.slice(0, i).join(' ');
-          const l2 = wordsAll.slice(i, j).join(' ');
-          const l3 = wordsAll.slice(j).join(' ');
-          const lengths = [l1.length, l2.length, l3.length];
-          const score = (Math.max(...lengths) - Math.min(...lengths)) + Math.abs(l1.length - l3.length) * 0.4;
-          if (score < bestScore) {
-            bestScore = score;
-            bestSplit = [i, j];
+      const w1 = lines[0].split(/\s+/).filter(Boolean).length;
+      const w2 = lines[1].split(/\s+/).filter(Boolean).length;
+      if (w1 === 1 || w2 === 1) {
+        let bestDiff = Infinity;
+        let bestSplit = Math.floor(wordsAll.length / 2);
+        for (let k = 2; k <= wordsAll.length - 2; k++) {
+          const l1 = wordsAll.slice(0, k).join(' ');
+          const l2 = wordsAll.slice(k).join(' ');
+          const diff = Math.abs(l1.length - l2.length);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestSplit = k;
           }
         }
-      }
-      const [i, j] = bestSplit;
-      lines = [
-        wordsAll.slice(0, i).join(' '),
-        wordsAll.slice(i, j).join(' '),
-        wordsAll.slice(j).join(' '),
-      ];
-    } else if (allManualWords >= 4) {
-      for (let idx = 0; idx < lines.length; idx++) {
-        const wList = lines[idx].split(/\s+/).filter(Boolean);
-        if (wList.length === 1) {
-          if (idx > 0 && lines[idx - 1].split(/\s+/).filter(Boolean).length > 2) {
-            const prevW = lines[idx - 1].split(/\s+/).filter(Boolean);
-            wList.unshift(prevW.pop()!);
-            lines[idx - 1] = prevW.join(' ');
-            lines[idx] = wList.join(' ');
-          } else if (idx < lines.length - 1 && lines[idx + 1].split(/\s+/).filter(Boolean).length > 2) {
-            const nextW = lines[idx + 1].split(/\s+/).filter(Boolean);
-            wList.push(nextW.shift()!);
-            lines[idx + 1] = nextW.join(' ');
-            lines[idx] = wList.join(' ');
-          }
-        }
+        lines = [wordsAll.slice(0, bestSplit).join(' '), wordsAll.slice(bestSplit).join(' ')];
       }
     }
     return { formatted: lines.join('\n'), lineCount: Math.max(1, lines.length) };
@@ -328,49 +304,28 @@ export function wrapTitleSmart(
     if (totalLen <= Math.round(maxSingleLen * 1.35)) {
       return { formatted: raw, lineCount: 1 };
     }
-    return { formatted: `${words[0]} ${words[1]}\n${words[2]}`, lineCount: 2 };
+    const diff1 = Math.abs(words[0].length - `${words[1]} ${words[2]}`.length);
+    const diff2 = Math.abs(`${words[0]} ${words[1]}`.length - words[2].length);
+    if (diff1 < diff2) {
+      return { formatted: `${words[0]}\n${words[1]} ${words[2]}`, lineCount: 2 };
+    } else {
+      return { formatted: `${words[0]} ${words[1]}\n${words[2]}`, lineCount: 2 };
+    }
   }
 
-  // For >= 4 words: strictly 2 or 3 lines max, and NEVER leave 1 lonely word on any line
+  // For >= 4 words: strictly 2 lines max, and NEVER leave 1 lonely word on any line
   // (Each line must have at least 2 words)
-  const targetLines = totalWords >= 6 && totalLen > maxSingleLen * 1.25 ? 3 : 2;
-
-  if (targetLines === 2) {
-    let bestDiff = Infinity;
-    let bestSplit = Math.floor(totalWords / 2);
-    for (let k = 2; k <= totalWords - 2; k++) {
-      const l1 = words.slice(0, k).join(' ');
-      const l2 = words.slice(k).join(' ');
-      const diff = Math.abs(l1.length - l2.length);
-      if (diff < bestDiff) {
-        bestDiff = diff;
-        bestSplit = k;
-      }
+  let bestDiff = Infinity;
+  let bestSplit = Math.floor(totalWords / 2);
+  for (let k = 2; k <= totalWords - 2; k++) {
+    const l1 = words.slice(0, k).join(' ');
+    const l2 = words.slice(k).join(' ');
+    const diff = Math.abs(l1.length - l2.length);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestSplit = k;
     }
-    const lines = [words.slice(0, bestSplit).join(' '), words.slice(bestSplit).join(' ')];
-    return { formatted: lines.join('\n'), lineCount: 2 };
-  } else {
-    let bestScore = Infinity;
-    let bestSplit = [2, 4];
-    for (let i = 2; i <= totalWords - 4; i++) {
-      for (let j = i + 2; j <= totalWords - 2; j++) {
-        const l1 = words.slice(0, i).join(' ');
-        const l2 = words.slice(i, j).join(' ');
-        const l3 = words.slice(j).join(' ');
-        const lengths = [l1.length, l2.length, l3.length];
-        const score = (Math.max(...lengths) - Math.min(...lengths)) + Math.abs(l1.length - l3.length) * 0.4;
-        if (score < bestScore) {
-          bestScore = score;
-          bestSplit = [i, j];
-        }
-      }
-    }
-    const [i, j] = bestSplit;
-    const lines = [
-      words.slice(0, i).join(' '),
-      words.slice(i, j).join(' '),
-      words.slice(j).join(' '),
-    ];
-    return { formatted: lines.join('\n'), lineCount: 3 };
   }
+  const lines = [words.slice(0, bestSplit).join(' '), words.slice(bestSplit).join(' ')];
+  return { formatted: lines.join('\n'), lineCount: 2 };
 }

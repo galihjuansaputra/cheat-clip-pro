@@ -23,20 +23,28 @@ class TestUniversalAspectAndCaptionFix(unittest.TestCase):
         for l in lines5:
             self.assertGreaterEqual(len(l.split()), 2)
 
-        # 3. 7 words -> strictly 3 lines with >= 2 words on every line
+        # 3. 7 words -> strictly 2 lines with >= 2 words on every line
         t7, c7 = wrap_title_smart("Cara Cepat Belajar Coding Python Sampai Mahir Banget", max_single_len=18)
-        self.assertEqual(c7, 3)
+        self.assertEqual(c7, 2)
         lines7 = t7.split(r"\N")
-        self.assertEqual(len(lines7), 3)
+        self.assertEqual(len(lines7), 2)
         for l in lines7:
             self.assertGreaterEqual(len(l.split()), 2, f"Line has orphan word: {l}")
 
-        # 4. Long title (12 words) -> strictly 3 lines max (never 4 lines)
-        t12, c12 = wrap_title_smart("Ini Adalah Judul Yang Sangat Panjang Sekali Untuk Menguji Apakah Sistem Bisa Tiga Baris", max_single_len=20)
-        self.assertLessEqual(c12, 3)
-        lines12 = t12.split(r"\N")
-        self.assertLessEqual(len(lines12), 3)
-        for l in lines12:
+        # 4. Raditya Dika title (6 words) -> strictly 2 lines with 3 words each
+        t_radit, c_radit = wrap_title_smart("SATU-SATUNYA ORANG YANG DIPERCAYA RADITYA DIKA", max_single_len=19)
+        self.assertEqual(c_radit, 2)
+        lines_radit = t_radit.split(r"\N")
+        self.assertEqual(len(lines_radit), 2)
+        self.assertEqual(lines_radit[0], "SATU-SATUNYA ORANG YANG")
+        self.assertEqual(lines_radit[1], "DIPERCAYA RADITYA DIKA")
+
+        # 5. Long title (14 words) -> strictly 2 lines max (never 3 or 4 lines)
+        t14, c14 = wrap_title_smart("Ini Adalah Judul Yang Sangat Panjang Sekali Untuk Menguji Apakah Sistem Bisa Dua Baris", max_single_len=20)
+        self.assertEqual(c14, 2)
+        lines14 = t14.split(r"\N")
+        self.assertEqual(len(lines14), 2)
+        for l in lines14:
             self.assertGreaterEqual(len(l.split()), 2)
 
     def test_generate_ass_file_disabled_caption(self):

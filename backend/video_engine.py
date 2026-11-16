@@ -1537,55 +1537,37 @@ def apply_text_case(text: str, mode: str) -> str:
 
 def wrap_title_smart(text: str, max_single_len: int = 22) -> Tuple[str, int]:
     """
-    Wraps title cleanly into 1, 2, or 3 balanced lines separated by \\N.
-    Strictly caps at 3 lines max (never 4 lines).
-    Prevents orphan single-word lines (widow words) when total words >= 4.
-    Preserves manual newlines if present (collapsed to max 3 lines with anti-orphan balancing).
+    Wraps title cleanly into at most 2 balanced lines separated by \\N (strictly max 2 lines).
+    Prevents orphan single-word lines (widow words) when total words >= 4 (each line has at least 2 words).
+    Preserves manual newlines if present (collapsed to max 2 lines with anti-orphan balancing).
     Returns (formatted_title, line_count).
     """
     raw = text.strip()
     if not raw:
         return "", 1
 
-    # Preserve manual newlines if the user specifically broke lines, capped at max 3 lines
+    # Preserve manual newlines if the user specifically broke lines, capped at max 2 lines
     if "\n" in raw:
         lines = [l.strip() for l in raw.split("\n") if l.strip()]
-        while len(lines) > 3:
+        while len(lines) > 2:
             lines[-2] = lines[-2] + " " + lines[-1]
             lines.pop()
         all_manual_words = sum(len(l.split()) for l in lines)
-        if all_manual_words >= 6 and len(lines) == 3:
-            # Rebalance so each of the 3 lines has at least 2 words
+        if len(lines) == 2 and all_manual_words >= 4:
             words_all = [w for l in lines for w in l.split()]
-            total_w = len(words_all)
-            best_score = float("inf")
-            best_split = (2, 4)
-            for i in range(2, total_w - 3):
-                for j in range(i + 2, total_w - 1):
-                    l1 = " ".join(words_all[:i])
-                    l2 = " ".join(words_all[i:j])
-                    l3 = " ".join(words_all[j:])
-                    lengths = [len(l1), len(l2), len(l3)]
-                    score = (max(lengths) - min(lengths)) + abs(len(l1) - len(l3)) * 0.4
-                    if score < best_score:
-                        best_score = score
-                        best_split = (i, j)
-            i, j = best_split
-            lines = [" ".join(words_all[:i]), " ".join(words_all[i:j]), " ".join(words_all[j:])]
-        elif all_manual_words >= 4:
-            for idx in range(len(lines)):
-                w_list = lines[idx].split()
-                if len(w_list) == 1:
-                    if idx > 0 and len(lines[idx - 1].split()) > 2:
-                        prev_w = lines[idx - 1].split()
-                        w_list.insert(0, prev_w.pop())
-                        lines[idx - 1] = " ".join(prev_w)
-                        lines[idx] = " ".join(w_list)
-                    elif idx < len(lines) - 1 and len(lines[idx + 1].split()) > 2:
-                        next_w = lines[idx + 1].split()
-                        w_list.append(next_w.pop(0))
-                        lines[idx + 1] = " ".join(next_w)
-                        lines[idx] = " ".join(w_list)
+            w1 = len(lines[0].split())
+            w2 = len(lines[1].split())
+            if w1 == 1 or w2 == 1:
+                best_diff = float("inf")
+                best_split = len(words_all) // 2
+                for k in range(2, len(words_all) - 1):
+                    l1 = " ".join(words_all[:k])
+                    l2 = " ".join(words_all[k:])
+                    diff = abs(len(l1) - len(l2))
+                    if diff < best_diff:
+                        best_diff = diff
+                        best_split = k
+                lines = [" ".join(words_all[:best_split]), " ".join(words_all[best_split:])]
         return "\\N".join(lines), len(lines)
 
     words = raw.split()
@@ -1599,40 +1581,26 @@ def wrap_title_smart(text: str, max_single_len: int = 22) -> Tuple[str, int]:
     if total_words == 3:
         if total_len <= int(max_single_len * 1.35):
             return raw, 1
-        return f"{words[0]} {words[1]}\\N{words[2]}", 2
+        diff1 = abs(len(words[0]) - len(f"{words[1]} {words[2]}"))
+        diff2 = abs(len(f"{words[0]} {words[1]}") - len(words[2]))
+        if diff1 < diff2:
+            return f"{words[0]}\\N{words[1]} {words[2]}", 2
+        else:
+            return f"{words[0]} {words[1]}\\N{words[2]}", 2
 
-    # For >= 4 words: strictly 2 or 3 lines max, and NEVER leave 1 lonely word on any line
+    # For >= 4 words: strictly 2 lines max, and NEVER leave 1 lonely word on any line
     # (Each line must have at least 2 words)
-    target_lines = 3 if (total_words >= 6 and total_len > max_single_len * 1.25) else 2
-
-    if target_lines == 2:
-        best_diff = float("inf")
-        best_split = total_words // 2
-        for k in range(2, total_words - 1):
-            l1 = " ".join(words[:k])
-            l2 = " ".join(words[k:])
-            diff = abs(len(l1) - len(l2))
-            if diff < best_diff:
-                best_diff = diff
-                best_split = k
-        lines = [" ".join(words[:best_split]), " ".join(words[best_split:])]
-        return "\\N".join(lines), 2
-    else:
-        best_score = float("inf")
-        best_split = (2, 4)
-        for i in range(2, total_words - 3):
-            for j in range(i + 2, total_words - 1):
-                l1 = " ".join(words[:i])
-                l2 = " ".join(words[i:j])
-                l3 = " ".join(words[j:])
-                lengths = [len(l1), len(l2), len(l3)]
-                score = (max(lengths) - min(lengths)) + abs(len(l1) - len(l3)) * 0.4
-                if score < best_score:
-                    best_score = score
-                    best_split = (i, j)
-        i, j = best_split
-        lines = [" ".join(words[:i]), " ".join(words[i:j]), " ".join(words[j:])]
-        return "\\N".join(lines), 3
+    best_diff = float("inf")
+    best_split = total_words // 2
+    for k in range(2, total_words - 1):
+        l1 = " ".join(words[:k])
+        l2 = " ".join(words[k:])
+        diff = abs(len(l1) - len(l2))
+        if diff < best_diff:
+            best_diff = diff
+            best_split = k
+    lines = [" ".join(words[:best_split]), " ".join(words[best_split:])]
+    return "\\N".join(lines), 2
 
 
 def is_emoji_char(ch: str) -> bool:
