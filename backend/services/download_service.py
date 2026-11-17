@@ -106,7 +106,8 @@ async def run_raw_clip_download_job(
 
     try:
         raw_clip_download_jobs[job_id]["status"] = "downloading"
-        raw_clip_download_jobs[job_id]["progress_percent"] = 25.0
+        raw_clip_download_jobs[job_id]["progress_percent"] = 15.0
+        raw_clip_download_jobs[job_id]["stage"] = "Checking local video cache..."
 
         # Optimization: Check if a full raw video already exists locally in UPLOADS_DIR, EXPORTS_DIR or TEMP_DIR
         local_candidates = []
@@ -154,6 +155,8 @@ async def run_raw_clip_download_job(
 
         success = False
         if source_video and os.path.exists(source_video):
+            raw_clip_download_jobs[job_id]["stage"] = "Trimming from local video..."
+            raw_clip_download_jobs[job_id]["progress_percent"] = 50.0
             try:
                 logger.info(f"Trimming local video with {ACTIVE_ENCODER_NAME} for clip {download_title} ({start_time}-{end_time})")
                 trim_cmd = [
@@ -197,6 +200,8 @@ async def run_raw_clip_download_job(
 
         if not success:
             logger.info(f"Downloading clip segment from YouTube for {download_title} ({start_time}-{end_time})")
+            raw_clip_download_jobs[job_id]["stage"] = "Fetching slice from YouTube..."
+            raw_clip_download_jobs[job_id]["progress_percent"] = 40.0
             temp_name = f"temp_{seg_filename}"
             downloaded_temp = await asyncio.to_thread(
                 download_clip_segment,
@@ -236,6 +241,7 @@ async def run_raw_clip_download_job(
 
         if success and out_path.exists() and is_valid_mp4(out_path):
             raw_clip_download_jobs[job_id]["status"] = "ready"
+            raw_clip_download_jobs[job_id]["stage"] = "Source video ready"
             raw_clip_download_jobs[job_id]["progress_percent"] = 100.0
             raw_clip_download_jobs[job_id]["download_url"] = f"/api/download-rendered/{seg_filename}?title={quote(download_title)}"
             raw_clip_download_jobs[job_id]["filename"] = f"{download_title}.mp4"

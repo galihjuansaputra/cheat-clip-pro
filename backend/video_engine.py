@@ -526,6 +526,8 @@ def get_yt_dlp_base_cmd(
             logger.info(f"Using YouTube cookies from: {eff}")
             cmd.extend(["--cookies", str(eff)])
 
+    # Anti-throttling & bot detection bypass for YouTube player
+    cmd.extend(["--extractor-args", "youtube:player_client=android,ios,web"])
     cmd.append("--force-ipv4")
     return cmd
 
@@ -975,9 +977,8 @@ def download_clip_segment(
     t_start_fmt = format_section_time(start_time)
     t_end_fmt = format_section_time(end_time)
 
-    # Dynamic timeout: Base 300s, plus 5s per second of clip duration (max 1200s / 20 min).
-    # Ensures clips > 1 minute (e.g. 70s, 90s, 120s, 180s) have ample time to download and merge without timing out.
-    timeout_sec = max(300, min(1200, int(clip_duration * 5) + 90))
+    # Fast, bounded timeout: ensures clips are fetched quickly or failover fast without hanging for hours.
+    timeout_sec = max(45, min(90, int(clip_duration * 1.5) + 30))
 
     with ephemeral_cookies_file(cookies_content) as temp_cookies:
         has_cookies = temp_cookies is not None or get_effective_cookies_path() is not None
@@ -1056,7 +1057,7 @@ def download_clip_segment(
                     video_stream = urls[0]
                     audio_stream = urls[1] if len(urls) > 1 else urls[0]
 
-                    trim_timeout = max(240, min(900, int(clip_duration * 4.5) + 60))
+                    trim_timeout = max(35, min(75, int(clip_duration * 1.5) + 25))
                     trim_cmd = [
                         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                         "-reconnect", "1",
@@ -1118,7 +1119,7 @@ def download_clip_segment(
                     "--no-warnings",
                     clean_url
                 ]
-                timeout_720p = max(200, min(600, int(clip_duration * 4) + 60))
+                timeout_720p = max(30, min(60, int(clip_duration * 1.2) + 20))
                 res_720p = _run_subproc(cmd_720p, timeout=timeout_720p)
                 if res_720p.returncode == 0 and is_valid_mp4(output_path):
                     logger.info(f"Successfully downloaded 720p fallback section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
@@ -1161,7 +1162,7 @@ def download_clip_segment(
                     "--no-warnings",
                     clean_url
                 ]
-                timeout_480p = max(150, min(450, int(clip_duration * 3) + 45))
+                timeout_480p = max(25, min(45, int(clip_duration * 1.0) + 15))
                 res_480p = _run_subproc(cmd_480p, timeout=timeout_480p)
                 if res_480p.returncode == 0 and is_valid_mp4(output_path):
                     logger.info(f"Successfully downloaded 480p fallback section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
