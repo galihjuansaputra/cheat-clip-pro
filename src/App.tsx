@@ -521,9 +521,11 @@ export default function App() {
             const rawData = await rawReq.json();
             const jobId = rawData.job_id;
 
+            const downloadStartTime = Date.now();
             rawSourceUrl = await new Promise<string>((resolve, reject) => {
               const pollInterval = setInterval(async () => {
                 try {
+                  const elapsedSec = Math.floor((Date.now() - downloadStartTime) / 1000);
                   const statusRes = await fetch(`/api/download-raw-clip-status/${jobId}`);
                   if (!statusRes.ok) {
                     clearInterval(pollInterval);
@@ -537,12 +539,26 @@ export default function App() {
                   } else if (statusData.status === 'failed') {
                     clearInterval(pollInterval);
                     reject(new Error(statusData.error || 'Failed to acquire raw clip segment'));
+                  } else {
+                    const stageMsg = statusData.stage || 'Fetching source video';
+                    setBatchProgress(prev => {
+                      if (!prev) return prev;
+                      return {
+                        ...prev,
+                        clips: prev.clips.map((c, idx) => idx === i ? {
+                          ...c,
+                          status: 'downloading',
+                          progress_percent: statusData.progress_percent || 15,
+                          error_message: `* ${stageMsg} (${elapsedSec}s)`
+                        } : c)
+                      };
+                    });
                   }
                 } catch (e) {
                   clearInterval(pollInterval);
                   reject(e);
                 }
-              }, 600);
+              }, 1200);
             });
           }
 
@@ -2591,7 +2607,7 @@ export default function App() {
             clearInterval(intervalId);
             reject(pollErr);
           }
-        }, 750);
+        }, 1200);
       });
     } catch (err: any) {
       setClipDownloadStates(prev => ({

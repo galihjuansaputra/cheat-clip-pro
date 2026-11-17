@@ -85,7 +85,7 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
               <div className={styles.itemStatusWrap}>
                 {clip.status === 'pending' && <span className={`${styles.statusBadge} ${styles.badgePending}`}>{t.batchProgress.statusWaiting}</span>}
                 {clip.status === 'downloading' && (
-                  <span className={`${styles.statusBadge} ${styles.badgeActive}`}>{t.batchProgress.statusSlicing}</span>
+                  <span className={`${styles.statusBadge} ${styles.badgeActive}`}>{clip.error_message || t.batchProgress.statusSlicing}</span>
                 )}
                 {clip.status === 'transcribing' && (
                   <span className={`${styles.statusBadge} ${styles.badgeActive}`}>{t.batchProgress.statusCaptions}</span>
