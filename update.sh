@@ -34,6 +34,7 @@ fi
 echo ""
 echo "[2/3] Checking Node modules..."
 npm install
+npm prune
 
 # Install Python dependencies
 echo ""

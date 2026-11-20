@@ -29,6 +29,7 @@ if %errorlevel% equ 0 (
 echo.
 echo [2/3] Checking Node modules...
 call npm install
+call npm prune
 
 :: Install Python dependencies
 echo.
