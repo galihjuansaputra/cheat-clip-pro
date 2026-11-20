@@ -4785,56 +4785,76 @@ Transcript:
                   /* Non-subtitle errors (e.g. Gemini API Key, quota, general errors) */
                   <>
                     <p style={{ fontSize: '0.875rem', color: '#fca5a5', marginTop: '0.35rem', lineHeight: '1.5', whiteSpace: 'pre-wrap' }}>{error}</p>
-                    {(error.toLowerCase().includes("api key") || error.toLowerCase().includes("quota") || error.toLowerCase().includes("flash model") || error.toLowerCase().includes("aistudio") || error.toLowerCase().includes("rate limit")) && (
-                      <div style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const keyInput = document.getElementById('gemini-key-input') as HTMLInputElement | null;
-                            if (keyInput) {
-                              keyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                              keyInput.focus();
-                              keyInput.select();
-                            }
-                          }}
-                          style={{
-                            background: 'rgba(255, 30, 39, 0.2)',
-                            border: '1px solid #ff1e27',
-                            color: '#fff',
-                            borderRadius: 0,
-                            padding: '0.4rem 0.85rem',
-                            fontSize: '0.8rem',
-                            fontWeight: 700,
-                            cursor: 'pointer',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.4rem',
-                            transition: 'all 0.2s ease',
-                            boxShadow: '0 0 10px rgba(255, 30, 39, 0.3)'
-                          }}
-                        >
-                          <ExternalLink size={13} />
-                          {t.errors.changeApiKeyAction}
-                        </button>
-                        <a
-                          href="https://aistudio.google.com/app/apikey"
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{
-                            color: 'var(--primary)',
-                            fontSize: '0.8rem',
-                            textDecoration: 'underline',
-                            fontWeight: 600,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.25rem'
-                          }}
-                        >
-                          <ExternalLink size={12} />
-                          {t.errors.getNewKeyLink}
-                        </a>
-                      </div>
-                    )}
+                    <div style={{ marginTop: '0.75rem', display: 'flex', flexWrap: 'wrap', gap: '0.6rem', alignItems: 'center' }}>
+                      <button
+                        type="button"
+                        className="glowing-btn"
+                        onClick={() => handleAnalyze()}
+                        disabled={loading}
+                        style={{
+                          padding: '0.4rem 1.05rem',
+                          fontSize: '0.8rem',
+                          borderRadius: 0,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '0.4rem',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <RefreshCw size={13} className={loading ? "spinner-icon" : ""} />
+                        {t.errors.tryAgain || "Try Again"}
+                      </button>
+                      {(error.toLowerCase().includes("api key") || error.toLowerCase().includes("quota") || error.toLowerCase().includes("flash model") || error.toLowerCase().includes("aistudio") || error.toLowerCase().includes("rate limit") || error.toLowerCase().includes("504") || error.toLowerCase().includes("deadline")) && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const keyInput = document.getElementById('gemini-key-input') as HTMLInputElement | null;
+                              if (keyInput) {
+                                keyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                keyInput.focus();
+                                keyInput.select();
+                              }
+                            }}
+                            style={{
+                              background: 'rgba(255, 30, 39, 0.2)',
+                              border: '1px solid #ff1e27',
+                              color: '#fff',
+                              borderRadius: 0,
+                              padding: '0.4rem 0.85rem',
+                              fontSize: '0.8rem',
+                              fontWeight: 700,
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.4rem',
+                              transition: 'all 0.2s ease',
+                              boxShadow: '0 0 10px rgba(255, 30, 39, 0.3)'
+                            }}
+                          >
+                            <ExternalLink size={13} />
+                            {t.errors.changeApiKeyAction}
+                          </button>
+                          <a
+                            href="https://aistudio.google.com/app/apikey"
+                            target="_blank"
+                            rel="noreferrer"
+                            style={{
+                              color: 'var(--primary)',
+                              fontSize: '0.8rem',
+                              textDecoration: 'underline',
+                              fontWeight: 600,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '0.25rem'
+                            }}
+                          >
+                            <ExternalLink size={12} />
+                            {t.errors.getNewKeyLink}
+                          </a>
+                        </>
+                      )}
+                    </div>
                   </>
                 )}
               </div>
