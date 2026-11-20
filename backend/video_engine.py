@@ -1441,6 +1441,33 @@ def clean_caption_text(text: str) -> str:
         return ""
     return t
 
+_STABLE_MODEL = None
+
+def _stable_words(video_path, language):
+    global _STABLE_MODEL
+    import stable_whisper
+    if _STABLE_MODEL is None:
+        import torch
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        _STABLE_MODEL = stable_whisper.load_model("turbo", device=device)
+    result = _STABLE_MODEL.transcribe(
+        video_path,
+        language=language,
+        condition_on_previous_text=False,
+        word_timestamps=True,
+    )
+    words = []
+    for seg in result.segments:
+        for w in seg.words:
+            text = clean_caption_text(w.word.strip())
+            if text and text not in (".", "..", "...", ",", "?"):
+                st = max(0.0, float(w.start))
+                words.append({
+                    "word": text,
+                    "start": round(st, 2),
+                    "end": round(max(st + 0.12, float(w.end)), 2),
+                })
+    return words
 
 def transcribe_clip_words(
     video_path: str,
@@ -1465,6 +1492,14 @@ def transcribe_clip_words(
                 target_language = detected["code"]
         except Exception:
             pass
+
+    try:
+        sw_words = _stable_words(video_path, target_language)
+        if sw_words:
+            logger.info(f"stable-ts produced {len(sw_words)} words.")
+            return sw_words 
+    except Exception as e:
+        logger.warning(f"stable-ts failed, using built-in Whisper: {e}")
 
     # 1. Primary: Run Whisper directly on sliced clip audio for exact acoustic timestamps
     whisper_model = get_whisper_model()
