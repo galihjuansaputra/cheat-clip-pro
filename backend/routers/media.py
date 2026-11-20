@@ -141,11 +141,12 @@ def _find_video_file_on_disk(file_name: str) -> Optional[Path]:
     import urllib.parse
     clean_name = urllib.parse.unquote(os.path.basename(file_name.split("?")[0])).strip()
     
-    # Check direct paths
+    # Check direct paths (never return audio-only or whisper cache files)
     for base in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
         candidate = base / clean_name
         if candidate.exists() and candidate.is_file() and _is_safe_path(candidate):
-            return candidate
+            if not candidate.name.startswith("yt_audio_") and not candidate.name.startswith("twitch_audio_"):
+                return candidate
 
     # Search directory listings without regex/glob pitfalls
     all_files: list[Path] = []
@@ -153,7 +154,7 @@ def _find_video_file_on_disk(file_name: str) -> Optional[Path]:
         if d.exists():
             all_files.extend([
                 f for f in d.iterdir()
-                if f.is_file() and _is_safe_path(f) and not f.name.startswith("yt_audio_")
+                if f.is_file() and _is_safe_path(f) and not f.name.startswith("yt_audio_") and not f.name.startswith("twitch_audio_")
             ])
 
     # Prioritize real video files over raw audio / temp clips

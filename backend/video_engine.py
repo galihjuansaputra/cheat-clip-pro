@@ -515,6 +515,7 @@ def get_yt_dlp_base_cmd(
     elif shutil.which("node"):
         cmd.extend(["--js-runtimes", "node"])
 
+    has_active_cookies = False
     if cookies_path and Path(cookies_path).exists() and Path(cookies_path).stat().st_size > 0:
         has_active_cookies = True
         logger.info(f"Using ephemeral YouTube cookies from: {cookies_path}")
@@ -526,8 +527,15 @@ def get_yt_dlp_base_cmd(
             logger.info(f"Using YouTube cookies from: {eff}")
             cmd.extend(["--cookies", str(eff)])
 
-    # Anti-throttling & bot detection bypass for YouTube player
-    cmd.extend(["--extractor-args", "youtube:player_client=android,ios,web"])
+    if has_active_cookies:
+        # With active user cookies, use web/default client hierarchy so browser session cookies
+        # authenticate directly. Never use android/ios here, as mobile protobuf clients do not
+        # support browser session cookies and restrict output formats to 360p.
+        cmd.extend(["--extractor-args", "youtube:player_client=web,default"])
+    else:
+        # In guest mode (without cookies), use web,default,tv clients to prevent mobile SABR 360p throttling.
+        cmd.extend(["--extractor-args", "youtube:player_client=web,default,tv"])
+
     cmd.append("--force-ipv4")
     return cmd
 
@@ -861,72 +869,122 @@ def download_clip_segment(
             proc.communicate()
             raise
 
-    # Check if video_url points to a local file (e.g. uploaded or Google Drive cached video)
+    # Check if video_url points to a local file or an online stream
     clean_raw = urllib.parse.unquote(video_url.strip())
     clean_base = os.path.basename(clean_raw.split("?")[0])
+
+    from backend.utils.text import is_twitch_url, extract_twitch_info, get_twitch_canonical_url
+    yt_audio_match = re.search(r'yt_audio_([a-zA-Z0-9_-]{11})', clean_raw)
+    tw_audio_match = re.search(r'twitch_audio_(twitch_\d+|twitch_clip_[a-zA-Z0-9_-]+|\d+|[a-zA-Z0-9_-]+)', clean_raw)
+    is_yt = bool(yt_audio_match or re.search(r'(?:youtube\.com|youtu\.be)', clean_raw))
+    is_tw = bool(tw_audio_match or is_twitch_url(clean_raw))
+
+    if yt_audio_match:
+        clean_url = f"https://www.youtube.com/watch?v={yt_audio_match.group(1)}"
+        logger.info(f"Resolved cached audio reference '{clean_raw}' back to genuine YouTube stream: {clean_url}")
+    elif is_yt:
+        clean_url = clean_raw if clean_raw.startswith("http") else f"https://www.youtube.com/watch?v={clean_raw}"
+    elif tw_audio_match or is_tw:
+        tw_info = extract_twitch_info(clean_raw)
+        clean_url = get_twitch_canonical_url(tw_info) if tw_info else clean_raw
+        logger.info(f"Resolved Twitch reference '{clean_raw}' back to genuine Twitch stream: {clean_url}")
+    else:
+        clean_url = clean_raw
+
+    is_online_stream = is_yt or is_tw or clean_url.startswith("http://") or clean_url.startswith("https://")
     local_source = None
 
-    if os.path.exists(clean_raw):
-        local_source = Path(clean_raw)
-    elif os.path.exists(video_url):
-        local_source = Path(video_url)
-    elif clean_raw.startswith("/api/video/"):
-        candidate = UPLOADS_DIR / clean_base
-        if candidate.exists():
-            local_source = candidate
-    elif (UPLOADS_DIR / clean_base).exists():
-        local_source = UPLOADS_DIR / clean_base
-    elif (TEMP_DIR / clean_base).exists():
-        local_source = TEMP_DIR / clean_base
-    elif (EXPORTS_DIR / clean_base).exists():
-        local_source = EXPORTS_DIR / clean_base
-
-    if not local_source:
-        all_local_files: List[Path] = []
-        for d in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
-            if d.exists():
-                all_local_files.extend([
-                    f for f in d.iterdir()
-                    if f.is_file() and f.suffix.lower() in [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"] and "_clip_" not in f.name
-                ])
-
-        clean_lower = clean_base.lower()
-        # 1. Exact case-insensitive or stem match
-        for f in all_local_files:
-            if f.name.lower() == clean_lower or f.stem.lower() == clean_lower or clean_lower in f.name.lower() or f.stem.lower() in clean_lower:
-                local_source = f
-                break
+    if not is_online_stream:
+        # Check local uploaded or Google Drive files
+        if os.path.exists(clean_raw):
+            local_source = Path(clean_raw)
+        elif os.path.exists(video_url):
+            local_source = Path(video_url)
+        elif clean_raw.startswith("/api/video/"):
+            candidate = UPLOADS_DIR / clean_base
+            if candidate.exists():
+                local_source = candidate
+        elif (UPLOADS_DIR / clean_base).exists():
+            local_source = UPLOADS_DIR / clean_base
+        elif (TEMP_DIR / clean_base).exists() and not clean_base.startswith("yt_audio_") and not clean_base.startswith("twitch_audio_"):
+            local_source = TEMP_DIR / clean_base
+        elif (EXPORTS_DIR / clean_base).exists():
+            local_source = EXPORTS_DIR / clean_base
 
         if not local_source:
-            # 2. Drive ID or Upload ID match
-            match_id = re.search(r'(gdrive_[a-zA-Z0-9_-]+|upload_[a-zA-Z0-9_-]+)', clean_raw)
-            if match_id:
-                raw_id = match_id.group(1).replace("gdrive_", "").replace("upload_", "")
-                for f in all_local_files:
-                    if raw_id in f.name:
-                        local_source = f
+            all_local_files: List[Path] = []
+            for d in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
+                if d.exists():
+                    all_local_files.extend([
+                        f for f in d.iterdir()
+                        if f.is_file() and f.suffix.lower() in [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]
+                        and "_clip_" not in f.name and not f.name.startswith("yt_audio_") and not f.name.startswith("twitch_audio_")
+                    ])
+
+            clean_lower = clean_base.lower()
+            for f in all_local_files:
+                if f.name.lower() == clean_lower or f.stem.lower() == clean_lower or clean_lower in f.name.lower() or f.stem.lower() in clean_lower:
+                    local_source = f
+                    break
+
+            if not local_source:
+                match_id = re.search(r'(gdrive_[a-zA-Z0-9_-]+|upload_[a-zA-Z0-9_-]+)', clean_raw)
+                if match_id:
+                    raw_id = match_id.group(1).replace("gdrive_", "").replace("upload_", "")
+                    for f in all_local_files:
+                        if raw_id in f.name:
+                            local_source = f
+                            break
+
+        if not local_source:
+            raise RuntimeError(f"Source video file not found on disk for '{clean_raw}'. Please re-analyze the video.")
+    else:
+        # For online streams, verify if a full raw video already exists locally and meets the resolution requirements
+        has_active_cookies = bool(cookies_content or get_effective_cookies_path())
+        required_height = 1080 if has_active_cookies else 720
+
+        # Try to locate any cached raw video for this stream
+        stream_id_match = yt_audio_match.group(1) if yt_audio_match else None
+        if not stream_id_match and "v=" in clean_url:
+            v_match = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', clean_url)
+            if v_match:
+                stream_id_match = v_match.group(1)
+        elif not stream_id_match and "youtu.be/" in clean_url:
+            v_match = re.search(r'youtu\.be/([a-zA-Z0-9_-]{11})', clean_url)
+            if v_match:
+                stream_id_match = v_match.group(1)
+
+        candidate_sources: List[Path] = []
+        for d in [EXPORTS_DIR, TEMP_DIR, UPLOADS_DIR]:
+            if d.exists():
+                for f in d.iterdir():
+                    if f.is_file() and f.suffix.lower() in [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]:
+                        if f.name.startswith("yt_audio_") or f.name.startswith("twitch_audio_") or "_clip_" in f.name:
+                            continue
+                        if stream_id_match and stream_id_match in f.name:
+                            candidate_sources.append(f)
+
+        for cand in candidate_sources:
+            if cand.exists() and cand.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(cand):
+                try:
+                    probe = subprocess.run(
+                        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height", "-of", "csv=p=0", str(cand)],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    h = int(probe.stdout.strip()) if probe.stdout.strip().isdigit() else 0
+                    if h >= required_height:
+                        logger.info(f"Reusing verified HD local cached video {cand.name} (height={h}p >= {required_height}p)")
+                        local_source = cand
                         break
+                    else:
+                        logger.info(f"Skipping cached candidate {cand.name} (height={h}p < {required_height}p); will download fresh HD stream")
+                except Exception:
+                    pass
 
     clip_duration = max(1.0, end_time - start_time)
 
     if local_source and local_source.exists():
-        # If user provided cookies and this local_source was a low-res guest-mode file (< 720p), skip it to download genuine 1080p
-        is_direct_upload = "upload_" in clean_raw.lower() or "gdrive_" in clean_raw.lower()
-        if not is_direct_upload and (cookies_content or get_effective_cookies_path()):
-            try:
-                probe = subprocess.run(
-                    ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height", "-of", "csv=p=0", str(local_source)],
-                    capture_output=True, text=True, timeout=5
-                )
-                h = int(probe.stdout.strip()) if probe.stdout.strip().isdigit() else 0
-                if h > 0 and h < 720:
-                    logger.info(f"Local source {local_source.name} is low resolution ({h}p < 720p) and cookies are active. Skipping cache to download genuine 1080p.")
-                    local_source = None
-            except Exception:
-                pass
-
-    if local_source and local_source.exists():
-        logger.info(f"Slicing local/gdrive video: {local_source} [{start_time:.2f}s -> {end_time:.2f}s] to {output_path}")
+        logger.info(f"Slicing local video: {local_source} [{start_time:.2f}s -> {end_time:.2f}s] to {output_path}")
         slice_timeout = max(300, min(1200, int(clip_duration * 6) + 90))
         slice_cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
@@ -948,31 +1006,6 @@ def download_clip_segment(
             except Exception:
                 pass
         raise RuntimeError(f"Failed to slice video clip from source '{local_source.name}': {res.stderr or 'Corrupted video stream'}")
-
-    # Guard: if it was a Google Drive or Upload request, never send to YouTube
-    # Exception: if it was a YouTube audio cache file (e.g. /api/video/yt_audio_iLijjSEI_40.mp4), resolve back to original YouTube video
-    from backend.utils.text import is_twitch_url, extract_twitch_info, get_twitch_canonical_url
-    yt_audio_match = re.search(r'yt_audio_([a-zA-Z0-9_-]{11})', clean_raw)
-    tw_audio_match = re.search(r'twitch_audio_(twitch_\d+|twitch_clip_[a-zA-Z0-9_-]+|\d+|[a-zA-Z0-9_-]+)', clean_raw)
-    if yt_audio_match:
-        yt_id = yt_audio_match.group(1)
-        clean_url = f"https://www.youtube.com/watch?v={yt_id}"
-        logger.info(f"Resolved cached audio reference '{clean_raw}' back to genuine YouTube stream: {clean_url}")
-    elif tw_audio_match or is_twitch_url(clean_raw):
-        tw_info = extract_twitch_info(clean_raw)
-        clean_url = get_twitch_canonical_url(tw_info) if tw_info else clean_raw
-        logger.info(f"Resolved Twitch reference '{clean_raw}' back to genuine Twitch stream: {clean_url}")
-    elif "gdrive" in clean_raw.lower() or "upload_" in clean_raw.lower() or clean_raw.startswith("/api/video/"):
-        raise RuntimeError(f"Source video file not found on disk for '{clean_raw}'. Please re-analyze the video.")
-    else:
-        # Sanitize video URL
-        if is_twitch_url(video_url):
-            tw_info = extract_twitch_info(video_url)
-            clean_url = get_twitch_canonical_url(tw_info) if tw_info else video_url.strip()
-        else:
-            clean_url = video_url.strip()
-            if not clean_url.startswith("http"):
-                clean_url = f"https://www.youtube.com/watch?v={clean_url}"
 
     t_start_fmt = format_section_time(start_time)
     t_end_fmt = format_section_time(end_time)
@@ -996,7 +1029,7 @@ def download_clip_segment(
                 *base_cmd,
                 "--download-sections", f"*{t_start_fmt}-{t_end_fmt}",
                 "--force-keyframes-at-cuts",
-                "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
+                "-f", "bestvideo[height<=1080]+bestaudio/bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best[height<=1080]/best",
                 "-N", "4",
                 "--socket-timeout", "20",
                 "--fragment-retries", "5",
@@ -1048,7 +1081,7 @@ def download_clip_segment(
                     *base_cmd,
                     "--socket-timeout", "20",
                     "-g",
-                    "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
+                    "-f", "bestvideo[height<=1080]+bestaudio/bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best[height<=1080]/best",
                     clean_url
                 ]
                 url_res = _run_subproc(url_cmd, timeout=30)
@@ -1096,6 +1129,12 @@ def download_clip_segment(
                     except Exception:
                         pass
                 last_err_snippet = str(e)
+
+            # When cookies are active, DO NOT silently downgrade to 480p/360p while cookies are on!
+            # Instead, proceed immediately to guest mode HD attempt before accepting any low resolution.
+            if use_cookies and False in attempts:
+                logger.warning(f"HD section download with cookies failed ({last_err_snippet}). Proceeding to guest mode HD attempt before trying lower resolutions...")
+                continue
 
             # Method 3: Fallback - Download at 720p (vastly lower bandwidth, skips SABR/1080p throttling)
             logger.info(f"Method 3: Attempting fast 720p fallback section download for {clean_url} ({mode_label})...")
@@ -1152,7 +1191,7 @@ def download_clip_segment(
                     *base_cmd,
                     "--download-sections", f"*{t_start_fmt}-{t_end_fmt}",
                     "--force-keyframes-at-cuts",
-                    "-f", "bestvideo[height<=480]+bestaudio/best[height<=480]/18/best",
+                    "-f", "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
                     "-N", "2",
                     "--socket-timeout", "20",
                     "--fragment-retries", "3",
@@ -1214,32 +1253,93 @@ def download_full_raw_video(
     Downloads the full raw video from YouTube in maximum quality (up to 1080p),
     or copies the local uploaded / Google Drive video file directly.
     """
+    clean_raw = urllib.parse.unquote(video_url.strip())
+    clean_name = os.path.basename(clean_raw.split("?")[0]).strip()
+
+    from backend.utils.text import is_twitch_url, extract_twitch_info, get_twitch_canonical_url
+    yt_audio_match = re.search(r'yt_audio_([a-zA-Z0-9_-]{11})', clean_raw)
+    tw_audio_match = re.search(r'twitch_audio_(twitch_\d+|twitch_clip_[a-zA-Z0-9_-]+|\d+|[a-zA-Z0-9_-]+)', clean_raw)
+    is_yt = bool(yt_audio_match or re.search(r'(?:youtube\.com|youtu\.be)', clean_raw))
+    is_tw = bool(tw_audio_match or is_twitch_url(clean_raw))
+
+    if yt_audio_match:
+        clean_url = f"https://www.youtube.com/watch?v={yt_audio_match.group(1)}"
+        logger.info(f"Resolved cached audio reference '{clean_raw}' back to genuine YouTube stream: {clean_url}")
+    elif is_yt:
+        clean_url = clean_raw if clean_raw.startswith("http") else f"https://www.youtube.com/watch?v={clean_raw}"
+    elif tw_audio_match or is_tw:
+        tw_info = extract_twitch_info(clean_raw)
+        clean_url = get_twitch_canonical_url(tw_info) if tw_info else clean_raw
+        logger.info(f"Resolved Twitch reference '{clean_raw}' back to genuine Twitch stream: {clean_url}")
+    elif not clean_raw.startswith("http") and not clean_raw.startswith("/api/video/") and not os.path.exists(clean_raw):
+        clean_url = f"https://www.youtube.com/watch?v={clean_raw}"
+        is_yt = True
+    else:
+        clean_url = clean_raw
+
+    is_online_stream = is_yt or is_tw or clean_url.startswith("http://") or clean_url.startswith("https://")
     local_source = None
-    if os.path.exists(video_url):
-        local_source = Path(video_url)
-    elif video_url.startswith("/api/video/"):
-        candidate = UPLOADS_DIR / os.path.basename(video_url.split("?")[0])
-        if candidate.exists():
-            local_source = candidate
-    if not local_source or not local_source.exists():
-        clean_name = os.path.basename(video_url.split("?")[0]).strip()
-        from backend.routers.media import _find_video_file_on_disk
-        local_source = _find_video_file_on_disk(clean_name)
+
+    if not is_online_stream:
+        if os.path.exists(video_url):
+            local_source = Path(video_url)
+        elif os.path.exists(clean_raw):
+            local_source = Path(clean_raw)
+        elif clean_raw.startswith("/api/video/"):
+            candidate = UPLOADS_DIR / clean_name
+            if candidate.exists():
+                local_source = candidate
+        if not local_source or not local_source.exists():
+            from backend.routers.media import _find_video_file_on_disk
+            local_source = _find_video_file_on_disk(clean_name)
+    else:
+        # For online streams, verify if a full raw video already exists locally and meets the resolution requirements
+        has_active_cookies = bool(cookies_content or get_effective_cookies_path())
+        required_height = 1080 if has_active_cookies else 720
+
+        stream_id_match = yt_audio_match.group(1) if yt_audio_match else None
+        if not stream_id_match and "v=" in clean_url:
+            v_match = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', clean_url)
+            if v_match:
+                stream_id_match = v_match.group(1)
+        elif not stream_id_match and "youtu.be/" in clean_url:
+            v_match = re.search(r'youtu\.be/([a-zA-Z0-9_-]{11})', clean_url)
+            if v_match:
+                stream_id_match = v_match.group(1)
+
+        candidate_sources: List[Path] = []
+        for d in [EXPORTS_DIR, TEMP_DIR, UPLOADS_DIR]:
+            if d.exists():
+                for f in d.iterdir():
+                    if f.is_file() and f.suffix.lower() in [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]:
+                        if f.name.startswith("yt_audio_") or f.name.startswith("twitch_audio_") or "_clip_" in f.name:
+                            continue
+                        if stream_id_match and stream_id_match in f.name:
+                            candidate_sources.append(f)
+
+        for cand in candidate_sources:
+            if cand.exists() and cand.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(cand):
+                try:
+                    probe = subprocess.run(
+                        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height", "-of", "csv=p=0", str(cand)],
+                        capture_output=True, text=True, timeout=5
+                    )
+                    h = int(probe.stdout.strip()) if probe.stdout.strip().isdigit() else 0
+                    if h >= required_height:
+                        logger.info(f"Reusing verified HD local video {cand.name} (height={h}p >= {required_height}p)")
+                        local_source = cand
+                        break
+                    else:
+                        logger.info(f"Skipping cached candidate {cand.name} (height={h}p < {required_height}p); downloading fresh HD video")
+                except Exception:
+                    pass
 
     if local_source and local_source.exists():
-        logger.info(f"Copying local source video to raw output: {local_source} -> {output_path}")
+        logger.info(f"Copying verified HD local source video to raw output: {local_source} -> {output_path}")
         shutil.copyfile(str(local_source), str(output_path))
         if progress_callback:
             progress_callback({"percent": 100.0, "downloaded": "Complete", "total": "Complete", "speed": "", "eta": ""})
         return str(output_path)
-
-    from backend.utils.text import is_twitch_url, extract_twitch_info, get_twitch_canonical_url
-    clean_url = video_url.strip()
-    if is_twitch_url(clean_url):
-        tw_info = extract_twitch_info(clean_url)
-        clean_url = get_twitch_canonical_url(tw_info) if tw_info else clean_url
-    elif not clean_url.startswith("http"):
-        clean_url = f"https://www.youtube.com/watch?v={clean_url}"
 
     with ephemeral_cookies_file(cookies_content) as temp_cookies:
         has_cookies = temp_cookies is not None or get_effective_cookies_path() is not None
@@ -1251,7 +1351,7 @@ def download_full_raw_video(
             cmd = [
                 *base_cmd,
                 "--no-colors",
-                "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
+                "-f", "bestvideo[height<=1080]+bestaudio/bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best[height<=1080]/best",
                 "-o", str(output_path),
                 "--merge-output-format", "mp4",
                 "--newline",

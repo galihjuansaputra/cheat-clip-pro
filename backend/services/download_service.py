@@ -18,6 +18,7 @@ from backend.config import (
     UPLOADS_DIR,
     download_clip_segment,
     download_full_raw_video,
+    get_effective_cookies_path,
     is_valid_mp4,
     logger,
 )
@@ -45,24 +46,37 @@ async def run_raw_download_job(
     try:
         raw_download_jobs[job_id]["status"] = "downloading"
 
-        # Check if local video exists in UPLOADS_DIR / TEMP_DIR (e.g. Google Drive or Uploaded video)
+        # Check if local video exists (e.g. Google Drive or Uploaded video)
         clean_vname = urllib.parse.unquote(os.path.basename(v_url.split("?")[0])).strip()
+        from backend.utils.text import is_twitch_url, extract_twitch_info, get_twitch_canonical_url
+        yt_audio_match = re.search(r'yt_audio_([a-zA-Z0-9_-]{11})', clean_vname)
+        tw_audio_match = re.search(r'twitch_audio_(twitch_\d+|twitch_clip_[a-zA-Z0-9_-]+|\d+|[a-zA-Z0-9_-]+)', clean_vname)
+        is_youtube = bool(yt_audio_match or re.search(r'(?:youtube\.com|youtu\.be)', v_url))
+        is_twitch = bool(tw_audio_match or is_twitch_url(v_url))
+
+        if yt_audio_match:
+            v_url = f"https://www.youtube.com/watch?v={yt_audio_match.group(1)}"
+        elif tw_audio_match or is_twitch:
+            tw_info = extract_twitch_info(v_url)
+            v_url = get_twitch_canonical_url(tw_info) if tw_info else v_url
+
         local_src = None
-        if os.path.exists(v_url):
-            local_src = os.path.abspath(v_url)
-        elif (UPLOADS_DIR / clean_vname).exists():
-            local_src = str(UPLOADS_DIR / clean_vname)
-        elif (TEMP_DIR / clean_vname).exists():
-            local_src = str(TEMP_DIR / clean_vname)
-        else:
-            for d in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
-                if d.exists():
-                    for f in d.iterdir():
-                        if f.is_file() and (f.name.lower() == clean_vname.lower() or clean_vname.lower() in f.name.lower() or f.stem.lower() in clean_vname.lower()):
-                            local_src = str(f)
-                            break
-                if local_src:
-                    break
+        if not is_youtube and not is_twitch:
+            if os.path.exists(v_url):
+                local_src = os.path.abspath(v_url)
+            elif (UPLOADS_DIR / clean_vname).exists():
+                local_src = str(UPLOADS_DIR / clean_vname)
+            elif (TEMP_DIR / clean_vname).exists() and not clean_vname.startswith("yt_audio_") and not clean_vname.startswith("twitch_audio_"):
+                local_src = str(TEMP_DIR / clean_vname)
+            else:
+                for d in [UPLOADS_DIR, TEMP_DIR, EXPORTS_DIR]:
+                    if d.exists():
+                        for f in d.iterdir():
+                            if f.is_file() and not f.name.startswith("yt_audio_") and not f.name.startswith("twitch_audio_") and (f.name.lower() == clean_vname.lower() or clean_vname.lower() in f.name.lower() or f.stem.lower() in clean_vname.lower()):
+                                local_src = str(f)
+                                break
+                    if local_src:
+                        break
 
         if local_src and os.path.exists(local_src):
             logger.info(f"Serving local/gdrive video {local_src} directly as full download {out_path}")
@@ -112,7 +126,7 @@ async def run_raw_clip_download_job(
         # Optimization: Check if a full raw video already exists locally in UPLOADS_DIR, EXPORTS_DIR or TEMP_DIR
         local_candidates = []
         clean_vname = urllib.parse.unquote(os.path.basename(v_url.split("?")[0])).strip() if v_url else ""
-        if clean_vname:
+        if clean_vname and not clean_vname.startswith("yt_audio_") and not clean_vname.startswith("twitch_audio_"):
             if (UPLOADS_DIR / clean_vname).exists():
                 local_candidates.append(UPLOADS_DIR / clean_vname)
             if (TEMP_DIR / clean_vname).exists():
@@ -125,26 +139,31 @@ async def run_raw_clip_download_job(
             if d.exists():
                 for f in d.iterdir():
                     if f.is_file() and f.suffix.lower() in [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]:
+                        # Never use whisper audio cache files as video candidates
+                        if f.name.startswith("yt_audio_") or f.name.startswith("twitch_audio_"):
+                            continue
                         if clean_vname and (clean_vname.lower() in f.name.lower() or f.name.lower() in clean_vname.lower()):
                             local_candidates.append(f)
                         elif raw_vid_id and len(raw_vid_id) >= 4 and raw_vid_id in f.name:
                             local_candidates.append(f)
 
         source_video = None
+        has_cookies = bool(cookies_content or get_effective_cookies_path())
+        required_h = 1080 if has_cookies else 720
+
         for candidate in local_candidates:
-            if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 1024 * 1024 and is_valid_mp4(candidate):
+            if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(candidate):
                 # Avoid using a small trimmed clip segment as source
                 if "_clip_" not in candidate.name and candidate.name != seg_filename:
-                    # Guard: If user provided cookies, ensure candidate is actually HD (>= 720p)
-                    # and not an old blurry 360p guest-mode video!
+                    # Guard: If user provided cookies or effective cookies exist, ensure candidate is genuine 1080p
                     try:
                         probe = subprocess.run(
                             ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height", "-of", "csv=p=0", str(candidate)],
                             capture_output=True, text=True, timeout=5
                         )
                         cand_h = int(probe.stdout.strip()) if probe.stdout.strip().isdigit() else 0
-                        if cookies_content and cand_h > 0 and cand_h < 720:
-                            logger.info(f"Skipping cached candidate {candidate.name} (height={cand_h}p < 720p) because cookies are active; will download fresh 1080p stream")
+                        if cand_h < required_h:
+                            logger.info(f"Skipping cached candidate {candidate.name} (height={cand_h}p < {required_h}p); will download fresh HD stream")
                             continue
                     except Exception:
                         pass
