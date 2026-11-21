@@ -17,6 +17,9 @@ services:
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - SUPADATA_API_KEYS=${SUPADATA_API_KEYS:-}
       - WEBSHARE_PROXY=${WEBSHARE_PROXY:-}
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     volumes:
       - media_temp:/app/temp
       - media_uploads:/app/uploads
