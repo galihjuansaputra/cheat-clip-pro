@@ -6872,20 +6872,6 @@ Transcript:
                   >
                     [ &lt;- KEMBALI KE TAB 02 // CLIPS ]
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowPasscodeDialog(true)}
-                    style={{
-                      background: 'transparent',
-                      border: '1px solid #332d4a',
-                      color: 'var(--text-muted)',
-                      padding: '0.6rem 1.1rem',
-                      fontSize: '0.78rem',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    🔑 Mode Tester / Admin
-                  </button>
                 </div>
               </div>
             ) : (
@@ -7062,7 +7048,7 @@ Transcript:
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <Wrench size={18} color="#d946ef" />
                   <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: '0.9rem', color: '#fff', letterSpacing: '0.04em' }}>
-                    FITUR AUTO CLIPPER SEDANG DALAM PENINGKATAN
+                    FITUR SEDANG DALAM PERBAIKAN
                   </span>
                 </div>
                 <button
@@ -7076,14 +7062,14 @@ Transcript:
               </div>
 
               <p style={{ color: '#cbd5e1', fontSize: '0.86rem', lineHeight: 1.6, marginBottom: '1rem' }}>
-                Fitur rendering &amp; auto-cropping video pada server deployment sedang dioptimasi untuk kecepatan dan kestabilan performa cloud yang lebih tinggi.
+                Fitur Auto Clipper saat ini sedang dalam proses perbaikan dan pemeliharaan sistem.
               </p>
 
               <div style={{ padding: '0.75rem 0.9rem', background: 'rgba(217, 70, 239, 0.08)', border: '1px solid rgba(217, 70, 239, 0.25)', marginBottom: '1.25rem', fontSize: '0.82rem', color: '#f1f5f9', lineHeight: 1.5 }}>
                 💡 <strong>Tips:</strong> Anda tetap dapat melihat, memutar, dan mengekspor seluruh daftar rekomendasi klip viral beserta timestamp di <strong>Tab 02 // RECOMMENDED CLIPS</strong>.
               </div>
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>
                 <button
                   type="button"
                   className="glowing-btn"
@@ -7091,13 +7077,6 @@ Transcript:
                   style={{ padding: '0.55rem 1.25rem', fontSize: '0.82rem', background: 'var(--primary)', color: '#000', fontWeight: 700 }}
                 >
                   [ Mengerti, Buka Tab 02 ]
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setShowClipperMaintenanceModal(false); setShowPasscodeDialog(true); }}
-                  style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '0.74rem', cursor: 'pointer', textDecoration: 'underline' }}
-                >
-                  🔑 Akses Developer / Tester
                 </button>
               </div>
             </div>
@@ -7112,7 +7091,7 @@ Transcript:
                 <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                   <Lock size={16} color="#00f0ff" />
                   <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: '0.9rem', color: '#fff', letterSpacing: '0.04em' }}>
-                    MASUKKAN PASSCODE PENGEMBANG
+                    VERIFIKASI AKSES
                   </span>
                 </div>
                 <button
@@ -7126,13 +7105,13 @@ Transcript:
               </div>
 
               <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '1rem', lineHeight: 1.5 }}>
-                Masukkan passcode developer untuk membuka akses Tab 03 Auto Clipper di server deployment ini. Anda juga bisa menggunakan URL param <code>?dev=1</code>.
+                Fitur ini sedang dalam perbaikan dan pemeliharaan sistem. Masukkan passcode untuk melanjutkan:
               </p>
 
               <form onSubmit={(e) => { e.preventDefault(); handleUnlockWithPasscode(passcodeInput); }}>
                 <input
                   type="password"
-                  placeholder="Passcode pengembang..."
+                  placeholder="Masukkan passcode..."
                   value={passcodeInput}
                   onChange={(e) => { setPasscodeInput(e.target.value); setPasscodeError(''); }}
                   style={{
