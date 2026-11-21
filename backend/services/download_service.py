@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import os
@@ -6,7 +8,7 @@ import shutil
 import subprocess
 import time
 import urllib.parse
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 from urllib.parse import quote
 
 from backend.utils.text import canonical_video_url
