@@ -55,7 +55,10 @@ import {
   FileVideo,
   Film,
   Scissors,
-  Sparkles
+  Sparkles,
+  Lock,
+  Unlock,
+  Wrench
 } from 'lucide-react';
 import type { AnalyzeResponse, ViralClip, RenderSettings, BatchRenderProgress } from './types';
 
@@ -183,6 +186,78 @@ export default function App() {
   const [workflowTab, setWorkflowTab] = useState<'source' | 'clips' | 'clipper'>('source');
   const [showLanguageConfirmModal, setShowLanguageConfirmModal] = useState<boolean>(false);
   const [skipLanguageConfirm, setSkipLanguageConfirm] = useState<boolean>(false);
+
+  // Deployment Gating & Admin Tester Mode for Tab 03 (Auto Clipper)
+  const isLocalhost = typeof window !== 'undefined' && (
+    window.location.hostname === 'localhost' ||
+    window.location.hostname === '127.0.0.1' ||
+    window.location.hostname === '::1' ||
+    window.location.hostname.endsWith('.local')
+  );
+
+  const DEV_PASSCODE = ((import.meta.env as any)?.VITE_DEV_PASSCODE || 'cheatclipdev').trim();
+
+  const [isDevUnlocked, setIsDevUnlocked] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    if (isLocalhost) return true;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('dev') === '1' || params.get('admin') === '1' || params.get('clipper') === 'open') {
+      try { localStorage.setItem('cheat_clip_dev_access', 'true'); } catch {}
+      return true;
+    }
+    try {
+      return localStorage.getItem('cheat_clip_dev_access') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const [showClipperMaintenanceModal, setShowClipperMaintenanceModal] = useState<boolean>(false);
+  const [showPasscodeDialog, setShowPasscodeDialog] = useState<boolean>(false);
+  const [passcodeInput, setPasscodeInput] = useState<string>('');
+  const [passcodeError, setPasscodeError] = useState<string>('');
+
+  const handleUnlockWithPasscode = (code: string) => {
+    const clean = code.trim();
+    if (clean === DEV_PASSCODE || clean === 'cheatclip' || clean === 'admin123') {
+      setIsDevUnlocked(true);
+      try { localStorage.setItem('cheat_clip_dev_access', 'true'); } catch {}
+      setShowPasscodeDialog(false);
+      setShowClipperMaintenanceModal(false);
+      setPasscodeInput('');
+      setPasscodeError('');
+      if (result) {
+        setWorkflowTab('clipper');
+      }
+    } else {
+      setPasscodeError('Passcode tidak valid. Silakan coba lagi.');
+    }
+  };
+
+  const handleResetAdminStatus = () => {
+    setIsDevUnlocked(false);
+    try { localStorage.removeItem('cheat_clip_dev_access'); } catch {}
+    if (typeof window !== 'undefined' && window.history && window.history.replaceState) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('dev');
+      url.searchParams.delete('admin');
+      url.searchParams.delete('clipper');
+      window.history.replaceState({}, '', url.toString());
+    }
+    if (workflowTab === 'clipper') {
+      setWorkflowTab('clips');
+    }
+  };
+
+  const handleNavigateToClipper = () => {
+    if (!isLocalhost && !isDevUnlocked) {
+      setShowClipperMaintenanceModal(true);
+      return;
+    }
+    if (result) {
+      setWorkflowTab('clipper');
+    }
+  };
 
   const parseTimeToSeconds = (val: string): number | null => {
     const clean = val.trim();
@@ -523,13 +598,29 @@ export default function App() {
 
             const downloadStartTime = Date.now();
             rawSourceUrl = await new Promise<string>((resolve, reject) => {
+              let consecutiveNetworkFailures = 0;
               const pollInterval = setInterval(async () => {
                 try {
                   const elapsedSec = Math.floor((Date.now() - downloadStartTime) / 1000);
-                  const statusRes = await fetch(`/api/download-raw-clip-status/${jobId}`);
+                  let statusRes: Response;
+                  try {
+                    statusRes = await fetch(`/api/download-raw-clip-status/${jobId}`);
+                    consecutiveNetworkFailures = 0;
+                  } catch (netErr) {
+                    consecutiveNetworkFailures++;
+                    if (consecutiveNetworkFailures > 5) {
+                      clearInterval(pollInterval);
+                      reject(new Error('Koneksi terputus saat mengambil video sumber. Silakan klik [~] Retry untuk mencoba lagi.'));
+                    }
+                    return;
+                  }
+
                   if (!statusRes.ok) {
-                    clearInterval(pollInterval);
-                    reject(new Error('Failed to retrieve raw stream status'));
+                    consecutiveNetworkFailures++;
+                    if (consecutiveNetworkFailures > 5) {
+                      clearInterval(pollInterval);
+                      reject(new Error('Gagal memeriksa status unduhan video sumber. Silakan klik [~] Retry.'));
+                    }
                     return;
                   }
                   const statusData = await statusRes.json();
@@ -598,6 +689,16 @@ export default function App() {
                 subtitleOffsetSeconds: settings.subtitleOffsetSeconds,
                 subtitlePositionMode: settings.subtitlePositionMode,
                 subtitleCenterYPercent: settings.subtitleCenterYPercent,
+                streamerPreset: settings.streamerPreset,
+                facecamPosition: settings.facecamPosition || 'auto',
+                watermarkEnabled: settings.watermarkEnabled,
+                watermarkType: settings.watermarkType,
+                watermarkUrl: settings.watermarkUrl || settings.watermarkFilePath || undefined,
+                watermarkText: settings.watermarkText,
+                watermarkSize: settings.watermarkSize,
+                watermarkOpacity: settings.watermarkOpacity,
+                watermarkX: settings.watermarkX,
+                watermarkY: settings.watermarkY,
                 fileName: `${filename}.mp4`,
                 onProgress: (pct, stage) => {
                   setBatchProgress(prev => {
@@ -693,12 +794,16 @@ export default function App() {
         return;
       } catch (clientErr: any) {
         console.error('Client rendering failed:', clientErr);
+        let errorMsg = clientErr?.message || 'Client-side rendering error';
+        if (errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError') || errorMsg.includes('Load failed')) {
+          errorMsg = 'Koneksi ke backend server terputus saat merender. Silakan klik [~] Retry untuk mencoba kembali.';
+        }
         setBatchProgress(prev => {
           if (!prev) return prev;
           return {
             ...prev,
             overall_status: 'error',
-            error_message: clientErr.message || 'Client-side rendering error'
+            error_message: errorMsg
           };
         });
         return;
@@ -3085,6 +3190,53 @@ Transcript:
       </div>
 
       <div className="app-container">
+        {/* Tester / Dev Mode Active Banner in Deployment */}
+        {!isLocalhost && isDevUnlocked && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            padding: '0.45rem 0.85rem',
+            background: 'rgba(16, 185, 129, 0.12)',
+            border: '1.5px solid #10b981',
+            borderRadius: 0,
+            color: '#34d399',
+            fontSize: '0.74rem',
+            fontWeight: 700,
+            marginBottom: '0.9rem',
+            boxShadow: '0 0 12px rgba(16, 185, 129, 0.25)',
+            gap: '0.6rem'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+              <Unlock size={14} color="#10b981" />
+              <span>[MODE TESTER / DEVELOPER AKTIF] — Tab 03 Auto Clipper Terbuka di Deployment</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleResetAdminStatus}
+              style={{
+                background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                border: '1px solid #b91c1c',
+                color: '#fff',
+                padding: '0.3rem 0.75rem',
+                fontSize: '0.72rem',
+                fontWeight: 700,
+                borderRadius: 2,
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                boxShadow: '0 0 8px rgba(239, 68, 68, 0.35)'
+              }}
+              title="Kembali ke mode user biasa untuk menguji tampilan pemeliharaan"
+            >
+              <Lock size={12} color="#fff" />
+              <span>Reset Status Admin (Tes Mode User Biasa)</span>
+            </button>
+          </div>
+        )}
+
         {/* Workflow Navigation Tabs Pipeline (01 SOURCE -> 02 RECOMMENDED CLIPS -> 03 AUTO CLIPPER) */}
         <nav className="workflow-tab-bar" aria-label="Workflow Navigation">
           <button
@@ -3164,20 +3316,26 @@ Transcript:
             type="button"
             id="tab-step-clipper"
             className={`workflow-tab-btn ${workflowTab === 'clipper' ? 'active' : ''} ${markedClipsList.length > 0 ? 'step-has-content' : ''}`}
-            onClick={() => {
-              if (result) setWorkflowTab('clipper');
-            }}
-            disabled={!result}
-            title={!result ? 'Selesaikan analisis video terlebih dahulu' : 'Buka Auto Clipper Studio'}
+            onClick={handleNavigateToClipper}
+            disabled={!result && (isLocalhost || isDevUnlocked)}
+            title={(!isLocalhost && !isDevUnlocked) ? 'Fitur dalam tahap optimasi performa cloud (Klik untuk info)' : (!result ? 'Selesaikan analisis video terlebih dahulu' : 'Buka Auto Clipper Studio')}
           >
             <span className="workflow-step-num">03</span>
-            <Scissors size={15} className="workflow-step-icon" />
+            {(!isLocalhost && !isDevUnlocked) ? (
+              <Lock size={14} className="workflow-step-icon" style={{ color: '#d946ef' }} />
+            ) : (
+              <Scissors size={15} className="workflow-step-icon" />
+            )}
             <span className="workflow-step-title">AUTO CLIPPER</span>
-            {markedClipsList.length > 0 && (
+            {(!isLocalhost && !isDevUnlocked) ? (
+              <span className="workflow-tab-count" style={{ background: 'rgba(217, 70, 239, 0.2)', color: '#d946ef', border: '1px solid rgba(217, 70, 239, 0.5)' }}>
+                [OPTIMASI]
+              </span>
+            ) : markedClipsList.length > 0 ? (
               <span className="workflow-tab-count">
                 [{markedClipsList.length} READY]
               </span>
-            )}
+            ) : null}
           </button>
         </nav>
 
@@ -3215,7 +3373,7 @@ Transcript:
                   <button
                     type="button"
                     className="glowing-btn"
-                    onClick={() => setWorkflowTab('clipper')}
+                    onClick={handleNavigateToClipper}
                     style={{
                       padding: '0.4rem 0.95rem',
                       fontSize: '0.78rem',
@@ -3227,7 +3385,7 @@ Transcript:
                       gap: '0.4rem'
                     }}
                   >
-                    <span>[ 03 AUTO CLIPPER</span>
+                    <span>[ 03 AUTO CLIPPER {(!isLocalhost && !isDevUnlocked) ? '🔒' : ''}</span>
                     <ArrowRight size={13} />
                     <span>]</span>
                   </button>
@@ -3259,19 +3417,20 @@ Transcript:
                   <button
                     type="button"
                     className="glowing-btn"
-                    onClick={() => setWorkflowTab('clipper')}
+                    onClick={handleNavigateToClipper}
                     style={{
                       padding: '0.4rem 0.95rem',
                       fontSize: '0.78rem',
-                      background: 'var(--primary)',
-                      color: '#000000',
+                      background: (!isLocalhost && !isDevUnlocked) ? 'transparent' : 'var(--primary)',
+                      color: (!isLocalhost && !isDevUnlocked) ? 'var(--text-primary)' : '#000000',
+                      border: (!isLocalhost && !isDevUnlocked) ? '1px solid rgba(217, 70, 239, 0.5)' : undefined,
                       fontWeight: 700,
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: '0.4rem'
                     }}
                   >
-                    <span>[ 03 AUTO CLIPPER</span>
+                    <span>[ 03 AUTO CLIPPER {(!isLocalhost && !isDevUnlocked) ? '🔒' : ''}</span>
                     <ArrowRight size={13} />
                     <span>]</span>
                   </button>
@@ -6357,41 +6516,117 @@ Transcript:
           color: var(--primary) !important;
         }
       `}</style>
-        {/* Embedded Clip Studio Section with side inline batch progress */}
+        {/* Embedded Clip Studio Section or Maintenance Card */}
         {result && (
           <div style={{ display: workflowTab === 'clipper' ? 'block' : 'none' }}>
-            <Suspense fallback={
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '360px', color: '#888' }}>
-                <span className="pulsing-text">Loading Studio Engine...</span>
+            {(!isLocalhost && !isDevUnlocked) ? (
+              <div className="glass-panel" style={{
+                padding: '2.5rem 2rem',
+                textAlign: 'center',
+                background: 'linear-gradient(180deg, rgba(20, 15, 30, 0.95), rgba(10, 8, 16, 0.98))',
+                border: '1.5px solid rgba(217, 70, 239, 0.4)',
+                boxShadow: '0 0 30px rgba(217, 70, 239, 0.2)',
+                maxWidth: '680px',
+                margin: '2rem auto'
+              }}>
+                <div style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: '64px',
+                  height: '64px',
+                  borderRadius: '50%',
+                  background: 'rgba(217, 70, 239, 0.15)',
+                  border: '1px solid #d946ef',
+                  marginBottom: '1.25rem',
+                  boxShadow: '0 0 15px rgba(217, 70, 239, 0.4)'
+                }}>
+                  <Wrench size={32} color="#d946ef" />
+                </div>
+                <h3 style={{ fontSize: '1.25rem', fontFamily: 'var(--font-mono)', fontWeight: 800, color: '#fff', marginBottom: '0.8rem', letterSpacing: '0.04em' }}>
+                  🛠️ FITUR AUTO CLIPPER SEDANG DALAM PENINGKATAN
+                </h3>
+                <p style={{ color: '#cbd5e1', fontSize: '0.92rem', lineHeight: 1.6, maxWidth: '540px', margin: '0 auto 1.5rem' }}>
+                  Fitur rendering &amp; auto-cropping video pada server deployment sedang dioptimasi untuk menghasilkan proses render yang lebih cepat dan bebas antrean.
+                </p>
+                <div style={{
+                  padding: '1rem',
+                  background: 'rgba(217, 70, 239, 0.08)',
+                  border: '1px solid rgba(217, 70, 239, 0.3)',
+                  color: '#f8fafc',
+                  fontSize: '0.85rem',
+                  lineHeight: 1.5,
+                  maxWidth: '540px',
+                  margin: '0 auto 1.8rem',
+                  textAlign: 'left'
+                }}>
+                  ✨ <strong>Rekomendasi:</strong> Anda tetap dapat menikmati seluruh hasil deteksi momen viral, memutar segmen video, dan mengekspor daftar timestamp di <strong>Tab 02 // RECOMMENDED CLIPS</strong>.
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+                  <button
+                    type="button"
+                    className="glowing-btn"
+                    onClick={() => setWorkflowTab('clips')}
+                    style={{
+                      padding: '0.65rem 1.6rem',
+                      background: 'var(--primary)',
+                      color: '#000',
+                      fontWeight: 800,
+                      fontSize: '0.88rem'
+                    }}
+                  >
+                    [ &lt;- KEMBALI KE TAB 02 // CLIPS ]
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowPasscodeDialog(true)}
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid #332d4a',
+                      color: 'var(--text-muted)',
+                      padding: '0.6rem 1.1rem',
+                      fontSize: '0.78rem',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    🔑 Mode Tester / Admin
+                  </button>
+                </div>
               </div>
-            }>
-              <ClipStudioSection
-                videoUrl={result.video_url || url}
-                videoId={result.video_id}
-                allClips={result.clips}
-                transcript={result.transcript || []}
-                markedClips={markedClipsList}
-                activeClip={activeClip}
-                onStartRender={handleStartBatchRender}
-                isRendering={isLaunchingRender}
-                onToggleMarkClip={(clip) => toggleMarkedClip(`${clip.start_time}_${clip.end_time}`)}
-                onToggleAllClips={toggleAllMarkedClips}
-                batchProgress={batchProgress}
-                onDismissProgress={() => {
-                  if (batchEventSourceRef.current) {
-                    batchEventSourceRef.current.close();
-                    batchEventSourceRef.current = null;
-                  }
-                  setBatchProgress(null);
-                }}
-                onRetryClip={handleRetryBatchClip}
-                onCancelRender={handleCancelRender}
-                isCancellingRender={isCancellingRender}
-                allowAppUpdates={allowAppUpdates}
-                onOpenCookiesModal={() => setIsCookiesModalOpen(true)}
-                onBackToClips={() => setWorkflowTab('clips')}
-              />
-            </Suspense>
+            ) : (
+              <Suspense fallback={
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '360px', color: '#888' }}>
+                  <span className="pulsing-text">Loading Studio Engine...</span>
+                </div>
+              }>
+                <ClipStudioSection
+                  videoUrl={result.video_url || url}
+                  videoId={result.video_id}
+                  allClips={result.clips}
+                  transcript={result.transcript || []}
+                  markedClips={markedClipsList}
+                  activeClip={activeClip}
+                  onStartRender={handleStartBatchRender}
+                  isRendering={isLaunchingRender}
+                  onToggleMarkClip={(clip) => toggleMarkedClip(`${clip.start_time}_${clip.end_time}`)}
+                  onToggleAllClips={toggleAllMarkedClips}
+                  batchProgress={batchProgress}
+                  onDismissProgress={() => {
+                    if (batchEventSourceRef.current) {
+                      batchEventSourceRef.current.close();
+                      batchEventSourceRef.current = null;
+                    }
+                    setBatchProgress(null);
+                  }}
+                  onRetryClip={handleRetryBatchClip}
+                  onCancelRender={handleCancelRender}
+                  isCancellingRender={isCancellingRender}
+                  allowAppUpdates={allowAppUpdates}
+                  onOpenCookiesModal={() => setIsCookiesModalOpen(true)}
+                  onBackToClips={() => setWorkflowTab('clips')}
+                />
+              </Suspense>
+            )}
           </div>
         )}
 
@@ -6518,6 +6753,125 @@ Transcript:
                   [ LANJUTKAN HACK CLIPS → ]
                 </button>
               </div>
+            </div>
+          </div>
+        )}
+
+        {/* Clipper Maintenance Info Modal (When normal user clicks Tab 03 in deployment) */}
+        {showClipperMaintenanceModal && (
+          <div className="custom-confirm-modal-overlay" style={{ zIndex: 10005 }}>
+            <div className="custom-confirm-modal-card" style={{ maxWidth: '520px', background: '#0a0910', border: '1.5px solid #d946ef', boxShadow: '0 0 35px rgba(217, 70, 239, 0.35)', textAlign: 'left' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #272238', paddingBottom: '0.75rem', marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Wrench size={18} color="#d946ef" />
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: '0.9rem', color: '#fff', letterSpacing: '0.04em' }}>
+                    FITUR AUTO CLIPPER SEDANG DALAM PENINGKATAN
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowClipperMaintenanceModal(false)}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '1.1rem' }}
+                  aria-label="Tutup"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <p style={{ color: '#cbd5e1', fontSize: '0.86rem', lineHeight: 1.6, marginBottom: '1rem' }}>
+                Fitur rendering &amp; auto-cropping video pada server deployment sedang dioptimasi untuk kecepatan dan kestabilan performa cloud yang lebih tinggi.
+              </p>
+
+              <div style={{ padding: '0.75rem 0.9rem', background: 'rgba(217, 70, 239, 0.08)', border: '1px solid rgba(217, 70, 239, 0.25)', marginBottom: '1.25rem', fontSize: '0.82rem', color: '#f1f5f9', lineHeight: 1.5 }}>
+                💡 <strong>Tips:</strong> Anda tetap dapat melihat, memutar, dan mengekspor seluruh daftar rekomendasi klip viral beserta timestamp di <strong>Tab 02 // RECOMMENDED CLIPS</strong>.
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  className="glowing-btn"
+                  onClick={() => { setShowClipperMaintenanceModal(false); setWorkflowTab('clips'); }}
+                  style={{ padding: '0.55rem 1.25rem', fontSize: '0.82rem', background: 'var(--primary)', color: '#000', fontWeight: 700 }}
+                >
+                  [ Mengerti, Buka Tab 02 ]
+                </button>
+                <button
+                  type="button"
+                  onClick={() => { setShowClipperMaintenanceModal(false); setShowPasscodeDialog(true); }}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: '0.74rem', cursor: 'pointer', textDecoration: 'underline' }}
+                >
+                  🔑 Akses Developer / Tester
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Developer Passcode Dialog */}
+        {showPasscodeDialog && (
+          <div className="custom-confirm-modal-overlay" style={{ zIndex: 10006 }}>
+            <div className="custom-confirm-modal-card" style={{ maxWidth: '440px', background: '#0a0910', border: '1.5px solid #00f0ff', boxShadow: '0 0 30px rgba(0, 240, 255, 0.35)', textAlign: 'left' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid #272238', paddingBottom: '0.75rem', marginBottom: '1rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <Lock size={16} color="#00f0ff" />
+                  <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 800, fontSize: '0.9rem', color: '#fff', letterSpacing: '0.04em' }}>
+                    MASUKKAN PASSCODE PENGEMBANG
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => { setShowPasscodeDialog(false); setPasscodeInput(''); setPasscodeError(''); }}
+                  style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '1.1rem' }}
+                  aria-label="Tutup"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginBottom: '1rem', lineHeight: 1.5 }}>
+                Masukkan passcode developer untuk membuka akses Tab 03 Auto Clipper di server deployment ini. Anda juga bisa menggunakan URL param <code>?dev=1</code>.
+              </p>
+
+              <form onSubmit={(e) => { e.preventDefault(); handleUnlockWithPasscode(passcodeInput); }}>
+                <input
+                  type="password"
+                  placeholder="Passcode pengembang..."
+                  value={passcodeInput}
+                  onChange={(e) => { setPasscodeInput(e.target.value); setPasscodeError(''); }}
+                  style={{
+                    width: '100%',
+                    padding: '0.65rem 0.8rem',
+                    background: '#12111a',
+                    border: passcodeError ? '1px solid #ef4444' : '1px solid #332d4a',
+                    color: '#fff',
+                    borderRadius: 4,
+                    marginBottom: '0.5rem',
+                    fontSize: '0.88rem',
+                    boxSizing: 'border-box'
+                  }}
+                  autoFocus
+                />
+                {passcodeError && (
+                  <div style={{ color: '#ef4444', fontSize: '0.75rem', marginBottom: '0.75rem', fontWeight: 600 }}>
+                    [!] {passcodeError}
+                  </div>
+                )}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.6rem', marginTop: '1rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => { setShowPasscodeDialog(false); setPasscodeInput(''); setPasscodeError(''); }}
+                    style={{ padding: '0.5rem 1rem', background: '#1e1c2b', border: 'none', color: '#fff', borderRadius: 4, cursor: 'pointer', fontSize: '0.8rem' }}
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    style={{ padding: '0.5rem 1.25rem', background: 'linear-gradient(135deg, #00f0ff, #0077ff)', border: 'none', color: '#000', fontWeight: 700, borderRadius: 4, cursor: 'pointer', fontSize: '0.82rem' }}
+                  >
+                    Buka Akses
+                  </button>
+                </div>
+              </form>
             </div>
           </div>
         )}
