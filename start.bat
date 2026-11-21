@@ -37,10 +37,21 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-:: Run the application
-call npm run dev
+:: Check if node_modules exists, install if missing
+if not exist "%~dp0node_modules" (
+    echo [INFO] node_modules not found. Installing dependencies...
+    call npm install
+)
+
+:: Run the application via native runner
+if exist "%~dp0scripts\dev.js" (
+    node "%~dp0scripts\dev.js"
+) else (
+    call npm run dev
+)
 if %errorlevel% neq 0 (
     echo.
     echo [WARNING] Application stopped with error code %errorlevel%.
+    echo If you encounter module errors, run update.bat to refresh dependencies.
     pause
 )

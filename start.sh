@@ -26,5 +26,15 @@ if ! command -v npm &> /dev/null; then
     exit 1
 fi
 
-# Run the application
-exec npm run dev
+# Check if node_modules exists, install if missing
+if [ ! -d "$SCRIPT_DIR/node_modules" ]; then
+    echo "[INFO] node_modules not found. Installing dependencies..."
+    npm install
+fi
+
+# Run the application via native script runner
+if [ -f "$SCRIPT_DIR/scripts/dev.js" ]; then
+    exec node "$SCRIPT_DIR/scripts/dev.js"
+else
+    exec npm run dev
+fi
