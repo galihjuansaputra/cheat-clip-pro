@@ -122,7 +122,10 @@ async def run_raw_clip_download_job(
     try:
         raw_clip_download_jobs[job_id]["status"] = "downloading"
         raw_clip_download_jobs[job_id]["progress_percent"] = 15.0
-        raw_clip_download_jobs[job_id]["stage"] = "Checking local video cache..."
+        raw_clip_download_jobs[job_id]["current_step"] = 1
+        raw_clip_download_jobs[job_id]["total_steps"] = 4
+        raw_clip_download_jobs[job_id]["step_name"] = "Ambil Bahan"
+        raw_clip_download_jobs[job_id]["stage"] = "Memeriksa cache video lokal..."
 
         # Optimization: Check if a full raw video already exists locally in UPLOADS_DIR, EXPORTS_DIR or TEMP_DIR
         local_candidates = []

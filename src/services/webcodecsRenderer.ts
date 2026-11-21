@@ -41,7 +41,7 @@ export interface WebCodecsRenderOptions {
   watermarkY?: number;
   // General
   fileName?: string;
-  onProgress?: (percent: number, stage: string) => void;
+  onProgress?: (percent: number, stage: string, meta?: { frameIndex?: number; totalFrames?: number; fps?: number; etaSec?: number }) => void;
 }
 
 /**
@@ -805,7 +805,13 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
     }
   }
 
-  if (onProgress) onProgress(20, 'Processing video frames with Client GPU...');
+  const frameIntervalSec = 1 / fps;
+  let currentSec = startTime;
+  let frameIndex = 0;
+  const totalFrames = Math.ceil(totalDuration * fps);
+
+  if (onProgress) onProgress(20, 'Memulai render frame dengan GPU hardware acceleration...', { frameIndex: 0, totalFrames });
+  const renderStartTime = performance.now();
 
   // Frame stepping helper with safety timeout
   const seekTo = (time: number): Promise<void> => {
@@ -828,11 +834,6 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
       video.currentTime = time;
     });
   };
-
-  const frameIntervalSec = 1 / fps;
-  let currentSec = startTime;
-  let frameIndex = 0;
-  const totalFrames = Math.ceil(totalDuration * fps);
 
   // 8. Draw & Encode Loop
   while (currentSec < (startTime + totalDuration)) {
@@ -1039,25 +1040,35 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
 
     if (frameIndex % 5 === 0) {
       const pct = Math.min(95, 20 + Math.round((frameIndex / totalFrames) * 75));
+      const elapsedSec = (performance.now() - renderStartTime) / 1000;
+      const currentFps = elapsedSec > 0.5 ? Math.max(1, Math.round(frameIndex / elapsedSec)) : 30;
+      const remainingFrames = Math.max(0, totalFrames - frameIndex);
+      const etaSec = currentFps > 0 ? Math.ceil(remainingFrames / currentFps) : 0;
+
       if (onProgress) {
-        onProgress(pct, `GPU rendering frame ${frameIndex}/${totalFrames} (${pct}%)...`);
+        onProgress(pct, `Render frame ${frameIndex}/${totalFrames} (${currentFps} fps • sisa ~${etaSec}s)`, {
+          frameIndex,
+          totalFrames,
+          fps: currentFps,
+          etaSec,
+        });
       }
       await new Promise(r => setTimeout(r, 0));
     }
   }
 
-  if (onProgress) onProgress(96, 'Finalizing video bitstream on GPU...');
+  if (onProgress) onProgress(96, 'Finalisasi bitstream video pada GPU...');
   await videoEncoder.flush();
   videoEncoder.close();
 
   if (encodeError) throw encodeError;
 
-  if (onProgress) onProgress(98, 'Muxing MP4 container...');
+  if (onProgress) onProgress(98, 'Muxing container MP4 (Audio + Video)...');
   muxer.finalize();
 
   const buffer = muxerTarget.buffer;
   const blob = new Blob([buffer], { type: 'video/mp4' });
 
-  if (onProgress) onProgress(100, 'Rendering Complete!');
+  if (onProgress) onProgress(100, 'Render Selesai!');
   return blob;
 }

@@ -83,7 +83,10 @@ async def handle_download_raw_clip(req: RawClipDownloadRequest, background_tasks
     raw_clip_download_jobs[job_id] = {
         "job_id": job_id,
         "status": "starting",
-        "stage": "Initializing...",
+        "stage": "Menyiapkan antrean...",
+        "current_step": 1,
+        "total_steps": 4,
+        "step_name": "Ambil Bahan",
         "started_at": time.time(),
         "progress_percent": 0.0,
         "title": download_title,

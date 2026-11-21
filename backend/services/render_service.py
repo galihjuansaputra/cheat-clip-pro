@@ -162,6 +162,11 @@ async def render_single_batch_clip(
 
     clip_status["status"] = "downloading"
     clip_status["progress_percent"] = 15
+    clip_status["current_step"] = 1
+    clip_status["total_steps"] = 4
+    clip_status["step_name"] = "Ambil Bahan"
+    clip_status["step_progress"] = 20
+    clip_status["step_detail"] = "Mengambil video bahan sumber..."
     clip_status["error_message"] = None
     clip_status["error"] = None
 
@@ -206,6 +211,11 @@ async def render_single_batch_clip(
         # 2. Transcribe & Generate Subtitles / Title (.ass)
         clip_status["status"] = "transcribing"
         clip_status["progress_percent"] = 40
+        clip_status["current_step"] = 2
+        clip_status["total_steps"] = 4
+        clip_status["step_name"] = "Aset & Subtitle"
+        clip_status["step_progress"] = 50
+        clip_status["step_detail"] = "Sinkronisasi dialog subtitle & memuat tipografi font..."
 
         display_title = None
         base_title = (
@@ -333,12 +343,19 @@ async def render_single_batch_clip(
 
         clip_status["status"] = "rendering"
         clip_status["progress_percent"] = 50
+        clip_status["current_step"] = 3
+        clip_status["total_steps"] = 4
+        clip_status["step_name"] = "Render FFmpeg"
+        clip_status["step_progress"] = 10
+        clip_status["step_detail"] = "Memproses filtergraph 9:16 & encoding hardware..."
 
         out_filename = f"clip_{idx+1}_{batch_id}.mp4"
         out_path = str(EXPORTS_DIR / out_filename)
 
         def _on_single_clip_progress(frac: float):
             clip_status["progress_percent"] = min(98, int(50.0 + frac * 48.0))
+            clip_status["step_progress"] = min(100, int(frac * 100))
+            clip_status["step_detail"] = f"Encoding video frame ({int(frac * 100)}%)..."
 
         await asyncio.to_thread(
             render_clip_to_mp4,
@@ -395,6 +412,11 @@ async def render_single_batch_clip(
 
         clip_status["status"] = "completed"
         clip_status["progress_percent"] = 100
+        clip_status["current_step"] = 4
+        clip_status["total_steps"] = 4
+        clip_status["step_name"] = "Selesai"
+        clip_status["step_progress"] = 100
+        clip_status["step_detail"] = "Klip berhasil dirender & disimpan!"
         clip_status["download_url"] = f"/api/download-rendered/{out_filename}"
         clip_status["output_path"] = out_path
 
@@ -782,6 +804,11 @@ async def render_merged_batch_clips(
 
         clip_status["status"] = "completed"
         clip_status["progress_percent"] = 100
+        clip_status["current_step"] = 4
+        clip_status["total_steps"] = 4
+        clip_status["step_name"] = "Selesai"
+        clip_status["step_progress"] = 100
+        clip_status["step_detail"] = "Klip berhasil dirender & disimpan!"
         clip_status["download_url"] = f"/api/download-rendered/{out_filename}"
         clip_status["output_path"] = out_path
 

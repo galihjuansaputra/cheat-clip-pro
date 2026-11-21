@@ -564,16 +564,53 @@ export default function App() {
             return {
               ...prev,
               current_clip_index: i,
-              clips: prev.clips.map((c, idx) => idx === i ? { ...c, status: 'downloading', progress_percent: 5 } : c)
+              clips: prev.clips.map((c, idx) => idx === i ? {
+                ...c,
+                status: 'downloading',
+                progress_percent: 5,
+                current_step: 1,
+                total_steps: 4,
+                step_key: 'fetch_source',
+                step_name: 'Ambil Bahan',
+                step_progress: 10,
+                step_detail: 'Menyiapkan video bahan...',
+                elapsed_sec: 0,
+              } : c)
             };
           });
 
-          // Step 1: Acquire raw video stream (0% server load, stream proxy / local blob)
+          // Step 1: Acquire raw video stream (Source Acquisition)
           let rawSourceUrl = '';
           if (sourceMode === 'upload' && uploadedVideoFile) {
             rawSourceUrl = URL.createObjectURL(uploadedVideoFile);
+            setBatchProgress(prev => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                clips: prev.clips.map((c, idx) => idx === i ? {
+                  ...c,
+                  progress_percent: 25,
+                  current_step: 1,
+                  step_progress: 100,
+                  step_detail: 'Video lokal siap diproses',
+                } : c)
+              };
+            });
           } else if (result.source_type === 'upload' || result.video_id?.startsWith('upload_') || result.video_id?.startsWith('gdrive_')) {
             rawSourceUrl = `/api/video/${result.video_id}`;
+            setBatchProgress(prev => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                clips: prev.clips.map((c, idx) => idx === i ? {
+                  ...c,
+                  progress_percent: 25,
+                  current_step: 1,
+                  step_progress: 100,
+                  step_detail: 'Video server siap diproses',
+                } : c)
+              };
+            });
           } else {
             const userCookies = getStoredCookies();
             const targetUrl = result.video_url || (url.trim() ? url.trim() : `https://www.youtube.com/watch?v=${result.video_id}`);
@@ -631,7 +668,10 @@ export default function App() {
                     clearInterval(pollInterval);
                     reject(new Error(statusData.error || 'Failed to acquire raw clip segment'));
                   } else {
-                    const stageMsg = statusData.stage || 'Fetching source video';
+                    const stageMsg = statusData.stage || 'Mengunduh video bahan...';
+                    const dlPct = Math.max(10, Math.min(99, Math.round(statusData.progress_percent || 20)));
+                    // Step 1 contributes 0 - 25% of overall clip progress
+                    const clipOverallPct = Math.round((dlPct / 100) * 25);
                     setBatchProgress(prev => {
                       if (!prev) return prev;
                       return {
@@ -639,8 +679,15 @@ export default function App() {
                         clips: prev.clips.map((c, idx) => idx === i ? {
                           ...c,
                           status: 'downloading',
-                          progress_percent: statusData.progress_percent || 15,
-                          error_message: `* ${stageMsg} (${elapsedSec}s)`
+                          progress_percent: clipOverallPct,
+                          current_step: 1,
+                          total_steps: 4,
+                          step_key: 'fetch_source',
+                          step_name: 'Ambil Bahan',
+                          step_progress: dlPct,
+                          step_detail: `${stageMsg} (${elapsedSec}s)`,
+                          elapsed_sec: elapsedSec,
+                          error_message: `${stageMsg} (${elapsedSec}s)`
                         } : c)
                       };
                     });
@@ -653,7 +700,26 @@ export default function App() {
             });
           }
 
-          // Step 2: Render in client browser via GPU Hardware Encoder (WebCodecs) or WASM
+          // Step 2: Prep Assets & Typography
+          setBatchProgress(prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              clips: prev.clips.map((c, idx) => idx === i ? {
+                ...c,
+                status: 'transcribing',
+                progress_percent: 28,
+                current_step: 2,
+                total_steps: 4,
+                step_key: 'prep_assets',
+                step_name: 'Aset & Subtitle',
+                step_progress: 50,
+                step_detail: 'Sinkronisasi dialog kata-per-kata & font tipografi...',
+              } : c)
+            };
+          });
+
+          // Step 3: Render in client browser via GPU Hardware Encoder (WebCodecs) or WASM
           let blob: Blob;
           const useWebCodecsGpu = (settings.hardwareAccel === 'client_gpu' || (!settings.hardwareAccel && isWebCodecsGpuSupported())) && isWebCodecsGpuSupported();
 
@@ -700,7 +766,10 @@ export default function App() {
                 watermarkX: settings.watermarkX,
                 watermarkY: settings.watermarkY,
                 fileName: `${filename}.mp4`,
-                onProgress: (pct, stage) => {
+                onProgress: (pct, stage, meta) => {
+                  const subPct = Math.max(1, Math.min(100, Math.round(pct)));
+                  // Step 3 maps 25% -> 95% of overall clip progress
+                  const clipOverallPct = Math.min(95, Math.round(25 + (subPct / 100) * 70));
                   setBatchProgress(prev => {
                     if (!prev) return prev;
                     return {
@@ -708,7 +777,14 @@ export default function App() {
                       clips: prev.clips.map((c, idx) => idx === i ? {
                         ...c,
                         status: 'rendering',
-                        progress_percent: pct,
+                        progress_percent: clipOverallPct,
+                        current_step: 3,
+                        total_steps: 4,
+                        step_key: 'rendering_gpu',
+                        step_name: 'Render GPU',
+                        step_progress: subPct,
+                        step_detail: stage,
+                        eta_sec: meta?.etaSec,
                         error_message: stage
                       } : c)
                     };
@@ -727,6 +803,8 @@ export default function App() {
                 titleText: (clip as any).formatted_title || settings.titleText || (clip.title_suggestion || clip.title),
                 fileName: `${filename}.mp4`,
                 onProgress: (pct, stage) => {
+                  const subPct = Math.max(1, Math.min(100, Math.round(pct)));
+                  const clipOverallPct = Math.min(95, Math.round(25 + (subPct / 100) * 70));
                   setBatchProgress(prev => {
                     if (!prev) return prev;
                     return {
@@ -734,7 +812,13 @@ export default function App() {
                       clips: prev.clips.map((c, idx) => idx === i ? {
                         ...c,
                         status: 'rendering',
-                        progress_percent: pct,
+                        progress_percent: clipOverallPct,
+                        current_step: 3,
+                        total_steps: 4,
+                        step_key: 'rendering_gpu',
+                        step_name: 'Render WASM',
+                        step_progress: subPct,
+                        step_detail: stage,
                         error_message: stage
                       } : c)
                     };
@@ -752,6 +836,8 @@ export default function App() {
               titleText: (clip as any).formatted_title || settings.titleText || (clip.title_suggestion || clip.title),
               fileName: `${filename}.mp4`,
               onProgress: (pct, stage) => {
+                const subPct = Math.max(1, Math.min(100, Math.round(pct)));
+                const clipOverallPct = Math.min(95, Math.round(25 + (subPct / 100) * 70));
                 setBatchProgress(prev => {
                   if (!prev) return prev;
                   return {
@@ -759,7 +845,13 @@ export default function App() {
                     clips: prev.clips.map((c, idx) => idx === i ? {
                       ...c,
                       status: 'rendering',
-                      progress_percent: pct,
+                      progress_percent: clipOverallPct,
+                      current_step: 3,
+                      total_steps: 4,
+                      step_key: 'rendering_gpu',
+                      step_name: 'Render WASM',
+                      step_progress: subPct,
+                      step_detail: stage,
                       error_message: stage
                     } : c)
                   };
@@ -768,7 +860,25 @@ export default function App() {
             });
           }
 
-          // Step 3: Trigger automatic download and update status
+          // Step 4: Finalize container & Trigger automatic download
+          setBatchProgress(prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              clips: prev.clips.map((c, idx) => idx === i ? {
+                ...c,
+                status: 'rendering',
+                progress_percent: 98,
+                current_step: 4,
+                total_steps: 4,
+                step_key: 'finalizing',
+                step_name: 'Finalisasi MP4',
+                step_progress: 90,
+                step_detail: 'Muxing MP4 container & menyiapkan unduhan...',
+              } : c)
+            };
+          });
+
           const downloadBlobUrl = URL.createObjectURL(blob);
           triggerBrowserDownload(blob, `${filename}.mp4`);
 
@@ -780,6 +890,12 @@ export default function App() {
                 ...c,
                 status: 'completed',
                 progress_percent: 100,
+                current_step: 4,
+                total_steps: 4,
+                step_key: 'finalizing',
+                step_name: 'Selesai',
+                step_progress: 100,
+                step_detail: 'Klip berhasil dirender & disimpan!',
                 download_url: downloadBlobUrl
               } : c)
             };

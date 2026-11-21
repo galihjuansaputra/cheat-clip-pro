@@ -80,19 +80,28 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
               <div className={styles.itemColTitle}>
                 <span className={styles.itemNum}>#{idx + 1}</span>
                 <span className={styles.itemText}>{clip.title}</span>
+                {clip.step_detail && (
+                  <span style={{ fontSize: '0.66rem', color: '#ff7e5f', marginTop: '2px', display: 'block' }}>
+                    &gt;_ {clip.step_detail}
+                  </span>
+                )}
               </div>
 
               <div className={styles.itemStatusWrap}>
                 {clip.status === 'pending' && <span className={`${styles.statusBadge} ${styles.badgePending}`}>{t.batchProgress.statusWaiting}</span>}
                 {clip.status === 'downloading' && (
-                  <span className={`${styles.statusBadge} ${styles.badgeActive}`}>{clip.error_message || t.batchProgress.statusSlicing}</span>
+                  <span className={`${styles.statusBadge} ${styles.badgeActive}`}>
+                    {clip.step_name ? `${clip.step_name} (${Math.round(clip.progress_percent || 10)}%)` : (clip.error_message || t.batchProgress.statusSlicing)}
+                  </span>
                 )}
                 {clip.status === 'transcribing' && (
-                  <span className={`${styles.statusBadge} ${styles.badgeActive}`}>{t.batchProgress.statusCaptions}</span>
+                  <span className={`${styles.statusBadge} ${styles.badgeActive}`}>
+                    {clip.step_name ? `${clip.step_name} (${Math.round(clip.progress_percent || 28)}%)` : t.batchProgress.statusCaptions}
+                  </span>
                 )}
                 {clip.status === 'rendering' && (
                   <span className={`${styles.statusBadge} ${styles.badgeActive}`}>
-                    {typeof t.batchProgress.statusRendering === 'function' ? t.batchProgress.statusRendering(clip.progress_percent) : t.batchProgress.statusRendering}
+                    {clip.step_name ? `${clip.step_name} (${Math.round(clip.progress_percent || 70)}%)` : (typeof t.batchProgress.statusRendering === 'function' ? t.batchProgress.statusRendering(clip.progress_percent) : t.batchProgress.statusRendering)}
                   </span>
                 )}
                 {clip.status === 'completed' && (

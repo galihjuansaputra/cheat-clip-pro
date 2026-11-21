@@ -5699,155 +5699,251 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 ? `${clip.download_url}${clip.download_url.includes('?') ? '&' : '?'}title=${encodeURIComponent(finalClipName)}`
                 : '';
 
-              const isError = clip.status === 'error';
-              const rawError = clip.error_message || clip.error || '';
+                const isError = clip.status === 'error';
+                const rawError = clip.error_message || clip.error || '';
+                const isRunning = clip.status === 'downloading' || clip.status === 'transcribing' || clip.status === 'rendering';
+                const currentStep = clip.current_step || (clip.status === 'downloading' ? 1 : clip.status === 'transcribing' ? 2 : clip.status === 'rendering' ? 3 : clip.status === 'completed' ? 4 : 1);
+                const stepProgress = clip.step_progress !== undefined ? clip.step_progress : clip.progress_percent;
+                const overallPercent = Math.max(0, Math.min(100, Math.round(clip.progress_percent || 0)));
 
-              return (
-                <div
-                  key={idx}
-                  className={`batch-item-row status-${clip.status}`}
-                  style={{
-                    padding: '0.5rem 0.75rem',
-                    borderRadius: '8px',
-                    background: isError ? 'rgba(239, 68, 68, 0.05)' : 'rgba(255,255,255,0.03)',
-                    border: isError ? '1px solid rgba(239, 68, 68, 0.3)' : '1px solid rgba(255,255,255,0.06)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '0.25rem',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', maxWidth: '65%' }}>
-                      <span style={{ fontSize: '0.7rem', color: isError ? '#f87171' : 'var(--text-muted)', fontWeight: 600 }}>#{idx + 1}</span>
-                      <span style={{ fontSize: '0.75rem', color: '#fff', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{clip.title}</span>
-                    </div>
-                    <div>
-                      {clip.status === 'pending' && <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{t.studio.statusWaitingShort}</span>}
-                      {clip.status === 'downloading' && <span style={{ fontSize: '0.68rem', color: '#f59e0b' }}>{clip.error_message || t.studio.statusSlicingShort}</span>}
-                      {clip.status === 'transcribing' && <span style={{ fontSize: '0.68rem', color: '#8b5cf6' }}>{t.studio.statusCaptionsShort}</span>}
-                      {clip.status === 'rendering' && (
-                        <span style={{ fontSize: '0.68rem', color: '#3b82f6', fontWeight: 600 }}>
-                          {typeof t.studio.statusRenderingShort === 'function' ? t.studio.statusRenderingShort(clip.progress_percent) : t.studio.statusRenderingShort}
-                        </span>
-                      )}
-                      {clip.status === 'completed' && (
-                        clip.download_url ? (
-                          <a
-                            href={dlUrlWithTitle}
-                            download={`${finalClipName}.mp4`}
-                            className="quick-dl-btn"
-                            title={`Download ${finalClipName}.mp4`}
-                          >
-                            ⬇️ MP4
-                          </a>
-                        ) : (
-                          <span className="quick-dl-btn" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>
-                            ✓ Done
-                          </span>
-                        )
-                      )}
-                      {clip.status === 'cancelled' && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                          <span
-                            style={{
-                              fontSize: '0.68rem',
-                              fontWeight: 800,
-                              color: '#f87171',
-                              background: 'rgba(239, 68, 68, 0.15)',
-                              padding: '2px 8px',
-                              borderRadius: 0,
-                              border: '1px solid #ef4444',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '0.25rem'
-                            }}
-                          >
-                            <X size={11} /> {t.studio.statusCancelledShort || '[x] Dibatalkan'}
-                          </span>
-                          {onRetryClip && batchProgress.overall_status !== 'running' && batchProgress.overall_status !== 'cancelling' && (
-                            <button
-                              type="button"
-                              onClick={() => onRetryClip(idx)}
+                const pipelineSteps = [
+                  { num: 1, label: (t as any).renderPipeline?.step1Name || "Bahan" },
+                  { num: 2, label: (t as any).renderPipeline?.step2Name || "Aset" },
+                  { num: 3, label: (t as any).renderPipeline?.step3Name || "Render GPU" },
+                  { num: 4, label: (t as any).renderPipeline?.step4Name || "Selesai" },
+                ];
+
+                return (
+                  <div
+                    key={idx}
+                    className={`batch-item-row status-${clip.status}`}
+                    style={{
+                      padding: '0.65rem 0.85rem',
+                      borderRadius: '8px',
+                      background: isError ? 'rgba(239, 68, 68, 0.05)' : isRunning ? 'rgba(255, 94, 58, 0.04)' : 'rgba(255,255,255,0.03)',
+                      border: isError ? '1px solid rgba(239, 68, 68, 0.3)' : isRunning ? '1px solid rgba(255, 94, 58, 0.35)' : '1px solid rgba(255,255,255,0.06)',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.4rem',
+                      boxShadow: isRunning ? '0 0 15px rgba(255, 94, 58, 0.08)' : 'none',
+                      transition: 'all 0.3s ease'
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', maxWidth: '65%' }}>
+                        <span style={{ fontSize: '0.72rem', color: isError ? '#f87171' : isRunning ? '#ff7e5f' : 'var(--text-muted)', fontWeight: 700 }}>#{idx + 1}</span>
+                        <span style={{ fontSize: '0.78rem', color: '#fff', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{clip.title}</span>
+                      </div>
+                      <div>
+                        {clip.status === 'pending' && <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{t.studio.statusWaitingShort}</span>}
+                        {isRunning && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span style={{ fontSize: '0.7rem', fontWeight: 700, color: '#ff7e5f' }}>
+                              {clip.step_name ? `${clip.step_name} (${overallPercent}%)` : `${overallPercent}%`}
+                            </span>
+                          </div>
+                        )}
+                        {clip.status === 'completed' && (
+                          clip.download_url ? (
+                            <a
+                              href={dlUrlWithTitle}
+                              download={`${finalClipName}.mp4`}
+                              className="quick-dl-btn"
+                              title={`Download ${finalClipName}.mp4`}
+                            >
+                              ⬇️ MP4
+                            </a>
+                          ) : (
+                            <span className="quick-dl-btn" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981' }}>
+                              ✓ Done
+                            </span>
+                          )
+                        )}
+                        {clip.status === 'cancelled' && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span
                               style={{
-                                background: 'rgba(245, 158, 11, 0.18)',
-                                border: '1px solid rgba(245, 158, 11, 0.5)',
-                                borderRadius: 0,
-                                color: '#fbbf24',
                                 fontSize: '0.68rem',
-                                fontWeight: 700,
+                                fontWeight: 800,
+                                color: '#f87171',
+                                background: 'rgba(239, 68, 68, 0.15)',
                                 padding: '2px 8px',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s ease',
+                                borderRadius: 0,
+                                border: '1px solid #ef4444',
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: '0.25rem'
                               }}
-                              title="Retry rendering this clip"
                             >
-                              <RefreshCw size={11} />
-                              {t.studio.retryClipBtn || 'Retry'}
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      {isError && (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
-                          <span
-                            style={{
-                              fontSize: '0.68rem',
-                              fontWeight: 800,
-                              color: '#ff1e27',
-                              background: 'rgba(255, 30, 39, 0.15)',
-                              padding: '2px 8px',
-                              borderRadius: 0,
-                              border: '1px solid #ff1e27',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '0.25rem'
-                            }}
-                          >
-                            <X size={11} /> {t.studio.statusFailedShort}
-                          </span>
-                          {onRetryClip && batchProgress.overall_status !== 'running' && (
-                            <button
-                              type="button"
-                              onClick={() => onRetryClip(idx)}
+                              <X size={11} /> {t.studio.statusCancelledShort || '[x] Dibatalkan'}
+                            </span>
+                            {onRetryClip && batchProgress.overall_status !== 'running' && batchProgress.overall_status !== 'cancelling' && (
+                              <button
+                                type="button"
+                                onClick={() => onRetryClip(idx)}
+                                style={{
+                                  background: 'rgba(245, 158, 11, 0.18)',
+                                  border: '1px solid rgba(245, 158, 11, 0.5)',
+                                  borderRadius: 0,
+                                  color: '#fbbf24',
+                                  fontSize: '0.68rem',
+                                  fontWeight: 700,
+                                  padding: '2px 8px',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem'
+                                }}
+                                title="Retry rendering this clip"
+                              >
+                                <RefreshCw size={11} />
+                                {t.studio.retryClipBtn || 'Retry'}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        {isError && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                            <span
                               style={{
-                                background: 'rgba(245, 158, 11, 0.18)',
-                                border: '1px solid rgba(245, 158, 11, 0.5)',
-                                borderRadius: 0,
-                                color: '#fbbf24',
                                 fontSize: '0.68rem',
-                                fontWeight: 700,
+                                fontWeight: 800,
+                                color: '#ff1e27',
+                                background: 'rgba(255, 30, 39, 0.15)',
                                 padding: '2px 8px',
-                                cursor: 'pointer',
-                                transition: 'all 0.2s ease',
+                                borderRadius: 0,
+                                border: '1px solid #ff1e27',
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: '0.25rem'
                               }}
-                              title="Retry rendering this clip"
                             >
-                              <RefreshCw size={11} />
-                              {t.studio.retryClipBtn || 'Retry'}
-                            </button>
+                              <X size={11} /> {t.studio.statusFailedShort}
+                            </span>
+                            {onRetryClip && batchProgress.overall_status !== 'running' && (
+                              <button
+                                type="button"
+                                onClick={() => onRetryClip(idx)}
+                                style={{
+                                  background: 'rgba(245, 158, 11, 0.18)',
+                                  border: '1px solid rgba(245, 158, 11, 0.5)',
+                                  borderRadius: 0,
+                                  color: '#fbbf24',
+                                  fontSize: '0.68rem',
+                                  fontWeight: 700,
+                                  padding: '2px 8px',
+                                  cursor: 'pointer',
+                                  transition: 'all 0.2s ease',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '0.25rem'
+                                }}
+                                title="Retry rendering this clip"
+                              >
+                                <RefreshCw size={11} />
+                                {t.studio.retryClipBtn || 'Retry'}
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Stepper Pipeline Badges (Step 1 - 4) */}
+                    {isRunning && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', flexWrap: 'wrap', marginTop: '0.15rem' }}>
+                        {pipelineSteps.map((s) => {
+                          const isStepDone = clip.status === 'completed' || currentStep > s.num;
+                          const isStepActive = isRunning && currentStep === s.num;
+                          return (
+                            <div
+                              key={s.num}
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '0.25rem',
+                                fontSize: '0.64rem',
+                                padding: '2px 7px',
+                                borderRadius: '4px',
+                                fontWeight: 600,
+                                background: isStepDone
+                                  ? 'rgba(16, 185, 129, 0.15)'
+                                  : isStepActive
+                                    ? 'rgba(255, 94, 58, 0.18)'
+                                    : 'rgba(255, 255, 255, 0.04)',
+                                border: isStepDone
+                                  ? '1px solid rgba(16, 185, 129, 0.45)'
+                                  : isStepActive
+                                    ? '1px solid rgba(255, 94, 58, 0.65)'
+                                    : '1px solid rgba(255, 255, 255, 0.08)',
+                                color: isStepDone
+                                  ? '#34d399'
+                                  : isStepActive
+                                    ? '#ff7e5f'
+                                    : 'var(--text-muted)',
+                                transition: 'all 0.2s ease',
+                              }}
+                            >
+                              {isStepDone ? (
+                                <Check size={10} color="#34d399" />
+                              ) : isStepActive ? (
+                                <span className="queue-pulse-dot" style={{ width: 5, height: 5, background: '#ff5e3a' }} />
+                              ) : (
+                                <span style={{ opacity: 0.5 }}>{s.num}.</span>
+                              )}
+                              <span>{s.label}</span>
+                              {isStepActive && stepProgress > 0 && (
+                                <span style={{ fontSize: '0.6rem', opacity: 0.85, fontWeight: 700 }}>
+                                  ({Math.round(stepProgress)}%)
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Individual Animated Progress Bar */}
+                    {isRunning && (
+                      <div style={{ marginTop: '0.15rem' }}>
+                        <div style={{ height: '5px', background: 'rgba(255,255,255,0.08)', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div
+                            style={{
+                              height: '100%',
+                              width: `${overallPercent}%`,
+                              background: 'linear-gradient(90deg, #ff5e3a, #ff2a5f)',
+                              borderRadius: '3px',
+                              transition: 'width 0.25s ease'
+                            }}
+                          />
+                        </div>
+                        {/* Live Activity Detail Ticker */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.3rem', fontSize: '0.66rem', color: '#94a3b8' }}>
+                          <span style={{ display: 'flex', alignItems: 'center', gap: '0.35rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <span style={{ color: '#ff7e5f', fontWeight: 800 }}>&gt;_</span>
+                            <span style={{ color: '#e2e8f0' }}>{clip.step_detail || clip.error_message || "Sedang memproses..."}</span>
+                          </span>
+                          {clip.eta_sec !== undefined && clip.eta_sec > 0 && (
+                            <span style={{ color: '#f59e0b', fontWeight: 600, flexShrink: 0, marginLeft: '0.5rem' }}>
+                              ⏱ sisa ~{clip.eta_sec}s
+                            </span>
                           )}
                         </div>
-                      )}
-                    </div>
+                      </div>
+                    )}
+
+                    {/* Visible Error Box when clip fails */}
+                    {isError && rawError && (
+                      <ClipRenderErrorBox
+                        errorMessage={rawError}
+                        t={t}
+                        onRetry={onRetryClip && batchProgress.overall_status !== 'running' ? () => onRetryClip(idx) : undefined}
+                      />
+                    )}
                   </div>
-
-                  {/* Visible Error Box when clip fails */}
-                  {isError && rawError && (
-                    <ClipRenderErrorBox
-                      errorMessage={rawError}
-                      t={t}
-                      onRetry={onRetryClip && batchProgress.overall_status !== 'running' ? () => onRetryClip(idx) : undefined}
-                    />
-                  )}
-                </div>
-              );
-            })}
+                );
+              })}
           </div>
         </div>
       )}

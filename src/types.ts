@@ -157,12 +157,23 @@ export interface RenderSettings {
   compilationTitle?: string;
 }
 
+export type RenderStepKey = 'fetch_source' | 'prep_assets' | 'rendering_gpu' | 'finalizing';
+
 export interface RenderClipStatus {
   clip_index: number;
   title: string;
   base_title?: string;
   status: 'pending' | 'downloading' | 'transcribing' | 'tracking' | 'rendering' | 'completed' | 'error' | 'cancelled';
   progress_percent: number;
+  // Step-by-step pipeline tracking
+  current_step?: number;         // 1, 2, 3, or 4
+  total_steps?: number;          // Default: 4
+  step_key?: RenderStepKey;
+  step_name?: string;
+  step_progress?: number;        // Sub-progress 0 - 100%
+  step_detail?: string;          // Informative live ticker message
+  elapsed_sec?: number;
+  eta_sec?: number;
   download_url?: string;
   error_message?: string;
   error?: string;
