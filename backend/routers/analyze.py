@@ -1171,10 +1171,52 @@ async def analyze_video(request: AnalyzeRequest):
                                     "detail": f"Whisper speech-to-text complete ({w_check['name']}) — {len(transcript_lines)} dialogue sentences with timestamps ready.",
                                     "message": f"Whisper transcribed {len(transcript_lines)} lines parsed successfully ({w_check['name']})."
                                 })
+                            elif heatmap and len(heatmap) > 0 and duration > 0:
+                                logger.info(f"Subtitles blocked for {video_id}, but retention Heatmap is available! Generating AI clips from Heatmap retention peaks...")
+                                yield _sse({
+                                    "step": 3,
+                                    "step_progress": 100,
+                                    "overall_progress": 70,
+                                    "stage": "Heatmap Fallback",
+                                    "detail": "Subtitel dibatasi server. Menggunakan data Heatmap retensi penonton YouTube untuk menemukan momen terbaik...",
+                                    "message": "Subtitel tidak tersedia — beralih ke analisis Heatmap tayangan ulang."
+                                })
+                                sorted_heatmap = sorted(heatmap, key=lambda x: x.get("value", 0.0), reverse=True)
+                                transcript_lines = []
+                                for idx, pt in enumerate(sorted_heatmap[:30]):
+                                    pt_start = float(pt.get("start_time", 0.0))
+                                    pt_end = float(pt.get("end_time", pt_start + 10.0))
+                                    transcript_lines.append({
+                                        "start": pt_start,
+                                        "duration": max(5.0, pt_end - pt_start),
+                                        "text": f"[Puncak Retensi Tayangan Ulang #{idx+1} ({int(pt.get('value', 0.0)*100)}%)]"
+                                    })
+                                transcript_lines.sort(key=lambda x: x["start"])
                             else:
                                 msg = e.detail if isinstance(e, HTTPException) else str(e)
                                 yield _sse({"error": f"Speech transcription failed: {msg}", "status": 400})
                                 return
+                        elif heatmap and len(heatmap) > 0 and duration > 0:
+                            logger.info(f"Subtitles blocked for {video_id}, but retention Heatmap is available! Generating AI clips from Heatmap retention peaks...")
+                            yield _sse({
+                                "step": 3,
+                                "step_progress": 100,
+                                "overall_progress": 70,
+                                "stage": "Heatmap Fallback",
+                                "detail": "Subtitel dibatasi server. Menggunakan data Heatmap retensi penonton YouTube untuk menemukan momen terbaik...",
+                                "message": "Subtitel tidak tersedia — beralih ke analisis Heatmap tayangan ulang."
+                            })
+                            sorted_heatmap = sorted(heatmap, key=lambda x: x.get("value", 0.0), reverse=True)
+                            transcript_lines = []
+                            for idx, pt in enumerate(sorted_heatmap[:30]):
+                                pt_start = float(pt.get("start_time", 0.0))
+                                pt_end = float(pt.get("end_time", pt_start + 10.0))
+                                transcript_lines.append({
+                                    "start": pt_start,
+                                    "duration": max(5.0, pt_end - pt_start),
+                                    "text": f"[Puncak Retensi Tayangan Ulang #{idx+1} ({int(pt.get('value', 0.0)*100)}%)]"
+                                })
+                            transcript_lines.sort(key=lambda x: x["start"])
                         else:
                             msg = e.detail if isinstance(e, HTTPException) else str(e)
                             yield _sse({"error": msg, "status": 400})
