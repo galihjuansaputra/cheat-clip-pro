@@ -13,7 +13,8 @@ import {
   Music,
   FileCode,
   Play,
-  Pause
+  Pause,
+  DownloadCloud
 } from 'lucide-react';
 import { useLanguage } from '../locales';
 import { resilientFetch } from '../utils/api';
@@ -36,6 +37,7 @@ import type {
   TitleDurationOption,
   SubtitlePositionMode,
   BatchRenderProgress,
+  SourcePrepProgress,
   HardwareAccelOption,
   HardwareAccelInfo,
   FontItem,
@@ -94,6 +96,7 @@ interface ClipStudioSectionProps {
   onToggleMarkClip?: (clip: ViralClip) => void;
   onToggleAllClips?: (forceSelect?: boolean) => void;
   batchProgress?: BatchRenderProgress | null;
+  sourcePrepProgress?: SourcePrepProgress | null;
   onDismissProgress?: () => void;
   onRetryClip?: (clipIndex?: number) => void;
   onCancelRender?: () => void;
@@ -347,6 +350,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   onToggleMarkClip,
   onToggleAllClips,
   batchProgress,
+  sourcePrepProgress,
   onDismissProgress,
   onRetryClip,
   onCancelRender,
@@ -5455,12 +5459,131 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
       </div>
 
       {/* Batch Render Queue & Results Dashboard Card - Located below bottom action bar */}
-      {batchProgress && (
-        <div className={`bottom-batch-dashboard-card ${(batchProgress.overall_status === 'running' || batchProgress.overall_status === 'cancelling') ? 'is-processing' : ''}`}>
+      {(batchProgress || (sourcePrepProgress && sourcePrepProgress.status !== 'idle')) && (
+        <div className={`bottom-batch-dashboard-card ${((batchProgress?.overall_status === 'running' || batchProgress?.overall_status === 'cancelling' || sourcePrepProgress?.status === 'downloading' || sourcePrepProgress?.status === 'checking')) ? 'is-processing' : ''}`}>
+          
+          {/* TAHAP 1: Ambil Bahan Master Card / Banner */}
+          {sourcePrepProgress && (
+            <div
+              className={`source-prep-card ${sourcePrepProgress.status === 'downloading' ? 'is-downloading' : ''}`}
+              style={{
+                marginBottom: batchProgress ? '0.75rem' : '0.2rem',
+                padding: '0.7rem 0.95rem',
+                borderRadius: '8px',
+                background: sourcePrepProgress.status === 'ready'
+                  ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(5, 150, 105, 0.05) 100%)'
+                  : sourcePrepProgress.status === 'error'
+                  ? 'rgba(239, 68, 68, 0.1)'
+                  : 'linear-gradient(135deg, rgba(59, 130, 246, 0.14) 0%, rgba(147, 51, 234, 0.08) 100%)',
+                border: sourcePrepProgress.status === 'ready'
+                  ? '1px solid rgba(16, 185, 129, 0.4)'
+                  : sourcePrepProgress.status === 'error'
+                  ? '1px solid rgba(239, 68, 68, 0.5)'
+                  : '1px solid rgba(59, 130, 246, 0.45)',
+                boxShadow: (sourcePrepProgress.status === 'downloading' || sourcePrepProgress.status === 'checking')
+                  ? '0 0 16px rgba(59, 130, 246, 0.18)'
+                  : 'none',
+                transition: 'all 0.3s ease'
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem' }}>
+                  <div style={{
+                    width: '28px',
+                    height: '28px',
+                    borderRadius: '6px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: sourcePrepProgress.status === 'ready'
+                      ? 'rgba(16, 185, 129, 0.2)'
+                      : sourcePrepProgress.status === 'error'
+                      ? 'rgba(239, 68, 68, 0.2)'
+                      : 'rgba(59, 130, 246, 0.2)',
+                    color: sourcePrepProgress.status === 'ready' ? '#10b981' : sourcePrepProgress.status === 'error' ? '#ef4444' : '#60a5fa',
+                    flexShrink: 0
+                  }}>
+                    {sourcePrepProgress.status === 'ready' ? <Check size={16} /> : sourcePrepProgress.status === 'error' ? <AlertTriangle size={16} /> : <DownloadCloud size={16} />}
+                  </div>
+                  <div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', flexWrap: 'wrap' }}>
+                      <span style={{ fontWeight: 800, fontSize: '0.78rem', color: '#fff', letterSpacing: '0.02em' }}>
+                        {t.studio?.sourcePrep?.stage1Title || ">_ Tahap 1: Ambil Bahan Master (1080p)"}
+                      </span>
+                      {sourcePrepProgress.status === 'downloading' && (
+                        <span className="queue-generating-pill" style={{ borderColor: '#3b82f6', color: '#93c5fd' }}>
+                          <span className="queue-pulse-dot" style={{ background: '#3b82f6' }}></span> MENGUNDUH BAHAN...
+                        </span>
+                      )}
+                      {sourcePrepProgress.status === 'checking' && (
+                        <span className="queue-generating-pill" style={{ borderColor: '#eab308', color: '#fef08a' }}>
+                          <span className="queue-pulse-dot" style={{ background: '#eab308' }}></span> MEMERIKSA CACHE...
+                        </span>
+                      )}
+                      {sourcePrepProgress.status === 'ready' && (
+                        <span style={{
+                          fontSize: '0.66rem',
+                          fontWeight: 700,
+                          color: '#34d399',
+                          background: 'rgba(16, 185, 129, 0.15)',
+                          padding: '1px 7px',
+                          borderRadius: '4px',
+                          border: '1px solid rgba(16, 185, 129, 0.35)'
+                        }}>
+                          ✓ BAHAN MASTER SIAP
+                        </span>
+                      )}
+                    </div>
+                    <p style={{ margin: '0.15rem 0 0 0', fontSize: '0.68rem', color: 'var(--text-muted)' }}>
+                      {sourcePrepProgress.status === 'ready'
+                        ? (t.studio?.sourcePrep?.sourceReadyDesc || "Video bahan master telah tersimpan di cache server. Pemotongan klip berjalan instan tanpa unduh ulang.")
+                        : (sourcePrepProgress.detail || t.studio?.sourcePrep?.stage1Desc || "Mengunduh video bahan master dari YouTube untuk dipotong ke semua klip.")}
+                    </p>
+                  </div>
+                </div>
+
+                {sourcePrepProgress.status === 'downloading' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', fontSize: '0.68rem', color: '#cbd5e1' }}>
+                    {sourcePrepProgress.downloaded && sourcePrepProgress.total && (
+                      <span>📦 <strong>{sourcePrepProgress.downloaded}</strong> / {sourcePrepProgress.total}</span>
+                    )}
+                    {sourcePrepProgress.speed && (
+                      <span style={{ color: '#60a5fa' }}>⚡ {sourcePrepProgress.speed}</span>
+                    )}
+                    {sourcePrepProgress.eta && (
+                      <span style={{ color: '#f59e0b' }}>⏱ Sisa ~{sourcePrepProgress.eta}</span>
+                    )}
+                    <span style={{ fontWeight: 800, color: '#38bdf8', fontSize: '0.78rem' }}>
+                      {Math.round(sourcePrepProgress.progress_percent)}%
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {sourcePrepProgress.status === 'downloading' && (
+                <div style={{ marginTop: '0.45rem' }}>
+                  <div style={{ height: '5px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
+                    <div
+                      style={{
+                        height: '100%',
+                        width: `${Math.max(3, Math.min(100, Math.round(sourcePrepProgress.progress_percent)))}%`,
+                        background: 'linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899)',
+                        borderRadius: '3px',
+                        transition: 'width 0.3s ease'
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {batchProgress && (
+            <>
           <div className="batch-progress-header">
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <h4 className="batch-queue-title">{t.studio.batchQueueTitle}</h4>
+                <h4 className="batch-queue-title">{t.studio?.sourcePrep?.stage2Title || t.studio.batchQueueTitle}</h4>
                 {batchProgress.overall_status === 'running' && (
                   <span className="queue-generating-pill">
                     <span className="queue-pulse-dot"></span> * GENERATING VIDEO...
@@ -5707,10 +5830,10 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 const overallPercent = Math.max(0, Math.min(100, Math.round(clip.progress_percent || 0)));
 
                 const pipelineSteps = [
-                  { num: 1, label: (t as any).renderPipeline?.step1Name || "Bahan" },
-                  { num: 2, label: (t as any).renderPipeline?.step2Name || "Aset" },
-                  { num: 3, label: (t as any).renderPipeline?.step3Name || "Render GPU" },
-                  { num: 4, label: (t as any).renderPipeline?.step4Name || "Selesai" },
+                  { num: 1, label: (t as any).studio?.renderPipeline?.step1Name || (t as any).renderPipeline?.step1Name || "Potong Klip" },
+                  { num: 2, label: (t as any).studio?.renderPipeline?.step2Name || (t as any).renderPipeline?.step2Name || "Aset" },
+                  { num: 3, label: (t as any).studio?.renderPipeline?.step3Name || (t as any).renderPipeline?.step3Name || "Render GPU" },
+                  { num: 4, label: (t as any).studio?.renderPipeline?.step4Name || (t as any).renderPipeline?.step4Name || "Selesai" },
                 ];
 
                 return (
@@ -5945,6 +6068,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                 );
               })}
           </div>
+            </>
+          )}
         </div>
       )}
 

@@ -23,8 +23,107 @@ from backend.config import (
     logger,
 )
 
+from pathlib import Path
+
 raw_download_jobs: Dict[str, dict] = {}
 raw_clip_download_jobs: Dict[str, dict] = {}
+master_source_jobs: Dict[str, dict] = {}
+
+
+def find_master_source_video(video_id: str, video_url: Optional[str] = None) -> Optional[Path]:
+    """
+    Locates any cached 1080p/HD master video source file for this video ID or URL.
+    Checks EXPORTS_DIR, TEMP_DIR, and UPLOADS_DIR.
+    """
+    raw_id = (video_id or "").replace("gdrive_", "").replace("upload_", "").strip()
+    if not raw_id and video_url:
+        yt_m = re.search(r'(?:v=|youtu\.be/|yt_audio_)([a-zA-Z0-9_-]{11})', video_url)
+        if yt_m:
+            raw_id = yt_m.group(1)
+
+    if not raw_id:
+        return None
+
+    safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', raw_id)
+
+    # 1. Direct check for standard master source filenames
+    for d in [EXPORTS_DIR, TEMP_DIR, UPLOADS_DIR]:
+        if not d.exists():
+            continue
+        p1 = d / f"master_source_{safe_id}.mp4"
+        if p1.exists() and p1.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(p1):
+            return p1
+        p2 = d / f"{safe_id}_master.mp4"
+        if p2.exists() and p2.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(p2):
+            return p2
+
+    # 2. General scan in EXPORTS_DIR, TEMP_DIR, UPLOADS_DIR for matching raw video
+    for d in [EXPORTS_DIR, TEMP_DIR, UPLOADS_DIR]:
+        if not d.exists():
+            continue
+        for f in d.iterdir():
+            if f.is_file() and f.suffix.lower() in [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]:
+                if f.name.startswith("yt_audio_") or f.name.startswith("twitch_audio_") or "_clip_" in f.name:
+                    continue
+                if safe_id in f.name and f.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(f):
+                    return f
+
+    return None
+
+
+async def run_master_source_job(
+    job_id: str,
+    v_url: str,
+    video_id: str,
+    cookies_content: Optional[str] = None
+):
+    """
+    Downloads or prepares the master source video in 1080p quality, saving it to disk so that
+    subsequent clip slicing runs 100% locally and instantaneously.
+    """
+    def on_progress(p: dict):
+        if job_id in master_source_jobs:
+            master_source_jobs[job_id]["progress_percent"] = p.get("percent", 0.0)
+            master_source_jobs[job_id]["downloaded"] = p.get("downloaded", "")
+            master_source_jobs[job_id]["total"] = p.get("total", "")
+            master_source_jobs[job_id]["speed"] = p.get("speed", "")
+            master_source_jobs[job_id]["eta"] = p.get("eta", "")
+
+    try:
+        master_source_jobs[job_id]["status"] = "downloading"
+        safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', (video_id or "video").replace("gdrive_", "").replace("upload_", ""))
+        master_path = EXPORTS_DIR / f"master_source_{safe_id}.mp4"
+
+        # Check if already present on disk
+        existing = find_master_source_video(video_id, v_url)
+        if existing and existing.exists():
+            logger.info(f"Master source video already available for {video_id}: {existing}")
+            master_source_jobs[job_id]["status"] = "ready"
+            master_source_jobs[job_id]["progress_percent"] = 100.0
+            master_source_jobs[job_id]["filename"] = existing.name
+            master_source_jobs[job_id]["file_path"] = str(existing)
+            master_source_jobs[job_id]["downloaded"] = f"{round(existing.stat().st_size / (1024 * 1024), 1)} MB"
+            master_source_jobs[job_id]["total"] = master_source_jobs[job_id]["downloaded"]
+            return
+
+        logger.info(f"Downloading master source video for {video_id} to {master_path}...")
+        await asyncio.to_thread(download_full_raw_video, v_url, str(master_path), on_progress, cookies_content)
+
+        if master_path.exists() and is_valid_mp4(master_path):
+            size_mb = round(master_path.stat().st_size / (1024 * 1024), 1)
+            logger.info(f"Master source video ready ({size_mb} MB) at {master_path}")
+            master_source_jobs[job_id]["status"] = "ready"
+            master_source_jobs[job_id]["progress_percent"] = 100.0
+            master_source_jobs[job_id]["filename"] = master_path.name
+            master_source_jobs[job_id]["file_path"] = str(master_path)
+            master_source_jobs[job_id]["downloaded"] = f"{size_mb} MB"
+            master_source_jobs[job_id]["total"] = f"{size_mb} MB"
+        else:
+            raise RuntimeError("Master video file is missing or invalid after download.")
+    except Exception as e:
+        logger.error(f"Master source download job {job_id} failed: {e}")
+        master_source_jobs[job_id]["status"] = "failed"
+        master_source_jobs[job_id]["error"] = str(e)
 
 
 async def run_raw_download_job(
@@ -124,68 +223,70 @@ async def run_raw_clip_download_job(
         raw_clip_download_jobs[job_id]["progress_percent"] = 15.0
         raw_clip_download_jobs[job_id]["current_step"] = 1
         raw_clip_download_jobs[job_id]["total_steps"] = 4
-        raw_clip_download_jobs[job_id]["step_name"] = "Ambil Bahan"
-        raw_clip_download_jobs[job_id]["stage"] = "Memeriksa cache video lokal..."
+        raw_clip_download_jobs[job_id]["step_name"] = "Potong Klip"
+        raw_clip_download_jobs[job_id]["stage"] = "Memeriksa video master lokal..."
 
-        # Optimization: Check if a full raw video already exists locally in UPLOADS_DIR, EXPORTS_DIR or TEMP_DIR
-        local_candidates = []
-        clean_vname = urllib.parse.unquote(os.path.basename(v_url.split("?")[0])).strip() if v_url else ""
-        if clean_vname and not clean_vname.startswith("yt_audio_") and not clean_vname.startswith("twitch_audio_"):
-            if (UPLOADS_DIR / clean_vname).exists():
-                local_candidates.append(UPLOADS_DIR / clean_vname)
-            if (TEMP_DIR / clean_vname).exists():
-                local_candidates.append(TEMP_DIR / clean_vname)
+        # Check master source video first
+        source_video = find_master_source_video(video_id, v_url)
 
-        all_dirs = [UPLOADS_DIR, EXPORTS_DIR, TEMP_DIR]
-        raw_vid_id = (video_id or "").replace("gdrive_", "").replace("upload_", "")
-        
-        for d in all_dirs:
-            if d.exists():
-                for f in d.iterdir():
-                    if f.is_file() and f.suffix.lower() in [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]:
-                        # Never use whisper audio cache files as video candidates
-                        if f.name.startswith("yt_audio_") or f.name.startswith("twitch_audio_"):
-                            continue
-                        if clean_vname and (clean_vname.lower() in f.name.lower() or f.name.lower() in clean_vname.lower()):
-                            local_candidates.append(f)
-                        elif raw_vid_id and len(raw_vid_id) >= 4 and raw_vid_id in f.name:
-                            local_candidates.append(f)
+        # Fallback to local file candidate scan if find_master_source_video didn't match
+        if not source_video:
+            local_candidates = []
+            clean_vname = urllib.parse.unquote(os.path.basename(v_url.split("?")[0])).strip() if v_url else ""
+            if clean_vname and not clean_vname.startswith("yt_audio_") and not clean_vname.startswith("twitch_audio_"):
+                if (UPLOADS_DIR / clean_vname).exists():
+                    local_candidates.append(UPLOADS_DIR / clean_vname)
+                if (TEMP_DIR / clean_vname).exists():
+                    local_candidates.append(TEMP_DIR / clean_vname)
 
-        source_video = None
-        has_cookies = bool(cookies_content or get_effective_cookies_path())
-        required_h = 1080 if has_cookies else 720
+            all_dirs = [UPLOADS_DIR, EXPORTS_DIR, TEMP_DIR]
+            raw_vid_id = (video_id or "").replace("gdrive_", "").replace("upload_", "")
+            
+            for d in all_dirs:
+                if d.exists():
+                    for f in d.iterdir():
+                        if f.is_file() and f.suffix.lower() in [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]:
+                            if f.name.startswith("yt_audio_") or f.name.startswith("twitch_audio_"):
+                                continue
+                            if clean_vname and (clean_vname.lower() in f.name.lower() or f.name.lower() in clean_vname.lower()):
+                                local_candidates.append(f)
+                            elif raw_vid_id and len(raw_vid_id) >= 4 and raw_vid_id in f.name:
+                                local_candidates.append(f)
 
-        for candidate in local_candidates:
-            if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(candidate):
-                # Avoid using a small trimmed clip segment as source
-                if "_clip_" not in candidate.name and candidate.name != seg_filename:
-                    # Guard: If user provided cookies or effective cookies exist, ensure candidate is genuine 1080p
-                    try:
-                        probe = subprocess.run(
-                            ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height", "-of", "csv=p=0", str(candidate)],
-                            capture_output=True, text=True, timeout=5
-                        )
-                        cand_h = int(probe.stdout.strip()) if probe.stdout.strip().isdigit() else 0
-                        if cand_h < required_h:
-                            logger.info(f"Skipping cached candidate {candidate.name} (height={cand_h}p < {required_h}p); will download fresh HD stream")
-                            continue
-                    except Exception:
-                        pass
-                    source_video = str(candidate)
-                    break
+            has_cookies = bool(cookies_content or get_effective_cookies_path())
+            required_h = 1080 if has_cookies else 720
+
+            for candidate in local_candidates:
+                if candidate.exists() and candidate.is_file() and candidate.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(candidate):
+                    if "_clip_" not in candidate.name and candidate.name != seg_filename:
+                        try:
+                            probe = subprocess.run(
+                                ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height", "-of", "csv=p=0", str(candidate)],
+                                capture_output=True, text=True, timeout=5
+                            )
+                            cand_h = int(probe.stdout.strip()) if probe.stdout.strip().isdigit() else 0
+                            if cand_h < required_h:
+                                logger.info(f"Skipping cached candidate {candidate.name} (height={cand_h}p < {required_h}p)")
+                                continue
+                        except Exception:
+                            pass
+                        source_video = candidate
+                        break
 
         duration_sec = max(1.0, end_time - start_time)
 
         success = False
-        if source_video and os.path.exists(source_video):
-            raw_clip_download_jobs[job_id]["stage"] = "Trimming from local video..."
+        if source_video and Path(source_video).exists():
+            source_video_str = str(source_video)
+            raw_clip_download_jobs[job_id]["step_name"] = "Potong Klip"
+            raw_clip_download_jobs[job_id]["stage"] = "Memotong klip dari video master lokal..."
             raw_clip_download_jobs[job_id]["progress_percent"] = 50.0
             try:
-                logger.info(f"Trimming local video with {ACTIVE_ENCODER_NAME} for clip {download_title} ({start_time}-{end_time})")
+                logger.info(f"Trimming local video with {ACTIVE_ENCODER_NAME} for clip {download_title} ({start_time}-{end_time}) from {source_video_str}")
                 trim_cmd = [
                     "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                     "-ss", str(start_time),
-                    "-i", source_video,
+                    "-i", source_video_str,
                     "-t", str(duration_sec),
                     *ACTIVE_ENCODER_ARGS,
                     "-c:a", "aac",
@@ -194,7 +295,7 @@ async def run_raw_clip_download_job(
                     "-movflags", "+faststart",
                     str(out_path)
                 ]
-                trim_timeout = max(180, int(duration_sec * 4) + 60)
+                trim_timeout = max(60, int(duration_sec * 3) + 30)
                 await asyncio.to_thread(subprocess.run, trim_cmd, check=True, timeout=trim_timeout)
                 if out_path.exists() and out_path.stat().st_size > 1000:
                     success = True
@@ -204,11 +305,11 @@ async def run_raw_clip_download_job(
                     cpu_trim_cmd = [
                         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                         "-ss", str(start_time),
-                        "-i", source_video,
+                        "-i", source_video_str,
                         "-t", str(duration_sec),
                         "-c:v", "libx264",
                         "-preset", "veryfast",
-                        "-crf", "20",
+                        "-crf", "18",
                         "-c:a", "aac",
                         "-b:a", "192k",
                         "-avoid_negative_ts", "make_zero",
@@ -223,6 +324,7 @@ async def run_raw_clip_download_job(
 
         if not success:
             logger.info(f"Downloading clip segment from YouTube for {download_title} ({start_time}-{end_time})")
+            raw_clip_download_jobs[job_id]["step_name"] = "Potong Klip"
             raw_clip_download_jobs[job_id]["stage"] = "Connecting to YouTube..."
             raw_clip_download_jobs[job_id]["progress_percent"] = 40.0
             temp_name = f"temp_{seg_filename}"
@@ -273,7 +375,9 @@ async def run_raw_clip_download_job(
 
         if success and out_path.exists() and is_valid_mp4(out_path):
             raw_clip_download_jobs[job_id]["status"] = "ready"
-            raw_clip_download_jobs[job_id]["stage"] = "Source video ready"
+            raw_clip_download_jobs[job_id]["current_step"] = 1
+            raw_clip_download_jobs[job_id]["step_name"] = "Potong Klip"
+            raw_clip_download_jobs[job_id]["stage"] = "Potongan klip siap"
             raw_clip_download_jobs[job_id]["progress_percent"] = 100.0
             raw_clip_download_jobs[job_id]["download_url"] = f"/api/download-rendered/{seg_filename}?title={quote(download_title)}"
             raw_clip_download_jobs[job_id]["filename"] = f"{download_title}.mp4"

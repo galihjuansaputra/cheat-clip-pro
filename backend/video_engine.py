@@ -1012,8 +1012,8 @@ def download_clip_segment(
         slice_cmd = [
             "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
             "-ss", str(start_time),
-            "-to", str(end_time),
             "-i", str(local_source),
+            "-t", str(clip_duration),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
             "-c:a", "aac", "-b:a", "192k",
             "-avoid_negative_ts", "make_zero",

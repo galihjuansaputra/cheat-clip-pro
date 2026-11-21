@@ -60,7 +60,7 @@ import {
   Unlock,
   Wrench
 } from 'lucide-react';
-import type { AnalyzeResponse, ViralClip, RenderSettings, BatchRenderProgress } from './types';
+import type { AnalyzeResponse, ViralClip, RenderSettings, BatchRenderProgress, SourcePrepProgress } from './types';
 
 // Declare YT global variables for TypeScript
 declare global {
@@ -398,6 +398,7 @@ export default function App() {
 
   // Clip Studio & Auto-Clipper states
   const [batchProgress, setBatchProgress] = useState<BatchRenderProgress | null>(null);
+  const [sourcePrepProgress, setSourcePrepProgress] = useState<SourcePrepProgress | null>(null);
   const [isLaunchingRender, setIsLaunchingRender] = useState(false);
   const [isCancellingRender, setIsCancellingRender] = useState(false);
   const batchEventSourceRef = useRef<EventSource | null>(null);
@@ -526,7 +527,151 @@ export default function App() {
       try {
         const batchId = `client_${Date.now()}`;
         const selectedClips = settings.selectedClips;
+        clientRenderCancelledRef.current = false;
 
+        // =========================================================================
+        // TAHAP 1: Ambil Bahan Master (1080p Master Source Acquisition)
+        // Dipisah sebelum memotong klip agar queue hanya berfokus pada slicing & render.
+        // =========================================================================
+        const userCookies = getStoredCookies();
+        const targetUrl = result.video_url || (url.trim() ? url.trim() : `https://www.youtube.com/watch?v=${result.video_id}`);
+        let isMasterReady = false;
+
+        if (sourceMode === 'upload' && uploadedVideoFile) {
+          setSourcePrepProgress({
+            status: 'ready',
+            progress_percent: 100,
+            detail: 'Video lokal siap diproses',
+          });
+          isMasterReady = true;
+        } else if (result.source_type === 'upload' || result.video_id?.startsWith('upload_') || result.video_id?.startsWith('gdrive_')) {
+          setSourcePrepProgress({
+            status: 'ready',
+            progress_percent: 100,
+            detail: 'Video server siap diproses',
+          });
+          isMasterReady = true;
+        } else {
+          setSourcePrepProgress({
+            status: 'checking',
+            progress_percent: 20,
+            detail: 'Memeriksa cache video bahan master di server...',
+          });
+          try {
+            const chkRes = await fetch(`/api/source-status?video_id=${encodeURIComponent(result.video_id || '')}&video_url=${encodeURIComponent(targetUrl)}`);
+            if (chkRes.ok) {
+              const chkData = await chkRes.json();
+              if (chkData.ready) {
+                setSourcePrepProgress({
+                  status: 'ready',
+                  progress_percent: 100,
+                  detail: `✓ Video bahan master siap (${chkData.size_mb || ''} MB) - Slicing berjalan lokal`,
+                });
+                isMasterReady = true;
+              }
+            }
+          } catch (e) {
+            console.warn('Failed to check source cache:', e);
+          }
+
+          if (!isMasterReady) {
+            setSourcePrepProgress({
+              status: 'downloading',
+              progress_percent: 5,
+              detail: 'Menghubungkan ke YouTube & mengunduh video bahan master (1080p)...',
+            });
+            const prepReq = await fetch('/api/prepare-source', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                video_url: targetUrl,
+                video_id: result.video_id,
+                cookies: userCookies || undefined,
+              })
+            });
+            if (!prepReq.ok) {
+              const err = await prepReq.json().catch(() => ({}));
+              throw new Error(err.detail || 'Gagal memulai unduhan video bahan master');
+            }
+            const prepData = await prepReq.json();
+            const prepJobId = prepData.job_id;
+
+            if (prepData.status === 'ready') {
+              setSourcePrepProgress({
+                status: 'ready',
+                progress_percent: 100,
+                detail: '✓ Video bahan master 1080p siap di cache server!',
+              });
+              isMasterReady = true;
+            } else {
+              await new Promise<void>((resolve, reject) => {
+                let failCount = 0;
+                const pollInterval = setInterval(async () => {
+                  if (clientRenderCancelledRef.current) {
+                    clearInterval(pollInterval);
+                    reject(new Error('Render dibatalkan'));
+                    return;
+                  }
+                  try {
+                    const stRes = await fetch(`/api/prepare-source-status/${prepJobId}`);
+                    if (!stRes.ok) {
+                      failCount++;
+                      if (failCount > 5) {
+                        clearInterval(pollInterval);
+                        reject(new Error('Koneksi terputus saat mengunduh bahan master'));
+                      }
+                      return;
+                    }
+                    failCount = 0;
+                    const stData = await stRes.json();
+                    if (stData.status === 'ready') {
+                      clearInterval(pollInterval);
+                      setSourcePrepProgress({
+                        status: 'ready',
+                        progress_percent: 100,
+                        downloaded: stData.downloaded,
+                        total: stData.total,
+                        detail: `✓ Video bahan master siap (${stData.total || stData.downloaded || '1080p'})`,
+                      });
+                      resolve();
+                    } else if (stData.status === 'failed') {
+                      clearInterval(pollInterval);
+                      setSourcePrepProgress({
+                        status: 'error',
+                        progress_percent: 0,
+                        error_message: stData.error || 'Gagal mengunduh video bahan master',
+                        detail: stData.error || 'Gagal mengunduh video bahan master',
+                      });
+                      reject(new Error(stData.error || 'Gagal mengunduh video bahan master'));
+                    } else {
+                      const pct = Math.max(5, Math.min(99, Math.round(stData.progress_percent || 10)));
+                      const etaText = stData.eta ? ` • Sisa ~${stData.eta}` : '';
+                      const spdText = stData.speed ? ` • ${stData.speed}` : '';
+                      const bytesText = (stData.downloaded && stData.total) ? ` (${stData.downloaded} / ${stData.total})` : '';
+                      setSourcePrepProgress({
+                        status: 'downloading',
+                        progress_percent: pct,
+                        downloaded: stData.downloaded,
+                        total: stData.total,
+                        speed: stData.speed,
+                        eta: stData.eta,
+                        detail: `Mengunduh video bahan master 1080p${bytesText}${spdText}${etaText}...`,
+                      });
+                    }
+                  } catch (pollErr) {
+                    clearInterval(pollInterval);
+                    reject(pollErr);
+                  }
+                }, 1200);
+              });
+            }
+          }
+        }
+
+        // =========================================================================
+        // TAHAP 2: Antrean Render Klip (Batch Render Queue)
+        // Bahan master sudah ada di disk / memory. Pemotongan klip berjalan sangat cepat.
+        // =========================================================================
         setBatchProgress({
           batch_id: batchId,
           total_clips: selectedClips.length,
@@ -548,7 +693,6 @@ export default function App() {
         });
 
         setIsLaunchingRender(false);
-        clientRenderCancelledRef.current = false;
 
         for (let i = 0; i < selectedClips.length; i++) {
           if (clientRenderCancelledRef.current) break;
@@ -570,16 +714,16 @@ export default function App() {
                 progress_percent: 5,
                 current_step: 1,
                 total_steps: 4,
-                step_key: 'fetch_source',
-                step_name: 'Ambil Bahan',
+                step_key: 'slice_clip',
+                step_name: 'Potong Klip',
                 step_progress: 10,
-                step_detail: 'Menyiapkan video bahan...',
+                step_detail: 'Memotong klip dari video master lokal...',
                 elapsed_sec: 0,
               } : c)
             };
           });
 
-          // Step 1: Acquire raw video stream (Source Acquisition)
+          // Step 1: Slice clip segment from master source (instant local trim)
           let rawSourceUrl = '';
           if (sourceMode === 'upload' && uploadedVideoFile) {
             rawSourceUrl = URL.createObjectURL(uploadedVideoFile);
@@ -591,8 +735,10 @@ export default function App() {
                   ...c,
                   progress_percent: 25,
                   current_step: 1,
+                  step_key: 'slice_clip',
+                  step_name: 'Potong Klip',
                   step_progress: 100,
-                  step_detail: 'Video lokal siap diproses',
+                  step_detail: 'Klip lokal siap diproses',
                 } : c)
               };
             });
@@ -606,14 +752,14 @@ export default function App() {
                   ...c,
                   progress_percent: 25,
                   current_step: 1,
+                  step_key: 'slice_clip',
+                  step_name: 'Potong Klip',
                   step_progress: 100,
-                  step_detail: 'Video server siap diproses',
+                  step_detail: 'Klip server siap diproses',
                 } : c)
               };
             });
           } else {
-            const userCookies = getStoredCookies();
-            const targetUrl = result.video_url || (url.trim() ? url.trim() : `https://www.youtube.com/watch?v=${result.video_id}`);
             const rawReq = await fetch('/api/download-raw-clip', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -682,8 +828,8 @@ export default function App() {
                           progress_percent: clipOverallPct,
                           current_step: 1,
                           total_steps: 4,
-                          step_key: 'fetch_source',
-                          step_name: 'Ambil Bahan',
+                          step_key: 'slice_clip',
+                          step_name: 'Potong Klip',
                           step_progress: dlPct,
                           step_detail: `${stageMsg} (${elapsedSec}s)`,
                           elapsed_sec: elapsedSec,
@@ -1046,7 +1192,12 @@ export default function App() {
   };
 
   const handleCancelRender = useCallback(async () => {
-    if (!batchProgress?.batch_id) return;
+    clientRenderCancelledRef.current = true;
+    setSourcePrepProgress(null);
+    if (!batchProgress?.batch_id) {
+      setIsLaunchingRender(false);
+      return;
+    }
     const batchId = batchProgress.batch_id;
 
     setIsCancellingRender(true);
@@ -6727,12 +6878,14 @@ Transcript:
                   onToggleMarkClip={(clip) => toggleMarkedClip(`${clip.start_time}_${clip.end_time}`)}
                   onToggleAllClips={toggleAllMarkedClips}
                   batchProgress={batchProgress}
+                  sourcePrepProgress={sourcePrepProgress}
                   onDismissProgress={() => {
                     if (batchEventSourceRef.current) {
                       batchEventSourceRef.current.close();
                       batchEventSourceRef.current = null;
                     }
                     setBatchProgress(null);
+                    setSourcePrepProgress(null);
                   }}
                   onRetryClip={handleRetryBatchClip}
                   onCancelRender={handleCancelRender}

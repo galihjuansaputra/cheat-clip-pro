@@ -7,6 +7,11 @@ class RawVideoDownloadRequest(BaseModel):
     title: Optional[str] = None
     cookies: Optional[str] = None
 
+class PrepareSourceRequest(BaseModel):
+    video_url: Optional[str] = None
+    video_id: Optional[str] = None
+    cookies: Optional[str] = None
+
 class RawClipDownloadRequest(BaseModel):
     video_url: str
     video_id: str

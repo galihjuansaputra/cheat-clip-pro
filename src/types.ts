@@ -157,7 +157,19 @@ export interface RenderSettings {
   compilationTitle?: string;
 }
 
-export type RenderStepKey = 'fetch_source' | 'prep_assets' | 'rendering_gpu' | 'finalizing';
+export type RenderStepKey = 'fetch_source' | 'slice_clip' | 'prep_assets' | 'rendering_gpu' | 'finalizing';
+
+export interface SourcePrepProgress {
+  status: 'idle' | 'checking' | 'downloading' | 'ready' | 'error';
+  video_id?: string;
+  progress_percent: number;
+  downloaded?: string;
+  total?: string;
+  speed?: string;
+  eta?: string;
+  detail?: string;
+  error_message?: string;
+}
 
 export interface RenderClipStatus {
   clip_index: number;
@@ -187,5 +199,6 @@ export interface BatchRenderProgress {
   zip_url?: string;
   error_message?: string;
   warning_message?: string;
+  source_prep?: SourcePrepProgress;
   clips: RenderClipStatus[];
 }
