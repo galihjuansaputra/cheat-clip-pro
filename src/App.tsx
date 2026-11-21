@@ -644,10 +644,17 @@ export default function App() {
                       });
                       reject(new Error(stData.error || 'Gagal mengunduh video bahan master'));
                     } else {
-                      const pct = Math.max(5, Math.min(99, Math.round(stData.progress_percent || 10)));
+                      const rawPct = Number(stData.progress_percent);
+                      const pct = (!isNaN(rawPct) && rawPct > 0)
+                        ? Math.max(1, Math.min(99, Math.round(rawPct)))
+                        : 5;
                       const etaText = stData.eta ? ` • Sisa ~${stData.eta}` : '';
                       const spdText = stData.speed ? ` • ${stData.speed}` : '';
-                      const bytesText = (stData.downloaded && stData.total) ? ` (${stData.downloaded} / ${stData.total})` : '';
+                      const bytesText = (stData.downloaded && stData.total)
+                        ? ` (${stData.downloaded} / ${stData.total})`
+                        : stData.downloaded
+                        ? ` (${stData.downloaded})`
+                        : '';
                       setSourcePrepProgress({
                         status: 'downloading',
                         progress_percent: pct,

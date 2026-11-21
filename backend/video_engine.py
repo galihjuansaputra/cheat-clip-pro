@@ -542,11 +542,11 @@ def get_yt_dlp_base_cmd(
             cmd.extend(["--cookies", str(eff)])
 
     if has_active_cookies:
-        # With active user cookies, use web,default,mweb,ios
-        cmd.extend(["--extractor-args", "youtube:player_client=web,default,mweb,ios"])
+        # Prioritize clients that bypass YouTube's 80 KiB/s n-sig throttling (ios, android, mweb) while keeping session cookies valid
+        cmd.extend(["--extractor-args", "youtube:player_client=ios,android,mweb,web_embedded,web,default"])
     else:
         # In guest mode (without cookies), use robust multi-client hierarchy to bypass bot checks and missing formats
-        cmd.extend(["--extractor-args", "youtube:player_client=mweb,ios,android,web_embedded,web,default"])
+        cmd.extend(["--extractor-args", "youtube:player_client=ios,android,mweb,web_embedded,web,default"])
 
     cmd.append("--force-ipv4")
     return cmd
@@ -1059,10 +1059,13 @@ def download_clip_segment(
                 "--download-sections", f"*{t_start_fmt}-{t_end_fmt}",
                 "--force-keyframes-at-cuts",
                 "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
-                "-N", "4",
-                "--socket-timeout", "12",
-                "--fragment-retries", "2",
-                "--retries", "2",
+                "-N", "16",
+                "--concurrent-fragments", "16",
+                "--buffer-size", "64K",
+                "--http-chunk-size", "10M",
+                "--socket-timeout", "15",
+                "--fragment-retries", "3",
+                "--retries", "3",
                 "--file-access-retries", "2",
                 "-o", str(output_path),
                 "--merge-output-format", "mp4",
@@ -1389,56 +1392,76 @@ def download_full_raw_video(
             cmd = [
                 *base_cmd,
                 "--no-colors",
-                "-f", "bestvideo[height<=1080]+bestaudio/bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best[height<=1080]/best",
+                "-N", "16",
+                "--concurrent-fragments", "16",
+                "--buffer-size", "64K",
+                "--http-chunk-size", "10M",
+                "--socket-timeout", "15",
+                "--fragment-retries", "5",
+                "--retries", "5",
+                "--file-access-retries", "3",
+                "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
                 "-o", str(output_path),
                 "--merge-output-format", "mp4",
                 "--newline",
-                "--progress-template", "download:%(progress._percent_str)s|%(progress._downloaded_bytes_str)s|%(progress._total_bytes_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
                 clean_url
             ]
-            logger.info(f"Downloading full raw video ({mode_label}) from {clean_url} to {output_path}...")
+            logger.info(f"Downloading full raw video ({mode_label}, 16 concurrent fragments) from {clean_url} to {output_path}...")
 
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            last_reported_pct = 0.0
+
             for line in iter(process.stdout.readline, ''):
                 raw_line = line.strip()
                 if not raw_line:
                     continue
                 clean_line = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw_line).strip()
 
-                if clean_line.startswith("download:") and progress_callback:
-                    raw_data = clean_line[len("download:"):].strip()
-                    parts = raw_data.split("|")
-                    if len(parts) >= 5:
-                        pct_str, dl_str, tot_str, spd_str, eta_str = parts[0], parts[1], parts[2], parts[3], parts[4]
+                if "[download]" in clean_line and progress_callback:
+                    pct_m = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*%', clean_line)
+                    tot_m = re.search(r'of\s*~?\s*([0-9.]+\s*[a-zA-Z]+)', clean_line)
+                    spd_m = re.search(r'at\s+([0-9.]+\s*[a-zA-Z]+/s)', clean_line)
+                    eta_m = re.search(r'ETA\s+([0-9:]+)', clean_line)
+                    frag_m = re.search(r'\(frag\s+([0-9]+/[0-9]+)\)', clean_line)
+
+                    if pct_m:
                         try:
-                            clean_pct = re.sub(r'[^0-9.]', '', pct_str)
-                            pct_val = float(clean_pct) if clean_pct else 0.0
+                            val = float(pct_m.group(1))
+                            if val > last_reported_pct:
+                                last_reported_pct = val
                         except Exception:
-                            pct_val = 0.0
-                        progress_callback({
-                            "percent": pct_val,
-                            "downloaded": dl_str.strip() if dl_str and dl_str != "NA" else f"{pct_val:.1f}%",
-                            "total": tot_str.strip() if tot_str and tot_str != "NA" else "",
-                            "speed": spd_str.strip() if spd_str and spd_str != "NA" else "",
-                            "eta": eta_str.strip() if eta_str and eta_str != "NA" else ""
-                        })
-                elif "[download]" in clean_line and progress_callback:
-                    match = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*%', clean_line)
-                    if match:
-                        try:
-                            pct_val = float(match.group(1))
-                        except Exception:
-                            pct_val = 0.0
-                        spd_match = re.search(r'at\s+([0-9.]+\s*[a-zA-Z]+/s)', clean_line)
-                        eta_match = re.search(r'ETA\s+([0-9:]+)', clean_line)
-                        tot_match = re.search(r'of\s+~?([0-9.]+\s*[a-zA-Z]+)', clean_line)
-                        progress_callback({
-                            "percent": pct_val,
-                            "downloaded": f"{pct_val:.1f}%",
-                            "total": tot_match.group(1) if tot_match else "",
-                            "speed": spd_match.group(1) if spd_match else "",
-                            "eta": eta_match.group(1) if eta_match else ""
-                        })
+                            pass
+
+                    total_str = tot_m.group(1).strip() if tot_m else ""
+                    speed_str = spd_m.group(1).strip() if spd_m else ""
+                    eta_str = eta_m.group(1).strip() if eta_m else ""
+                    frag_str = frag_m.group(1).strip() if frag_m else ""
+
+                    # Downloaded representation
+                    dl_str = ""
+                    if total_str and last_reported_pct > 0:
+                        num_m = re.search(r'([0-9.]+)', total_str)
+                        unit_m = re.search(r'([a-zA-Z]+)', total_str)
+                        if num_m and unit_m:
+                            try:
+                                tot_num = float(num_m.group(1))
+                                unit = unit_m.group(1)
+                                dl_num = round((last_reported_pct / 100.0) * tot_num, 1)
+                                dl_str = f"{dl_num} {unit}"
+                            except Exception:
+                                dl_str = f"{last_reported_pct:.1f}%"
+                    elif frag_str:
+                        dl_str = f"frag {frag_str}"
+                    elif last_reported_pct > 0:
+                        dl_str = f"{last_reported_pct:.1f}%"
+
+                    progress_callback({
+                        "percent": last_reported_pct,
+                        "downloaded": dl_str,
+                        "total": total_str,
+                        "speed": speed_str,
+                        "eta": eta_str
+                    })
             process.stdout.close()
             returncode = process.wait()
 

@@ -83,11 +83,18 @@ async def run_master_source_job(
     """
     def on_progress(p: dict):
         if job_id in master_source_jobs:
-            master_source_jobs[job_id]["progress_percent"] = p.get("percent", 0.0)
-            master_source_jobs[job_id]["downloaded"] = p.get("downloaded", "")
-            master_source_jobs[job_id]["total"] = p.get("total", "")
-            master_source_jobs[job_id]["speed"] = p.get("speed", "")
-            master_source_jobs[job_id]["eta"] = p.get("eta", "")
+            new_pct = float(p.get("percent", 0.0) or 0.0)
+            cur_pct = float(master_source_jobs[job_id].get("progress_percent", 0.0) or 0.0)
+            if new_pct > cur_pct:
+                master_source_jobs[job_id]["progress_percent"] = new_pct
+            if p.get("downloaded"):
+                master_source_jobs[job_id]["downloaded"] = p.get("downloaded")
+            if p.get("total"):
+                master_source_jobs[job_id]["total"] = p.get("total")
+            if p.get("speed"):
+                master_source_jobs[job_id]["speed"] = p.get("speed")
+            if p.get("eta"):
+                master_source_jobs[job_id]["eta"] = p.get("eta")
 
     try:
         master_source_jobs[job_id]["status"] = "downloading"

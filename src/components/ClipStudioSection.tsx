@@ -5544,8 +5544,8 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
 
                 {sourcePrepProgress.status === 'downloading' && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', fontSize: '0.68rem', color: '#cbd5e1' }}>
-                    {sourcePrepProgress.downloaded && sourcePrepProgress.total && (
-                      <span>📦 <strong>{sourcePrepProgress.downloaded}</strong> / {sourcePrepProgress.total}</span>
+                    {sourcePrepProgress.downloaded && (
+                      <span>📦 <strong>{sourcePrepProgress.downloaded}</strong>{sourcePrepProgress.total ? ` / ${sourcePrepProgress.total}` : ''}</span>
                     )}
                     {sourcePrepProgress.speed && (
                       <span style={{ color: '#60a5fa' }}>⚡ {sourcePrepProgress.speed}</span>
@@ -5553,9 +5553,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                     {sourcePrepProgress.eta && (
                       <span style={{ color: '#f59e0b' }}>⏱ Sisa ~{sourcePrepProgress.eta}</span>
                     )}
-                    <span style={{ fontWeight: 800, color: '#38bdf8', fontSize: '0.78rem' }}>
-                      {Math.round(sourcePrepProgress.progress_percent)}%
-                    </span>
+                    {sourcePrepProgress.progress_percent > 0 && (
+                      <span style={{ fontWeight: 800, color: '#38bdf8', fontSize: '0.78rem' }}>
+                        {Math.round(sourcePrepProgress.progress_percent)}%
+                      </span>
+                    )}
                   </div>
                 )}
               </div>
