@@ -582,14 +582,36 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
   // 2. Load video element to inspect metadata and extract frames
   if (onProgress) onProgress(8, 'Loading media source into GPU canvas pipeline...');
   const video = document.createElement('video');
-  video.crossOrigin = 'anonymous';
+  if (typeof window !== 'undefined' && videoSourceUrl.startsWith('http')) {
+    try {
+      const u = new URL(videoSourceUrl);
+      if (u.origin !== window.location.origin) {
+        video.crossOrigin = 'anonymous';
+      }
+    } catch {
+      // ignore
+    }
+  }
   video.src = videoSourceUrl;
   video.muted = true;
   video.playsInline = true;
+  video.preload = 'auto';
 
   await new Promise<void>((resolve, reject) => {
-    video.onloadedmetadata = () => resolve();
-    video.onerror = () => reject(new Error('Failed to load video element for WebCodecs processing'));
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    video.onloadedmetadata = finish;
+    video.oncanplay = finish;
+    video.onerror = () => {
+      if (done) return;
+      done = true;
+      const errInfo = video.error ? `code ${video.error.code} (${video.error.message || 'playback error'})` : 'media format error';
+      reject(new Error(`Failed to load video element for WebCodecs processing: ${errInfo}`));
+    };
   });
 
   // Preload watermark image if enabled

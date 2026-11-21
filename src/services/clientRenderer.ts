@@ -98,9 +98,12 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
   let targetWidth = 1080;
   let targetHeight = 1920;
 
+  const recentLogs: string[] = [];
   let lastFfmpegLog = '';
   const logHandler = ({ message }: { message: string }) => {
     lastFfmpegLog = message;
+    recentLogs.push(message);
+    if (recentLogs.length > 25) recentLogs.shift();
     console.debug('[FFmpeg-WASM-Exec]', message);
   };
   ffmpeg.on('log', logHandler);
@@ -113,7 +116,7 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
     targetWidth = 1080;
     targetHeight = 1920;
     if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
-      filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=increase,crop=${targetWidth}:${targetHeight},gblur=sigma=12[bg];[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v]`;
+      filterStr = `[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=8:2,scale=${targetWidth}:${targetHeight}[bg];[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v]`;
     } else if (backgroundStyle === 'black') {
       filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2:black[v]`;
     } else {
@@ -124,7 +127,7 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
     targetWidth = 1080;
     targetHeight = 1920;
     if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
-      filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=increase,crop=${targetWidth}:${targetHeight},boxblur=12:2[bg];[0:v]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg];[bg][fg]overlay=0:420[v]`;
+      filterStr = `[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=8:2,scale=${targetWidth}:${targetHeight}[bg];[0:v]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg];[bg][fg]overlay=0:420[v]`;
     } else {
       filterStr = `[0:v]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg];[fg]pad=1080:1920:0:420:black[v]`;
     }
@@ -132,7 +135,7 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
     targetWidth = 1080;
     targetHeight = 1920;
     if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
-      filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=increase,crop=${targetWidth}:${targetHeight},boxblur=12:2[bg];[0:v]scale=1080:810:force_original_aspect_ratio=increase,crop=1080:810[fg];[bg][fg]overlay=0:555[v]`;
+      filterStr = `[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=8:2,scale=${targetWidth}:${targetHeight}[bg];[0:v]scale=1080:810:force_original_aspect_ratio=increase,crop=1080:810[fg];[bg][fg]overlay=0:555[v]`;
     } else {
       filterStr = `[0:v]scale=1080:810:force_original_aspect_ratio=increase,crop=1080:810[fg];[fg]pad=1080:1920:0:555:black[v]`;
     }
@@ -141,7 +144,7 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
     targetWidth = 1080;
     targetHeight = 1920;
     if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
-      filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=increase,crop=${targetWidth}:${targetHeight},boxblur=12:2[bg];[0:v]scale=1080:608:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=0:656[v]`;
+      filterStr = `[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=8:2,scale=${targetWidth}:${targetHeight}[bg];[0:v]scale=1080:608:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=0:656[v]`;
     } else {
       filterStr = `[0:v]scale=1080:608:force_original_aspect_ratio=decrease[fg];[fg]pad=1080:1920:0:656:black[v]`;
     }
@@ -163,7 +166,7 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
     '-map', '0:a?',
     '-c:v', 'libx264',
     '-preset', 'ultrafast',
-    '-threads', '2',
+    '-threads', '1',
     '-crf', '26',
     '-c:a', 'aac',
     '-b:a', '128k',
@@ -182,11 +185,13 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
   try {
     const exitCode = await ffmpeg.exec(ffmpegArgs);
     if (exitCode !== 0) {
-      throw new Error(`FFmpeg WASM exited with code ${exitCode}. Details: ${lastFfmpegLog || 'Encoding error'}`);
+      const errDetails = recentLogs.slice(-5).join('; ') || lastFfmpegLog || 'Encoding error';
+      throw new Error(`FFmpeg WASM exited with code ${exitCode}. Details: ${errDetails}`);
     }
   } catch (err: any) {
-    console.error('FFmpeg WASM execution error:', err, 'Last log:', lastFfmpegLog);
-    throw new Error(err?.message || lastFfmpegLog || 'Browser WASM engine memory limit exceeded');
+    console.error('FFmpeg WASM execution error:', err, 'Recent logs:', recentLogs);
+    const errDetails = recentLogs.slice(-5).join('; ') || err?.message || lastFfmpegLog || 'Browser WASM engine memory limit exceeded';
+    throw new Error(errDetails);
   } finally {
     try {
       ffmpeg.off('log', logHandler);

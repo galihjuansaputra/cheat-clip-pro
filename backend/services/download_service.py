@@ -492,7 +492,7 @@ async def run_raw_clip_download_job(
             raw_clip_download_jobs[job_id]["step_name"] = "Potong Klip"
             raw_clip_download_jobs[job_id]["stage"] = "Potongan klip siap"
             raw_clip_download_jobs[job_id]["progress_percent"] = 100.0
-            raw_clip_download_jobs[job_id]["download_url"] = f"/api/download-rendered/{seg_filename}?title={quote(download_title)}"
+            raw_clip_download_jobs[job_id]["download_url"] = f"/api/video/{seg_filename}"
             raw_clip_download_jobs[job_id]["filename"] = f"{download_title}.mp4"
             logger.info(f"Raw clip '{download_title}' ready at {out_path}")
         else:

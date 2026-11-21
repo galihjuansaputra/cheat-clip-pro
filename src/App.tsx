@@ -404,6 +404,7 @@ export default function App() {
   const batchEventSourceRef = useRef<EventSource | null>(null);
   const clientRenderCancelledRef = useRef(false);
   const activePrepJobIdRef = useRef<string | null>(null);
+  const lastRenderSettingsRef = useRef<RenderSettings | null>(null);
 
   const listenToBatchProgress = useCallback((batchId: string) => {
     if (batchEventSourceRef.current) {
@@ -499,6 +500,7 @@ export default function App() {
 
   const handleStartBatchRender = async (settings: RenderSettings, forceProceed = false) => {
     if (!result) return;
+    lastRenderSettingsRef.current = settings;
 
     if (!forceProceed && isCurrentVideoYouTube() && !hasStoredCookies()) {
       const skipped = sessionStorage.getItem('cheatclip_skip_cookie_warning') === 'true';
@@ -1290,6 +1292,12 @@ export default function App() {
   const handleRetryBatchClip = async (clipIndex?: number) => {
     if (!batchProgress?.batch_id) return;
     const batchId = batchProgress.batch_id;
+    if (batchId.startsWith('client_')) {
+      if (lastRenderSettingsRef.current) {
+        handleStartBatchRender(lastRenderSettingsRef.current, true);
+        return;
+      }
+    }
     try {
       // Optimistically update the UI to show 'pending' / retrying state for selected clip(s)
       setBatchProgress(prev => {

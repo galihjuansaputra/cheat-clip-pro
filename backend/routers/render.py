@@ -215,7 +215,12 @@ async def get_render_progress(batch_id: str):
 
 
 @router.get("/api/download-rendered/{file_name}")
-def download_rendered_file(file_name: str, title: Optional[str] = None):
+def download_rendered_file(
+    file_name: str,
+    title: Optional[str] = None,
+    inline: bool = False,
+    request: Request = None
+):
     safe_name = os.path.basename(file_name)
     file_path = EXPORTS_DIR / safe_name
     if not file_path.exists():
@@ -227,6 +232,14 @@ def download_rendered_file(file_name: str, title: Optional[str] = None):
         clean_title = re.sub(r'[\\/*?:"<>|]', "", title.strip())
         if clean_title:
             dl_filename = f"{clean_title}.mp4" if not clean_title.lower().endswith(".mp4") else clean_title
+
+    range_header = request.headers.get("range") if request else None
+    if inline or range_header:
+        headers = {
+            "Content-Disposition": f'inline; filename="{dl_filename}"',
+            "Accept-Ranges": "bytes"
+        }
+        return FileResponse(file_path, media_type="video/mp4", headers=headers)
 
     return FileResponse(file_path, media_type="video/mp4", filename=dl_filename)
 
