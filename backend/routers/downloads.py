@@ -100,7 +100,8 @@ async def handle_download_raw_clip(req: RawClipDownloadRequest, background_tasks
         req.start_time,
         req.end_time,
         req.title,
-        req.cookies
+        req.cookies,
+        req.proxy
     )
     return {"job_id": job_id, "status": "starting"}
 

@@ -107,7 +107,8 @@ async def run_raw_clip_download_job(
     start_time: float,
     end_time: float,
     title: str,
-    cookies_content: Optional[str] = None
+    cookies_content: Optional[str] = None,
+    proxy: Optional[str] = None
 ):
     clean_title = re.sub(r'[\\/*?:"<>|]', "", (title or "clip").strip())
     if not clean_title:
@@ -219,16 +220,25 @@ async def run_raw_clip_download_job(
 
         if not success:
             logger.info(f"Downloading clip segment from YouTube for {download_title} ({start_time}-{end_time})")
-            raw_clip_download_jobs[job_id]["stage"] = "Fetching slice from YouTube..."
+            raw_clip_download_jobs[job_id]["stage"] = "Connecting to YouTube..."
             raw_clip_download_jobs[job_id]["progress_percent"] = 40.0
             temp_name = f"temp_{seg_filename}"
+
+            def _on_stage(text: str, pct: float):
+                if job_id in raw_clip_download_jobs:
+                    raw_clip_download_jobs[job_id]["stage"] = text
+                    raw_clip_download_jobs[job_id]["progress_percent"] = pct
+
             downloaded_temp = await asyncio.to_thread(
                 download_clip_segment,
                 v_url,
                 start_time,
                 end_time,
                 temp_name,
-                cookies_content
+                cookies_content,
+                None,
+                proxy,
+                _on_stage
             )
             if downloaded_temp and os.path.exists(downloaded_temp):
                 if out_path.exists():

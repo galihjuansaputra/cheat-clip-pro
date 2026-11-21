@@ -14,6 +14,7 @@ class RawClipDownloadRequest(BaseModel):
     end_time: float
     title: Optional[str] = None
     cookies: Optional[str] = None
+    proxy: Optional[str] = None
 
 class CookiesSaveRequest(BaseModel):
     cookies: Optional[str] = None

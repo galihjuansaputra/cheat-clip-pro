@@ -13,6 +13,7 @@ import urllib.request
 import contextlib
 import tempfile
 import threading
+import signal
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple, Union, Callable
 from PIL import Image, ImageDraw, ImageFont
@@ -491,9 +492,10 @@ def get_yt_dlp_cookies_args() -> List[str]:
 def get_yt_dlp_base_cmd(
     include_cookies: bool = True,
     cookies_path: Optional[Union[str, Path]] = None,
+    proxy: Optional[str] = None,
 ) -> List[str]:
     """
-    Returns base command for yt-dlp with JavaScript runtime, player extractor args, and cookies.
+    Returns base command for yt-dlp with JavaScript runtime, player extractor args, cookies, and proxy.
     Tries standalone 'yt-dlp' executable first, then falls back to python module:
     [sys.executable, "-m", "yt_dlp"] which works 100% of the time if installed via pip.
     """
@@ -515,6 +517,18 @@ def get_yt_dlp_base_cmd(
     elif shutil.which("node"):
         cmd.extend(["--js-runtimes", "node"])
 
+    # Enable remote component challenge solver to bypass YouTube n-sig throttling
+    cmd.extend(["--remote-components", "ejs:github"])
+
+    # Proxy support (custom proxy or environment proxy fallback)
+    try:
+        from backend.utils.proxy import get_proxy_url
+        proxy_url = proxy or get_proxy_url()
+    except Exception:
+        proxy_url = proxy or os.environ.get("PROXY_URL") or os.environ.get("WEBSHARE_PROXY")
+    if proxy_url:
+        cmd.extend(["--proxy", proxy_url])
+
     has_active_cookies = False
     if cookies_path and Path(cookies_path).exists() and Path(cookies_path).stat().st_size > 0:
         has_active_cookies = True
@@ -528,13 +542,11 @@ def get_yt_dlp_base_cmd(
             cmd.extend(["--cookies", str(eff)])
 
     if has_active_cookies:
-        # With active user cookies, use web/default client hierarchy so browser session cookies
-        # authenticate directly. Never use android/ios here, as mobile protobuf clients do not
-        # support browser session cookies and restrict output formats to 360p.
-        cmd.extend(["--extractor-args", "youtube:player_client=web,default"])
+        # With active user cookies, use web,default,mweb,ios
+        cmd.extend(["--extractor-args", "youtube:player_client=web,default,mweb,ios"])
     else:
-        # In guest mode (without cookies), use web,default,tv clients to prevent mobile SABR 360p throttling.
-        cmd.extend(["--extractor-args", "youtube:player_client=web,default,tv"])
+        # In guest mode (without cookies), use robust multi-client hierarchy to bypass bot checks and missing formats
+        cmd.extend(["--extractor-args", "youtube:player_client=mweb,ios,android,web_embedded,web,default"])
 
     cmd.append("--force-ipv4")
     return cmd
@@ -834,7 +846,9 @@ def download_clip_segment(
     end_time: float,
     output_filename: str,
     cookies_content: Optional[str] = None,
-    on_process_spawned: Optional[Callable[[subprocess.Popen], None]] = None
+    on_process_spawned: Optional[Callable[[subprocess.Popen], None]] = None,
+    proxy: Optional[str] = None,
+    stage_callback: Optional[Callable[[str, float], None]] = None,
 ) -> str:
     """
     Downloads or slices the requested time slice in high definition (1080p).
@@ -849,7 +863,10 @@ def download_clip_segment(
             pass
 
     def _run_subproc(sub_cmd: List[str], timeout: float) -> subprocess.CompletedProcess:
-        proc = subprocess.Popen(sub_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        popen_kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
+        if os.name != "nt":
+            popen_kwargs["start_new_session"] = True
+        proc = subprocess.Popen(sub_cmd, **popen_kwargs)
         if on_process_spawned:
             try:
                 on_process_spawned(proc)
@@ -863,10 +880,16 @@ def download_clip_segment(
                 if os.name == "nt":
                     subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
                 else:
-                    proc.kill()
+                    try:
+                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                    except Exception:
+                        proc.kill()
             except Exception:
                 pass
-            proc.communicate()
+            try:
+                proc.communicate(timeout=3)
+            except Exception:
+                pass
             raise
 
     # Check if video_url points to a local file or an online stream
@@ -1011,7 +1034,10 @@ def download_clip_segment(
     t_end_fmt = format_section_time(end_time)
 
     # Fast, bounded timeout: ensures clips are fetched quickly or failover fast without hanging for hours.
-    timeout_sec = max(45, min(90, int(clip_duration * 1.5) + 30))
+    timeout_sec = max(35, min(75, int(clip_duration * 1.2) + 20))
+
+    if stage_callback:
+        stage_callback("Preparing YouTube video stream...", 42.0)
 
     with ephemeral_cookies_file(cookies_content) as temp_cookies:
         has_cookies = temp_cookies is not None or get_effective_cookies_path() is not None
@@ -1021,20 +1047,23 @@ def download_clip_segment(
 
         for use_cookies in attempts:
             mode_label = "with cookies" if use_cookies else "guest mode (without cookies)"
-            base_cmd = get_yt_dlp_base_cmd(include_cookies=use_cookies, cookies_path=temp_cookies if use_cookies else None)
+            base_cmd = get_yt_dlp_base_cmd(include_cookies=use_cookies, cookies_path=temp_cookies if use_cookies else None, proxy=proxy)
             logger.info(f"Downloading HD section ({clip_duration:.1f}s) {t_start_fmt} -> {t_end_fmt} for {clean_url} ({mode_label}, timeout: {timeout_sec}s)")
+
+            if stage_callback:
+                stage_callback(f"Downloading HD clip slice ({mode_label})...", 48.0)
 
             # Method 1: yt-dlp --download-sections with multi-fragment acceleration, socket timeout, & retries
             cmd = [
                 *base_cmd,
                 "--download-sections", f"*{t_start_fmt}-{t_end_fmt}",
                 "--force-keyframes-at-cuts",
-                "-f", "bestvideo[height<=1080]+bestaudio/bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best[height<=1080]/best",
+                "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
                 "-N", "4",
-                "--socket-timeout", "20",
-                "--fragment-retries", "5",
-                "--retries", "5",
-                "--file-access-retries", "3",
+                "--socket-timeout", "12",
+                "--fragment-retries", "2",
+                "--retries", "2",
+                "--file-access-retries", "2",
                 "-o", str(output_path),
                 "--merge-output-format", "mp4",
                 "--no-warnings",
@@ -1071,6 +1100,9 @@ def download_clip_segment(
 
             # Method 2: Fallback - Extract direct stream URLs with yt-dlp and slice using FFmpeg with network reconnect
             logger.info(f"Direct section download fallback ({last_err_snippet}), trying stream URL trimming with auto-reconnect ({mode_label})...")
+            if stage_callback:
+                stage_callback(f"Extracting stream URLs ({mode_label})...", 60.0)
+
             try:
                 if output_path.exists():
                     try:
@@ -1079,18 +1111,18 @@ def download_clip_segment(
                         pass
                 url_cmd = [
                     *base_cmd,
-                    "--socket-timeout", "20",
+                    "--socket-timeout", "12",
                     "-g",
-                    "-f", "bestvideo[height<=1080]+bestaudio/bestvideo[height<=1440]+bestaudio/bestvideo+bestaudio/best[height<=1080]/best",
+                    "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
                     clean_url
                 ]
-                url_res = _run_subproc(url_cmd, timeout=30)
+                url_res = _run_subproc(url_cmd, timeout=20)
                 if url_res.returncode == 0 and url_res.stdout.strip():
                     urls = url_res.stdout.strip().split("\n")
                     video_stream = urls[0]
                     audio_stream = urls[1] if len(urls) > 1 else urls[0]
 
-                    trim_timeout = max(35, min(75, int(clip_duration * 1.5) + 25))
+                    trim_timeout = max(30, min(65, int(clip_duration * 1.2) + 20))
                     trim_cmd = [
                         "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                         "-reconnect", "1",
@@ -1138,6 +1170,9 @@ def download_clip_segment(
 
             # Method 3: Fallback - Download at 720p (vastly lower bandwidth, skips SABR/1080p throttling)
             logger.info(f"Method 3: Attempting fast 720p fallback section download for {clean_url} ({mode_label})...")
+            if stage_callback:
+                stage_callback(f"Downloading 720p fallback slice ({mode_label})...", 70.0)
+
             try:
                 if output_path.exists():
                     try:
@@ -1150,15 +1185,15 @@ def download_clip_segment(
                     "--force-keyframes-at-cuts",
                     "-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best",
                     "-N", "4",
-                    "--socket-timeout", "20",
-                    "--fragment-retries", "5",
-                    "--retries", "5",
+                    "--socket-timeout", "12",
+                    "--fragment-retries", "2",
+                    "--retries", "2",
                     "-o", str(output_path),
                     "--merge-output-format", "mp4",
                     "--no-warnings",
                     clean_url
                 ]
-                timeout_720p = max(30, min(60, int(clip_duration * 1.2) + 20))
+                timeout_720p = max(25, min(50, int(clip_duration * 1.0) + 15))
                 res_720p = _run_subproc(cmd_720p, timeout=timeout_720p)
                 if res_720p.returncode == 0 and is_valid_mp4(output_path):
                     logger.info(f"Successfully downloaded 720p fallback section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
@@ -1181,6 +1216,9 @@ def download_clip_segment(
 
             # Method 4: Fallback - Download at 480p / lowest bandwidth (guaranteed to succeed on high lag)
             logger.info(f"Method 4: Attempting low-bandwidth 480p fallback section download for {clean_url} ({mode_label})...")
+            if stage_callback:
+                stage_callback(f"Downloading 480p fallback slice ({mode_label})...", 80.0)
+
             try:
                 if output_path.exists():
                     try:
@@ -1193,15 +1231,15 @@ def download_clip_segment(
                     "--force-keyframes-at-cuts",
                     "-f", "bestvideo[height<=480]+bestaudio/best[height<=480]/best",
                     "-N", "2",
-                    "--socket-timeout", "20",
-                    "--fragment-retries", "3",
-                    "--retries", "3",
+                    "--socket-timeout", "12",
+                    "--fragment-retries", "2",
+                    "--retries", "2",
                     "-o", str(output_path),
                     "--merge-output-format", "mp4",
                     "--no-warnings",
                     clean_url
                 ]
-                timeout_480p = max(25, min(45, int(clip_duration * 1.0) + 15))
+                timeout_480p = max(20, min(35, int(clip_duration * 0.8) + 10))
                 res_480p = _run_subproc(cmd_480p, timeout=timeout_480p)
                 if res_480p.returncode == 0 and is_valid_mp4(output_path):
                     logger.info(f"Successfully downloaded 480p fallback section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
