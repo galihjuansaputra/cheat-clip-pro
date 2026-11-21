@@ -1283,6 +1283,63 @@ def download_clip_segment(
     raise RuntimeError(f"Failed to download video clip segment from YouTube ({last_err_snippet}). Check your internet connection or cookies.")
 
 
+def parse_bytes_from_string(size_str: str) -> float:
+    """Parses size strings like '78848KiB', '45.2MiB', '1.2GiB', '800KB' into float bytes."""
+    if not size_str:
+        return 0.0
+    m = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)', size_str)
+    if not m:
+        return 0.0
+    try:
+        val = float(m.group(1))
+        unit = m.group(2).lower()
+        if 'g' in unit:
+            return val * 1024 * 1024 * 1024
+        elif 'm' in unit:
+            return val * 1024 * 1024
+        elif 'k' in unit:
+            return val * 1024
+        return val
+    except Exception:
+        return 0.0
+
+
+def format_human_size(num_bytes: float) -> str:
+    """Formats raw byte count into standard, human-readable MB or GB representation."""
+    if num_bytes >= 1024 * 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024 * 1024):.1f} GB"
+    elif num_bytes >= 1024 * 1024:
+        return f"{num_bytes / (1024 * 1024):.1f} MB"
+    elif num_bytes >= 1024:
+        return f"{num_bytes / 1024:.1f} KB"
+    elif num_bytes > 0:
+        return f"{int(num_bytes)} B"
+    return ""
+
+
+def format_human_speed(speed_str: str) -> str:
+    """Standardizes speeds like '101.78KiB/s' or '14.64MiB/s' into '101.8 KB/s' or '14.6 MB/s'."""
+    if not speed_str:
+        return ""
+    clean = speed_str.replace("~", "").strip()
+    m = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*([a-zA-Z]+)/s', clean)
+    if not m:
+        return clean
+    try:
+        val = float(m.group(1))
+        unit = m.group(2).lower()
+        b = val
+        if 'g' in unit:
+            b = val * 1024 * 1024 * 1024
+        elif 'm' in unit:
+            b = val * 1024 * 1024
+        elif 'k' in unit:
+            b = val * 1024
+        return f"{format_human_size(b)}/s"
+    except Exception:
+        return clean
+
+
 def read_subprocess_lines(stream):
     """
     Yields lines delimited by either \\r or \\n from a subprocess stdout stream,
@@ -1321,7 +1378,8 @@ def download_full_raw_video(
     output_path: Union[str, Path],
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
     cookies_content: Optional[str] = None,
-    max_end_time: Optional[float] = None
+    max_end_time: Optional[float] = None,
+    on_process_spawned: Optional[Callable[[subprocess.Popen], None]] = None
 ) -> str:
     """
     Downloads the full raw video from YouTube in maximum quality (up to 1080p),
@@ -1462,7 +1520,7 @@ def download_full_raw_video(
             if progress_callback:
                 progress_callback({
                     "percent": 5.0,
-                    "downloaded": "Menghubungkan ke YouTube...",
+                    "downloaded": "Menghubungkan...",
                     "total": "",
                     "speed": "",
                     "eta": "",
@@ -1470,7 +1528,16 @@ def download_full_raw_video(
                 })
 
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+            if on_process_spawned:
+                try:
+                    on_process_spawned(process)
+                except Exception:
+                    pass
+
             last_reported_pct = 5.0
+            last_bytes = 0.0
+            last_speed_time = time.time()
+            current_speed_str = ""
 
             for clean_line in read_subprocess_lines(process.stdout):
                 clean_line = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', clean_line).strip()
@@ -1485,7 +1552,7 @@ def download_full_raw_video(
                     if last_reported_pct <= 5.0:
                         progress_callback({
                             "percent": 5.0,
-                            "downloaded": "Menghubungkan ke YouTube...",
+                            "downloaded": "Menghubungkan...",
                             "total": "",
                             "speed": "",
                             "eta": "",
@@ -1498,7 +1565,6 @@ def download_full_raw_video(
                     tot_m = re.search(r'of\s*~?\s*([0-9.]+\s*[a-zA-Z]+)', clean_line)
                     spd_m = re.search(r'at\s+([0-9.]+\s*[a-zA-Z]+/s)', clean_line)
                     eta_m = re.search(r'ETA\s+([0-9:]+)', clean_line)
-                    frag_m = re.search(r'\(frag\s+([0-9]+/[0-9]+)\)', clean_line)
 
                     if pct_m:
                         try:
@@ -1508,26 +1574,16 @@ def download_full_raw_video(
                         except Exception:
                             pass
 
-                    total_str = tot_m.group(1).strip() if tot_m else ""
-                    speed_str = spd_m.group(1).strip() if spd_m else ""
-                    eta_str = eta_m.group(1).strip() if eta_m else ""
-                    frag_str = frag_m.group(1).strip() if frag_m else ""
+                    tot_bytes = parse_bytes_from_string(tot_m.group(1)) if tot_m else 0.0
+                    total_str = format_human_size(tot_bytes) if tot_bytes > 0 else (tot_m.group(1).strip() if tot_m else "")
+                    speed_str = format_human_speed(spd_m.group(1).strip()) if spd_m else ""
+                    eta_str = eta_m.group(1).strip() if (eta_m and eta_m.group(1) != "Unknown") else ""
 
-                    # Downloaded representation
+                    # Human-friendly downloaded representation (e.g. 24.5 MB)
                     dl_str = ""
-                    if total_str and last_reported_pct > 0:
-                        num_m = re.search(r'([0-9.]+)', total_str)
-                        unit_m = re.search(r'([a-zA-Z]+)', total_str)
-                        if num_m and unit_m:
-                            try:
-                                tot_num = float(num_m.group(1))
-                                unit = unit_m.group(1)
-                                dl_num = round((last_reported_pct / 100.0) * tot_num, 1)
-                                dl_str = f"{dl_num} {unit}"
-                            except Exception:
-                                dl_str = f"{last_reported_pct:.1f}%"
-                    elif frag_str:
-                        dl_str = f"frag {frag_str}"
+                    if tot_bytes > 0 and last_reported_pct > 0:
+                        dl_bytes = (last_reported_pct / 100.0) * tot_bytes
+                        dl_str = format_human_size(dl_bytes)
                     elif last_reported_pct > 0:
                         dl_str = f"{last_reported_pct:.1f}%"
 
@@ -1536,14 +1592,14 @@ def download_full_raw_video(
                         "downloaded": dl_str,
                         "total": total_str,
                         "speed": speed_str,
-                        "eta": eta_str
+                        "eta": eta_str,
+                        "detail": "Mengunduh video bahan master (1080p)..."
                     })
 
                 # 3. Check for FFmpeg progress (frame=... time=... speed=...)
                 elif "time=" in clean_line and ("frame=" in clean_line or "size=" in clean_line):
                     time_m = re.search(r'time=([0-9:.]+)', clean_line)
                     size_m = re.search(r'size=\s*([0-9.]+\s*[a-zA-Z]+)', clean_line)
-                    spd_m = re.search(r'speed=\s*([0-9.]+\s*x)', clean_line)
 
                     time_sec = 0.0
                     if time_m:
@@ -1554,23 +1610,45 @@ def download_full_raw_video(
                         except Exception:
                             pass
 
+                    cur_bytes = parse_bytes_from_string(size_m.group(1)) if size_m else 0.0
+                    now = time.time()
+                    dt = now - last_speed_time
+                    if dt >= 0.8:
+                        if cur_bytes > last_bytes and last_bytes > 0:
+                            spd_bps = (cur_bytes - last_bytes) / dt
+                            current_speed_str = f"{format_human_size(spd_bps)}/s"
+                        last_bytes = cur_bytes
+                        last_speed_time = now
+
                     target_sec = (max_end_time + 15) if (max_end_time and max_end_time > 0) else None
                     if target_sec and target_sec > 0 and time_sec > 0:
-                        calc_pct = min(95.0, (time_sec / target_sec) * 100.0)
+                        calc_pct = min(98.0, (time_sec / target_sec) * 100.0)
                         if calc_pct > last_reported_pct:
                             last_reported_pct = round(calc_pct, 1)
                     elif last_reported_pct < 10.0:
                         last_reported_pct = 10.0
 
-                    size_str = size_m.group(1).strip() if size_m else ""
-                    speed_str = spd_m.group(1).strip() if spd_m else ""
+                    # Estimated total size in bytes (NEVER in raw seconds!)
+                    est_total_str = ""
+                    if target_sec and time_sec > 2.0 and cur_bytes > 0:
+                        est_tot_bytes = (cur_bytes / time_sec) * target_sec
+                        est_total_str = f"~{format_human_size(est_tot_bytes)}"
+
+                    # ETA estimation
+                    eta_str = ""
+                    if target_sec and time_sec > 0 and (target_sec - time_sec) > 0:
+                        rem_sec = int(target_sec - time_sec)
+                        eta_str = f"{rem_sec // 60:02d}:{rem_sec % 60:02d}"
+
+                    dl_str = format_human_size(cur_bytes) if cur_bytes > 0 else f"{last_reported_pct:.1f}%"
 
                     progress_callback({
                         "percent": max(5.0, last_reported_pct),
-                        "downloaded": size_str or f"{last_reported_pct:.1f}%",
-                        "total": f"~{round(target_sec)}s" if target_sec else "",
-                        "speed": speed_str,
-                        "eta": ""
+                        "downloaded": dl_str,
+                        "total": est_total_str,
+                        "speed": current_speed_str,
+                        "eta": eta_str,
+                        "detail": "Mengunduh video bahan master (1080p)..."
                     })
 
                 # 4. Check for Merging / post-processing
@@ -1581,7 +1659,8 @@ def download_full_raw_video(
                         "downloaded": "Menggabungkan video & audio...",
                         "total": "100%",
                         "speed": "",
-                        "eta": "00:01"
+                        "eta": "00:01",
+                        "detail": "Menggabungkan format video & audio..."
                     })
 
             process.stdout.close()

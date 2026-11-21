@@ -403,6 +403,7 @@ export default function App() {
   const [isCancellingRender, setIsCancellingRender] = useState(false);
   const batchEventSourceRef = useRef<EventSource | null>(null);
   const clientRenderCancelledRef = useRef(false);
+  const activePrepJobIdRef = useRef<string | null>(null);
 
   const listenToBatchProgress = useCallback((batchId: string) => {
     if (batchEventSourceRef.current) {
@@ -599,8 +600,10 @@ export default function App() {
             }
             const prepData = await prepReq.json();
             const prepJobId = prepData.job_id;
+            activePrepJobIdRef.current = prepJobId;
 
             if (prepData.status === 'ready') {
+              activePrepJobIdRef.current = null;
               setSourcePrepProgress({
                 status: 'ready',
                 progress_percent: 100,
@@ -613,6 +616,7 @@ export default function App() {
                 const pollInterval = setInterval(async () => {
                   if (clientRenderCancelledRef.current) {
                     clearInterval(pollInterval);
+                    activePrepJobIdRef.current = null;
                     reject(new Error('Render dibatalkan'));
                     return;
                   }
@@ -622,6 +626,7 @@ export default function App() {
                       failCount++;
                       if (failCount > 5) {
                         clearInterval(pollInterval);
+                        activePrepJobIdRef.current = null;
                         reject(new Error('Koneksi terputus saat mengunduh bahan master'));
                       }
                       return;
@@ -630,6 +635,7 @@ export default function App() {
                     const stData = await stRes.json();
                     if (stData.status === 'ready') {
                       clearInterval(pollInterval);
+                      activePrepJobIdRef.current = null;
                       setSourcePrepProgress({
                         status: 'ready',
                         progress_percent: 100,
@@ -638,8 +644,14 @@ export default function App() {
                         detail: `✓ Video bahan master siap (${stData.total || stData.downloaded || '1080p'})`,
                       });
                       resolve();
+                    } else if (stData.status === 'cancelled') {
+                      clearInterval(pollInterval);
+                      activePrepJobIdRef.current = null;
+                      setSourcePrepProgress(null);
+                      reject(new Error('Pengambilan bahan dibatalkan'));
                     } else if (stData.status === 'failed') {
                       clearInterval(pollInterval);
+                      activePrepJobIdRef.current = null;
                       setSourcePrepProgress({
                         status: 'error',
                         progress_percent: 0,
@@ -652,16 +664,6 @@ export default function App() {
                       const pct = (!isNaN(rawPct) && rawPct > 0)
                         ? Math.max(5, Math.min(99, Math.round(rawPct)))
                         : 5;
-                      const etaText = stData.eta && stData.eta !== 'Unknown' ? ` • Sisa ~${stData.eta}` : '';
-                      const spdText = stData.speed && stData.speed !== 'Unknown B/s' ? ` • ${stData.speed}` : '';
-                      const bytesText = (stData.downloaded && stData.total)
-                        ? ` (${stData.downloaded} / ${stData.total})`
-                        : stData.downloaded
-                        ? ` (${stData.downloaded})`
-                        : '';
-                      const activeDetail = stData.detail
-                        ? `${stData.detail}${bytesText}${spdText}${etaText}`
-                        : `Mengunduh video bahan master 1080p${bytesText}${spdText}${etaText}...`;
                       setSourcePrepProgress({
                         status: 'downloading',
                         progress_percent: pct,
@@ -669,11 +671,12 @@ export default function App() {
                         total: stData.total,
                         speed: stData.speed,
                         eta: stData.eta,
-                        detail: activeDetail,
+                        detail: stData.detail || 'Mengunduh video bahan master 1080p dari YouTube...',
                       });
                     }
                   } catch (pollErr) {
                     clearInterval(pollInterval);
+                    activePrepJobIdRef.current = null;
                     reject(pollErr);
                   }
                 }, 1000);
@@ -1207,9 +1210,14 @@ export default function App() {
 
   const handleCancelRender = useCallback(async () => {
     clientRenderCancelledRef.current = true;
+    if (activePrepJobIdRef.current) {
+      const pId = activePrepJobIdRef.current;
+      activePrepJobIdRef.current = null;
+      fetch(`/api/cancel-prepare-source/${pId}`, { method: 'POST' }).catch(() => {});
+    }
     setSourcePrepProgress(null);
+    setIsLaunchingRender(false);
     if (!batchProgress?.batch_id) {
-      setIsLaunchingRender(false);
       return;
     }
     const batchId = batchProgress.batch_id;

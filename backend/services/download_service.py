@@ -100,6 +100,25 @@ def find_master_source_video(
     return None
 
 
+def cancel_master_source_job(job_id: str) -> bool:
+    """Cancels an active master source download job and terminates any running subprocess."""
+    job = master_source_jobs.get(job_id)
+    if not job:
+        return False
+    job["status"] = "cancelled"
+    job["detail"] = "Proses pengunduhan bahan master dibatalkan oleh pengguna."
+    proc = job.get("_proc")
+    if proc:
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+            else:
+                proc.kill()
+        except Exception:
+            pass
+    return True
+
+
 async def run_master_source_job(
     job_id: str,
     v_url: str,
@@ -113,6 +132,8 @@ async def run_master_source_job(
     """
     def on_progress(p: dict):
         if job_id in master_source_jobs:
+            if master_source_jobs[job_id].get("status") == "cancelled":
+                return
             new_pct = float(p.get("percent", 0.0) or 0.0)
             cur_pct = float(master_source_jobs[job_id].get("progress_percent", 0.0) or 0.0)
             if new_pct > cur_pct or cur_pct <= 5.0:
@@ -127,6 +148,10 @@ async def run_master_source_job(
                 master_source_jobs[job_id]["eta"] = p.get("eta")
             if p.get("detail"):
                 master_source_jobs[job_id]["detail"] = p.get("detail")
+
+    def on_spawn(p):
+        if job_id in master_source_jobs:
+            master_source_jobs[job_id]["_proc"] = p
 
     try:
         master_source_jobs[job_id]["status"] = "downloading"
@@ -146,7 +171,11 @@ async def run_master_source_job(
             return
 
         logger.info(f"Downloading master source video for {video_id} to {master_path} (max_end_time={max_end_time})...")
-        await asyncio.to_thread(download_full_raw_video, v_url, str(master_path), on_progress, cookies_content, max_end_time)
+        await asyncio.to_thread(download_full_raw_video, v_url, str(master_path), on_progress, cookies_content, max_end_time, on_spawn)
+
+        if master_source_jobs[job_id].get("status") == "cancelled":
+            logger.info(f"Master source download job {job_id} cancelled by user")
+            return
 
         if master_path.exists() and is_valid_mp4(master_path):
             size_mb = round(master_path.stat().st_size / (1024 * 1024), 1)
@@ -160,6 +189,8 @@ async def run_master_source_job(
         else:
             raise RuntimeError("Master video file is missing or invalid after download.")
     except Exception as e:
+        if master_source_jobs.get(job_id, {}).get("status") == "cancelled":
+            return
         logger.error(f"Master source download job {job_id} failed: {e}")
         master_source_jobs[job_id]["status"] = "failed"
         master_source_jobs[job_id]["error"] = str(e)

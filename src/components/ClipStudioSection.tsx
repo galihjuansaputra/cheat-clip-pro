@@ -5542,9 +5542,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                   </div>
                 </div>
 
-                {sourcePrepProgress.status === 'downloading' && (
+                {(sourcePrepProgress.status === 'downloading' || sourcePrepProgress.status === 'checking') && (
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', fontSize: '0.68rem', color: '#cbd5e1' }}>
-                    {sourcePrepProgress.downloaded && (
+                    {sourcePrepProgress.downloaded && sourcePrepProgress.downloaded !== 'Menghubungkan...' && (
                       <span>📦 <strong>{sourcePrepProgress.downloaded}</strong>{sourcePrepProgress.total ? ` / ${sourcePrepProgress.total}` : ''}</span>
                     )}
                     {sourcePrepProgress.speed && (
@@ -5557,6 +5557,32 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       <span style={{ fontWeight: 800, color: '#38bdf8', fontSize: '0.78rem' }}>
                         {Math.round(sourcePrepProgress.progress_percent)}%
                       </span>
+                    )}
+                    {onCancelRender && (
+                      <button
+                        type="button"
+                        onClick={onCancelRender}
+                        disabled={isCancellingRender}
+                        style={{
+                          padding: '2px 8px',
+                          fontSize: '0.65rem',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '0.25rem',
+                          background: 'rgba(239, 68, 68, 0.15)',
+                          border: '1px solid rgba(239, 68, 68, 0.45)',
+                          color: '#f87171',
+                          borderRadius: '4px',
+                          cursor: isCancellingRender ? 'not-allowed' : 'pointer',
+                          fontWeight: 700,
+                          marginLeft: '0.35rem',
+                          transition: 'all 0.2s ease'
+                        }}
+                        title="Batalkan proses pengambilan bahan"
+                      >
+                        <XCircle size={12} />
+                        <span>{isCancellingRender ? 'Membatalkan...' : 'Batal'}</span>
+                      </button>
                     )}
                   </div>
                 )}

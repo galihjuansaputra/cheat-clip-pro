@@ -10,6 +10,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 from backend.config import EXPORTS_DIR, logger
 from backend.schemas.downloads import PrepareSourceRequest, RawClipDownloadRequest, RawVideoDownloadRequest
 from backend.services.download_service import (
+    cancel_master_source_job,
     find_master_source_video,
     master_source_jobs,
     raw_clip_download_jobs,
@@ -108,6 +109,12 @@ async def get_prepare_source_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Master source job not found")
     return job
+
+
+@router.post("/api/cancel-prepare-source/{job_id}")
+async def handle_cancel_prepare_source(job_id: str):
+    cancelled = cancel_master_source_job(job_id)
+    return {"job_id": job_id, "cancelled": cancelled}
 
 
 @router.post("/api/download-raw-video")
