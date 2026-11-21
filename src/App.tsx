@@ -557,8 +557,11 @@ export default function App() {
             progress_percent: 20,
             detail: 'Memeriksa cache video bahan master di server...',
           });
+          const maxEndTime = Math.max(...selectedClips.map(c => Number(c.end_time) || 0), 0);
+          const reqDurationParam = maxEndTime > 0 ? `&required_duration=${encodeURIComponent(String(maxEndTime))}` : '';
+
           try {
-            const chkRes = await fetch(`/api/source-status?video_id=${encodeURIComponent(result.video_id || '')}&video_url=${encodeURIComponent(targetUrl)}`);
+            const chkRes = await fetch(`/api/source-status?video_id=${encodeURIComponent(result.video_id || '')}&video_url=${encodeURIComponent(targetUrl)}${reqDurationParam}`);
             if (chkRes.ok) {
               const chkData = await chkRes.json();
               if (chkData.ready) {
@@ -587,6 +590,7 @@ export default function App() {
                 video_url: targetUrl,
                 video_id: result.video_id,
                 cookies: userCookies || undefined,
+                max_end_time: maxEndTime > 0 ? maxEndTime : undefined,
               })
             });
             if (!prepReq.ok) {
@@ -646,15 +650,18 @@ export default function App() {
                     } else {
                       const rawPct = Number(stData.progress_percent);
                       const pct = (!isNaN(rawPct) && rawPct > 0)
-                        ? Math.max(1, Math.min(99, Math.round(rawPct)))
+                        ? Math.max(5, Math.min(99, Math.round(rawPct)))
                         : 5;
-                      const etaText = stData.eta ? ` • Sisa ~${stData.eta}` : '';
-                      const spdText = stData.speed ? ` • ${stData.speed}` : '';
+                      const etaText = stData.eta && stData.eta !== 'Unknown' ? ` • Sisa ~${stData.eta}` : '';
+                      const spdText = stData.speed && stData.speed !== 'Unknown B/s' ? ` • ${stData.speed}` : '';
                       const bytesText = (stData.downloaded && stData.total)
                         ? ` (${stData.downloaded} / ${stData.total})`
                         : stData.downloaded
                         ? ` (${stData.downloaded})`
                         : '';
+                      const activeDetail = stData.detail
+                        ? `${stData.detail}${bytesText}${spdText}${etaText}`
+                        : `Mengunduh video bahan master 1080p${bytesText}${spdText}${etaText}...`;
                       setSourcePrepProgress({
                         status: 'downloading',
                         progress_percent: pct,
@@ -662,14 +669,14 @@ export default function App() {
                         total: stData.total,
                         speed: stData.speed,
                         eta: stData.eta,
-                        detail: `Mengunduh video bahan master 1080p${bytesText}${spdText}${etaText}...`,
+                        detail: activeDetail,
                       });
                     }
                   } catch (pollErr) {
                     clearInterval(pollInterval);
                     reject(pollErr);
                   }
-                }, 1200);
+                }, 1000);
               });
             }
           }

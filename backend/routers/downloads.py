@@ -23,13 +23,17 @@ router = APIRouter(tags=["Downloads"])
 
 
 @router.get("/api/source-status")
-async def get_source_status(video_id: Optional[str] = None, video_url: Optional[str] = None):
+async def get_source_status(
+    video_id: Optional[str] = None,
+    video_url: Optional[str] = None,
+    required_duration: Optional[float] = None
+):
     """
     Checks if a master source video (1080p HD) is cached locally on disk.
     If ready, clip slicing can be executed in ~1 second via local FFmpeg.
     """
     v_url = video_url.strip() if video_url else ""
-    master_path = find_master_source_video(video_id or "", v_url)
+    master_path = find_master_source_video(video_id or "", v_url, required_duration=required_duration)
     if master_path and master_path.exists():
         size_mb = round(master_path.stat().st_size / (1024 * 1024), 1)
         return {
@@ -63,7 +67,7 @@ async def handle_prepare_source(req: PrepareSourceRequest, background_tasks: Bac
     elif not v_url.startswith("http") and not v_url.startswith("/api/video/"):
         v_url = f"https://www.youtube.com/watch?v={v_url}"
 
-    existing = find_master_source_video(req.video_id or "", v_url)
+    existing = find_master_source_video(req.video_id or "", v_url, required_duration=req.max_end_time)
     if existing and existing.exists():
         size_mb = round(existing.stat().st_size / (1024 * 1024), 1)
         job_id = f"ready_{str(uuid.uuid4())[:6]}"
@@ -76,6 +80,7 @@ async def handle_prepare_source(req: PrepareSourceRequest, background_tasks: Bac
             "speed": "",
             "eta": "",
             "filename": existing.name,
+            "detail": f"Video bahan master 1080p siap ({size_mb} MB)",
             "error": None
         }
         return {"job_id": job_id, "status": "ready"}
@@ -84,15 +89,16 @@ async def handle_prepare_source(req: PrepareSourceRequest, background_tasks: Bac
     master_source_jobs[job_id] = {
         "job_id": job_id,
         "status": "starting",
-        "progress_percent": 0.0,
+        "progress_percent": 5.0,
         "downloaded": "",
         "total": "",
         "speed": "",
         "eta": "",
         "filename": None,
+        "detail": "Menghubungkan ke server YouTube...",
         "error": None
     }
-    background_tasks.add_task(run_master_source_job, job_id, v_url, req.video_id or "", req.cookies)
+    background_tasks.add_task(run_master_source_job, job_id, v_url, req.video_id or "", req.cookies, req.max_end_time)
     return {"job_id": job_id, "status": "starting"}
 
 

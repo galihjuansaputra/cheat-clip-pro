@@ -11,6 +11,7 @@ class PrepareSourceRequest(BaseModel):
     video_url: Optional[str] = None
     video_id: Optional[str] = None
     cookies: Optional[str] = None
+    max_end_time: Optional[float] = None
 
 class RawClipDownloadRequest(BaseModel):
     video_url: str

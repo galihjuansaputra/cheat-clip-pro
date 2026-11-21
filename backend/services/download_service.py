@@ -30,10 +30,28 @@ raw_clip_download_jobs: Dict[str, dict] = {}
 master_source_jobs: Dict[str, dict] = {}
 
 
-def find_master_source_video(video_id: str, video_url: Optional[str] = None) -> Optional[Path]:
+def get_video_duration_quick(file_path: Union[str, Path]) -> float:
+    """Returns video duration in seconds via ffprobe, or 0.0 on error."""
+    try:
+        probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(file_path)],
+            capture_output=True, text=True, timeout=5
+        )
+        val = probe.stdout.strip()
+        return float(val) if val else 0.0
+    except Exception:
+        return 0.0
+
+
+def find_master_source_video(
+    video_id: str,
+    video_url: Optional[str] = None,
+    required_duration: Optional[float] = None
+) -> Optional[Path]:
     """
     Locates any cached 1080p/HD master video source file for this video ID or URL.
     Checks EXPORTS_DIR, TEMP_DIR, and UPLOADS_DIR.
+    If required_duration is specified, ensures the file covers at least that duration.
     """
     raw_id = (video_id or "").replace("gdrive_", "").replace("upload_", "").strip()
     if not raw_id and video_url:
@@ -46,15 +64,24 @@ def find_master_source_video(video_id: str, video_url: Optional[str] = None) -> 
 
     safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', raw_id)
 
+    def _check_cand(p: Path) -> bool:
+        if not (p.exists() and p.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(p)):
+            return False
+        if required_duration and required_duration > 0:
+            dur = get_video_duration_quick(p)
+            if dur > 0 and dur < (required_duration - 1.0):
+                return False
+        return True
+
     # 1. Direct check for standard master source filenames
     for d in [EXPORTS_DIR, TEMP_DIR, UPLOADS_DIR]:
         if not d.exists():
             continue
         p1 = d / f"master_source_{safe_id}.mp4"
-        if p1.exists() and p1.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(p1):
+        if _check_cand(p1):
             return p1
         p2 = d / f"{safe_id}_master.mp4"
-        if p2.exists() and p2.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(p2):
+        if _check_cand(p2):
             return p2
 
     # 2. General scan in EXPORTS_DIR, TEMP_DIR, UPLOADS_DIR for matching raw video
@@ -65,7 +92,7 @@ def find_master_source_video(video_id: str, video_url: Optional[str] = None) -> 
             if f.is_file() and f.suffix.lower() in [".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"]:
                 if f.name.startswith("yt_audio_") or f.name.startswith("twitch_audio_") or "_clip_" in f.name:
                     continue
-                if safe_id in f.name and f.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(f):
+                if safe_id in f.name and _check_cand(f):
                     return f
 
     return None
@@ -75,7 +102,8 @@ async def run_master_source_job(
     job_id: str,
     v_url: str,
     video_id: str,
-    cookies_content: Optional[str] = None
+    cookies_content: Optional[str] = None,
+    max_end_time: Optional[float] = None
 ):
     """
     Downloads or prepares the master source video in 1080p quality, saving it to disk so that
@@ -85,8 +113,8 @@ async def run_master_source_job(
         if job_id in master_source_jobs:
             new_pct = float(p.get("percent", 0.0) or 0.0)
             cur_pct = float(master_source_jobs[job_id].get("progress_percent", 0.0) or 0.0)
-            if new_pct > cur_pct:
-                master_source_jobs[job_id]["progress_percent"] = new_pct
+            if new_pct > cur_pct or cur_pct <= 5.0:
+                master_source_jobs[job_id]["progress_percent"] = max(5.0, new_pct)
             if p.get("downloaded"):
                 master_source_jobs[job_id]["downloaded"] = p.get("downloaded")
             if p.get("total"):
@@ -95,6 +123,8 @@ async def run_master_source_job(
                 master_source_jobs[job_id]["speed"] = p.get("speed")
             if p.get("eta"):
                 master_source_jobs[job_id]["eta"] = p.get("eta")
+            if p.get("detail"):
+                master_source_jobs[job_id]["detail"] = p.get("detail")
 
     try:
         master_source_jobs[job_id]["status"] = "downloading"
@@ -102,7 +132,7 @@ async def run_master_source_job(
         master_path = EXPORTS_DIR / f"master_source_{safe_id}.mp4"
 
         # Check if already present on disk
-        existing = find_master_source_video(video_id, v_url)
+        existing = find_master_source_video(video_id, v_url, required_duration=max_end_time)
         if existing and existing.exists():
             logger.info(f"Master source video already available for {video_id}: {existing}")
             master_source_jobs[job_id]["status"] = "ready"
@@ -113,8 +143,8 @@ async def run_master_source_job(
             master_source_jobs[job_id]["total"] = master_source_jobs[job_id]["downloaded"]
             return
 
-        logger.info(f"Downloading master source video for {video_id} to {master_path}...")
-        await asyncio.to_thread(download_full_raw_video, v_url, str(master_path), on_progress, cookies_content)
+        logger.info(f"Downloading master source video for {video_id} to {master_path} (max_end_time={max_end_time})...")
+        await asyncio.to_thread(download_full_raw_video, v_url, str(master_path), on_progress, cookies_content, max_end_time)
 
         if master_path.exists() and is_valid_mp4(master_path):
             size_mb = round(master_path.stat().st_size / (1024 * 1024), 1)

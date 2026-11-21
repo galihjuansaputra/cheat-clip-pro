@@ -542,11 +542,11 @@ def get_yt_dlp_base_cmd(
             cmd.extend(["--cookies", str(eff)])
 
     if has_active_cookies:
-        # Prioritize clients that bypass YouTube's 80 KiB/s n-sig throttling (ios, android, mweb) while keeping session cookies valid
-        cmd.extend(["--extractor-args", "youtube:player_client=ios,android,mweb,web_embedded,web,default"])
+        # Prioritize unthrottled high-speed DASH formats while keeping session cookies valid
+        cmd.extend(["--extractor-args", "youtube:player_client=default,web_embedded,web,mweb,android,ios"])
     else:
-        # In guest mode (without cookies), use robust multi-client hierarchy to bypass bot checks and missing formats
-        cmd.extend(["--extractor-args", "youtube:player_client=ios,android,mweb,web_embedded,web,default"])
+        # In guest mode (without cookies), use robust multi-client hierarchy to bypass bot checks
+        cmd.extend(["--extractor-args", "youtube:player_client=default,web_embedded,web,mweb,android,ios"])
 
     cmd.append("--force-ipv4")
     return cmd
@@ -1057,7 +1057,6 @@ def download_clip_segment(
             cmd = [
                 *base_cmd,
                 "--download-sections", f"*{t_start_fmt}-{t_end_fmt}",
-                "--force-keyframes-at-cuts",
                 "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
                 "-N", "16",
                 "--concurrent-fragments", "16",
@@ -1284,15 +1283,51 @@ def download_clip_segment(
     raise RuntimeError(f"Failed to download video clip segment from YouTube ({last_err_snippet}). Check your internet connection or cookies.")
 
 
+def read_subprocess_lines(stream):
+    """
+    Yields lines delimited by either \\r or \\n from a subprocess stdout stream,
+    ensuring real-time progress callbacks for both FFmpeg and yt-dlp without blocking.
+    """
+    buffer = ""
+    while True:
+        try:
+            chunk = stream.read(128)
+        except Exception:
+            break
+        if not chunk:
+            if buffer.strip():
+                yield buffer.strip()
+            break
+        buffer += chunk
+        while '\r' in buffer or '\n' in buffer:
+            cr_idx = buffer.find('\r')
+            nl_idx = buffer.find('\n')
+            if cr_idx != -1 and (nl_idx == -1 or cr_idx < nl_idx):
+                line = buffer[:cr_idx]
+                buffer = buffer[cr_idx + 1:]
+                if buffer.startswith('\n'):
+                    buffer = buffer[1:]
+                if line.strip():
+                    yield line.strip()
+            else:
+                line = buffer[:nl_idx]
+                buffer = buffer[nl_idx + 1:]
+                if line.strip():
+                    yield line.strip()
+
+
 def download_full_raw_video(
     video_url: str,
     output_path: Union[str, Path],
     progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
-    cookies_content: Optional[str] = None
+    cookies_content: Optional[str] = None,
+    max_end_time: Optional[float] = None
 ) -> str:
     """
     Downloads the full raw video from YouTube in maximum quality (up to 1080p),
     or copies the local uploaded / Google Drive video file directly.
+    If max_end_time is provided (e.g. for batch rendering specific clips), downloads
+    the required prefix range to accelerate acquisition by 10-50x.
     """
     clean_raw = urllib.parse.unquote(video_url.strip())
     clean_name = os.path.basename(clean_raw.split("?")[0]).strip()
@@ -1362,12 +1397,25 @@ def download_full_raw_video(
             if cand.exists() and cand.stat().st_size > 5 * 1024 * 1024 and is_valid_mp4(cand):
                 try:
                     probe = subprocess.run(
-                        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height", "-of", "csv=p=0", str(cand)],
+                        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=height:format=duration", "-of", "csv=p=0", str(cand)],
                         capture_output=True, text=True, timeout=5
                     )
-                    h = int(probe.stdout.strip()) if probe.stdout.strip().isdigit() else 0
+                    probe_lines = [l.strip() for l in probe.stdout.strip().split("\n") if l.strip()]
+                    h = 0
+                    dur = 0.0
+                    for pl in probe_lines:
+                        try:
+                            if "." in pl:
+                                dur = float(pl)
+                            elif pl.isdigit():
+                                h = int(pl)
+                        except Exception:
+                            pass
                     if h >= required_height:
-                        logger.info(f"Reusing verified HD local video {cand.name} (height={h}p >= {required_height}p)")
+                        if max_end_time and max_end_time > 0 and dur > 0 and dur < (max_end_time - 1.0):
+                            logger.info(f"Cached video {cand.name} duration ({dur:.1f}s) is shorter than required {max_end_time:.1f}s; downloading fresh slice")
+                            continue
+                        logger.info(f"Reusing verified HD local video {cand.name} (height={h}p >= {required_height}p, dur={dur:.1f}s)")
                         local_source = cand
                         break
                     else:
@@ -1404,20 +1452,48 @@ def download_full_raw_video(
                 "-o", str(output_path),
                 "--merge-output-format", "mp4",
                 "--newline",
-                clean_url
             ]
+            if max_end_time and max_end_time > 0:
+                t_end_fmt = format_section_time(max_end_time + 15)
+                cmd.extend(["--download-sections", f"*00:00-{t_end_fmt}"])
+            cmd.append(clean_url)
+
             logger.info(f"Downloading full raw video ({mode_label}, 16 concurrent fragments) from {clean_url} to {output_path}...")
+            if progress_callback:
+                progress_callback({
+                    "percent": 5.0,
+                    "downloaded": "Menghubungkan ke YouTube...",
+                    "total": "",
+                    "speed": "",
+                    "eta": "",
+                    "detail": "Menghubungkan ke server YouTube..."
+                })
 
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
-            last_reported_pct = 0.0
+            last_reported_pct = 5.0
 
-            for line in iter(process.stdout.readline, ''):
-                raw_line = line.strip()
-                if not raw_line:
+            for clean_line in read_subprocess_lines(process.stdout):
+                clean_line = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', clean_line).strip()
+                if not clean_line:
                     continue
-                clean_line = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', raw_line).strip()
 
-                if "[download]" in clean_line and progress_callback:
+                if not progress_callback:
+                    continue
+
+                # 1. Check for initial connection / player extraction
+                if "[youtube]" in clean_line or "[info]" in clean_line:
+                    if last_reported_pct <= 5.0:
+                        progress_callback({
+                            "percent": 5.0,
+                            "downloaded": "Menghubungkan ke YouTube...",
+                            "total": "",
+                            "speed": "",
+                            "eta": "",
+                            "detail": "Menghubungkan ke server YouTube..."
+                        })
+
+                # 2. Check for yt-dlp download progress
+                elif "[download]" in clean_line:
                     pct_m = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*%', clean_line)
                     tot_m = re.search(r'of\s*~?\s*([0-9.]+\s*[a-zA-Z]+)', clean_line)
                     spd_m = re.search(r'at\s+([0-9.]+\s*[a-zA-Z]+/s)', clean_line)
@@ -1456,12 +1532,58 @@ def download_full_raw_video(
                         dl_str = f"{last_reported_pct:.1f}%"
 
                     progress_callback({
-                        "percent": last_reported_pct,
+                        "percent": max(5.0, last_reported_pct),
                         "downloaded": dl_str,
                         "total": total_str,
                         "speed": speed_str,
                         "eta": eta_str
                     })
+
+                # 3. Check for FFmpeg progress (frame=... time=... speed=...)
+                elif "time=" in clean_line and ("frame=" in clean_line or "size=" in clean_line):
+                    time_m = re.search(r'time=([0-9:.]+)', clean_line)
+                    size_m = re.search(r'size=\s*([0-9.]+\s*[a-zA-Z]+)', clean_line)
+                    spd_m = re.search(r'speed=\s*([0-9.]+\s*x)', clean_line)
+
+                    time_sec = 0.0
+                    if time_m:
+                        try:
+                            parts = time_m.group(1).split(':')
+                            if len(parts) == 3:
+                                time_sec = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+                        except Exception:
+                            pass
+
+                    target_sec = (max_end_time + 15) if (max_end_time and max_end_time > 0) else None
+                    if target_sec and target_sec > 0 and time_sec > 0:
+                        calc_pct = min(95.0, (time_sec / target_sec) * 100.0)
+                        if calc_pct > last_reported_pct:
+                            last_reported_pct = round(calc_pct, 1)
+                    elif last_reported_pct < 10.0:
+                        last_reported_pct = 10.0
+
+                    size_str = size_m.group(1).strip() if size_m else ""
+                    speed_str = spd_m.group(1).strip() if spd_m else ""
+
+                    progress_callback({
+                        "percent": max(5.0, last_reported_pct),
+                        "downloaded": size_str or f"{last_reported_pct:.1f}%",
+                        "total": f"~{round(target_sec)}s" if target_sec else "",
+                        "speed": speed_str,
+                        "eta": ""
+                    })
+
+                # 4. Check for Merging / post-processing
+                elif "[Merger]" in clean_line or "Merging formats" in clean_line:
+                    last_reported_pct = 95.0
+                    progress_callback({
+                        "percent": 95.0,
+                        "downloaded": "Menggabungkan video & audio...",
+                        "total": "100%",
+                        "speed": "",
+                        "eta": "00:01"
+                    })
+
             process.stdout.close()
             returncode = process.wait()
 
