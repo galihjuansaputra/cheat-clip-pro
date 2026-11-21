@@ -5725,7 +5725,11 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       {clip.status === 'pending' && <span style={{ fontSize: '0.68rem', color: 'var(--text-muted)' }}>{t.studio.statusWaitingShort}</span>}
                       {clip.status === 'downloading' && <span style={{ fontSize: '0.68rem', color: '#f59e0b' }}>{clip.error_message || t.studio.statusSlicingShort}</span>}
                       {clip.status === 'transcribing' && <span style={{ fontSize: '0.68rem', color: '#8b5cf6' }}>{t.studio.statusCaptionsShort}</span>}
-                      {clip.status === 'rendering' && <span style={{ fontSize: '0.68rem', color: '#3b82f6' }}>{t.studio.statusRenderingShort}</span>}
+                      {clip.status === 'rendering' && (
+                        <span style={{ fontSize: '0.68rem', color: '#3b82f6', fontWeight: 600 }}>
+                          {typeof t.studio.statusRenderingShort === 'function' ? t.studio.statusRenderingShort(clip.progress_percent) : t.studio.statusRenderingShort}
+                        </span>
+                      )}
                       {clip.status === 'completed' && (
                         clip.download_url ? (
                           <a

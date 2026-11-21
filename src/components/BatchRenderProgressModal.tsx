@@ -91,7 +91,9 @@ export const BatchRenderProgressModal: React.FC<BatchRenderProgressModalProps> =
                   <span className={`${styles.statusBadge} ${styles.badgeActive}`}>{t.batchProgress.statusCaptions}</span>
                 )}
                 {clip.status === 'rendering' && (
-                  <span className={`${styles.statusBadge} ${styles.badgeActive}`}>{t.batchProgress.statusRendering}</span>
+                  <span className={`${styles.statusBadge} ${styles.badgeActive}`}>
+                    {typeof t.batchProgress.statusRendering === 'function' ? t.batchProgress.statusRendering(clip.progress_percent) : t.batchProgress.statusRendering}
+                  </span>
                 )}
                 {clip.status === 'completed' && (
                   <div className={styles.completedActionRow}>
