@@ -99,7 +99,15 @@ async def handle_prepare_source(req: PrepareSourceRequest, background_tasks: Bac
         "detail": "Menghubungkan ke server YouTube...",
         "error": None
     }
-    background_tasks.add_task(run_master_source_job, job_id, v_url, req.video_id or "", req.cookies, req.max_end_time)
+    background_tasks.add_task(
+        run_master_source_job,
+        job_id,
+        v_url,
+        req.video_id or "",
+        req.cookies,
+        req.max_end_time,
+        req.clips
+    )
     return {"job_id": job_id, "status": "starting"}
 
 
@@ -108,7 +116,18 @@ async def get_prepare_source_status(job_id: str):
     job = master_source_jobs.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Master source job not found")
-    return job
+    return {
+        "job_id": job.get("job_id", job_id),
+        "status": job.get("status", "unknown"),
+        "progress_percent": float(job.get("progress_percent", 0.0) or 0.0),
+        "downloaded": str(job.get("downloaded", "") or ""),
+        "total": str(job.get("total", "") or ""),
+        "speed": str(job.get("speed", "") or ""),
+        "eta": str(job.get("eta", "") or ""),
+        "filename": job.get("filename"),
+        "detail": str(job.get("detail", "") or ""),
+        "error": job.get("error")
+    }
 
 
 @router.post("/api/cancel-prepare-source/{job_id}")

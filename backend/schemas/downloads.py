@@ -1,4 +1,4 @@
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 
 class RawVideoDownloadRequest(BaseModel):
@@ -12,6 +12,7 @@ class PrepareSourceRequest(BaseModel):
     video_id: Optional[str] = None
     cookies: Optional[str] = None
     max_end_time: Optional[float] = None
+    clips: Optional[List[Dict[str, Any]]] = None
 
 class RawClipDownloadRequest(BaseModel):
     video_url: str

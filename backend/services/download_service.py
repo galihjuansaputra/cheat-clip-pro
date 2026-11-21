@@ -30,6 +30,7 @@ from pathlib import Path
 raw_download_jobs: Dict[str, dict] = {}
 raw_clip_download_jobs: Dict[str, dict] = {}
 master_source_jobs: Dict[str, dict] = {}
+master_source_procs: Dict[str, subprocess.Popen] = {}
 
 
 def get_video_duration_quick(file_path: Union[str, Path]) -> float:
@@ -107,7 +108,7 @@ def cancel_master_source_job(job_id: str) -> bool:
         return False
     job["status"] = "cancelled"
     job["detail"] = "Proses pengunduhan bahan master dibatalkan oleh pengguna."
-    proc = job.get("_proc")
+    proc = master_source_procs.pop(job_id, None)
     if proc:
         try:
             if os.name == "nt":
@@ -124,7 +125,8 @@ async def run_master_source_job(
     v_url: str,
     video_id: str,
     cookies_content: Optional[str] = None,
-    max_end_time: Optional[float] = None
+    max_end_time: Optional[float] = None,
+    clips: Optional[List[Dict[str, Any]]] = None
 ):
     """
     Downloads or prepares the master source video in 1080p quality, saving it to disk so that
@@ -150,15 +152,14 @@ async def run_master_source_job(
                 master_source_jobs[job_id]["detail"] = p.get("detail")
 
     def on_spawn(p):
-        if job_id in master_source_jobs:
-            master_source_jobs[job_id]["_proc"] = p
+        master_source_procs[job_id] = p
 
     try:
         master_source_jobs[job_id]["status"] = "downloading"
         safe_id = re.sub(r'[^a-zA-Z0-9_-]', '_', (video_id or "video").replace("gdrive_", "").replace("upload_", ""))
         master_path = EXPORTS_DIR / f"master_source_{safe_id}.mp4"
 
-        # Check if already present on disk
+        # 1. Check if full master video is already available on disk
         existing = find_master_source_video(video_id, v_url, required_duration=max_end_time)
         if existing and existing.exists():
             logger.info(f"Master source video already available for {video_id}: {existing}")
@@ -168,8 +169,47 @@ async def run_master_source_job(
             master_source_jobs[job_id]["file_path"] = str(existing)
             master_source_jobs[job_id]["downloaded"] = f"{round(existing.stat().st_size / (1024 * 1024), 1)} MB"
             master_source_jobs[job_id]["total"] = master_source_jobs[job_id]["downloaded"]
+            master_source_jobs[job_id]["detail"] = "✓ Video bahan master siap di cache server!"
             return
 
+        # 2. If specific clips are requested, download only their required sections in HD 1080p
+        if clips and len(clips) > 0:
+            total_clips = len(clips)
+            for idx, c in enumerate(clips):
+                if master_source_jobs[job_id].get("status") == "cancelled":
+                    return
+                st = float(c.get("start_time", 0.0))
+                et = float(c.get("end_time", st + 30.0))
+                clip_label = f"klip {idx + 1}/{total_clips}"
+                target_fname = f"clip_bahan_{safe_id}_{int(st)}_{int(et)}.mp4"
+                target_p = TEMP_DIR / target_fname
+
+                if target_p.exists() and is_valid_mp4(target_p):
+                    logger.info(f"Clip bahan already ready for {clip_label}: {target_p}")
+                    continue
+
+                master_source_jobs[job_id]["detail"] = f"Mengunduh bahan {clip_label} (1080p)..."
+                master_source_jobs[job_id]["progress_percent"] = max(5.0, round((idx / total_clips) * 100.0, 1))
+
+                await asyncio.to_thread(
+                    download_clip_segment,
+                    v_url,
+                    st,
+                    et,
+                    target_fname,
+                    cookies_content,
+                    on_spawn
+                )
+
+            if master_source_jobs[job_id].get("status") == "cancelled":
+                return
+
+            master_source_jobs[job_id]["status"] = "ready"
+            master_source_jobs[job_id]["progress_percent"] = 100.0
+            master_source_jobs[job_id]["detail"] = "✓ Video bahan klip master 1080p siap!"
+            return
+
+        # 3. Otherwise download full raw video
         logger.info(f"Downloading master source video for {video_id} to {master_path} (max_end_time={max_end_time})...")
         await asyncio.to_thread(download_full_raw_video, v_url, str(master_path), on_progress, cookies_content, max_end_time, on_spawn)
 
@@ -186,6 +226,7 @@ async def run_master_source_job(
             master_source_jobs[job_id]["file_path"] = str(master_path)
             master_source_jobs[job_id]["downloaded"] = f"{size_mb} MB"
             master_source_jobs[job_id]["total"] = f"{size_mb} MB"
+            master_source_jobs[job_id]["detail"] = f"✓ Video bahan master siap ({size_mb} MB)"
         else:
             raise RuntimeError("Master video file is missing or invalid after download.")
     except Exception as e:
@@ -194,6 +235,8 @@ async def run_master_source_job(
         logger.error(f"Master source download job {job_id} failed: {e}")
         master_source_jobs[job_id]["status"] = "failed"
         master_source_jobs[job_id]["error"] = str(e)
+    finally:
+        master_source_procs.pop(job_id, None)
 
 
 async def run_raw_download_job(

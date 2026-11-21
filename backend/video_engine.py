@@ -977,6 +977,18 @@ def download_clip_segment(
             if v_match:
                 stream_id_match = v_match.group(1)
 
+        # Check if direct clip material was already acquired by Stage 1
+        stream_id = stream_id_match or re.sub(r'[^a-zA-Z0-9_-]', '_', clean_url.split("?")[0])
+        pre_candidates = [
+            TEMP_DIR / f"clip_bahan_{stream_id}_{int(start_time)}_{int(end_time)}.mp4",
+            EXPORTS_DIR / f"clip_bahan_{stream_id}_{int(start_time)}_{int(end_time)}.mp4",
+        ]
+        for pre in pre_candidates:
+            if pre.exists() and pre.stat().st_size > 50 * 1024 and is_valid_mp4(pre):
+                logger.info(f"Reusing pre-acquired Stage 1 HD clip segment: {pre.name} -> {output_path}")
+                shutil.copyfile(str(pre), str(output_path))
+                return str(output_path)
+
         candidate_sources: List[Path] = []
         for d in [EXPORTS_DIR, TEMP_DIR, UPLOADS_DIR]:
             if d.exists():
@@ -1033,8 +1045,8 @@ def download_clip_segment(
     t_start_fmt = format_section_time(start_time)
     t_end_fmt = format_section_time(end_time)
 
-    # Fast, bounded timeout: ensures clips are fetched quickly or failover fast without hanging for hours.
-    timeout_sec = max(35, min(75, int(clip_duration * 1.2) + 20))
+    # Bounded timeout: ensures clips are fetched quickly with adequate headroom for network fluctuations.
+    timeout_sec = max(60, min(180, int(clip_duration * 2.5) + 45))
 
     if stage_callback:
         stage_callback("Preparing YouTube video stream...", 42.0)
@@ -1440,6 +1452,18 @@ def download_full_raw_video(
             v_match = re.search(r'youtu\.be/([a-zA-Z0-9_-]{11})', clean_url)
             if v_match:
                 stream_id_match = v_match.group(1)
+
+        # Check if direct clip material was already acquired by Stage 1
+        stream_id = stream_id_match or re.sub(r'[^a-zA-Z0-9_-]', '_', clean_url.split("?")[0])
+        pre_candidates = [
+            TEMP_DIR / f"clip_bahan_{stream_id}_{int(start_time)}_{int(end_time)}.mp4",
+            EXPORTS_DIR / f"clip_bahan_{stream_id}_{int(start_time)}_{int(end_time)}.mp4",
+        ]
+        for pre in pre_candidates:
+            if pre.exists() and pre.stat().st_size > 50 * 1024 and is_valid_mp4(pre):
+                logger.info(f"Reusing pre-acquired Stage 1 HD clip segment: {pre.name} -> {output_path}")
+                shutil.copyfile(str(pre), str(output_path))
+                return str(output_path)
 
         candidate_sources: List[Path] = []
         for d in [EXPORTS_DIR, TEMP_DIR, UPLOADS_DIR]:

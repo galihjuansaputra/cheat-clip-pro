@@ -584,6 +584,11 @@ export default function App() {
               progress_percent: 5,
               detail: 'Menghubungkan ke YouTube & mengunduh video bahan master (1080p)...',
             });
+            const prepClips = selectedClips.map(c => ({
+              start_time: Number(c.start_time) || 0,
+              end_time: Number(c.end_time) || 0,
+              title: c.title || ''
+            }));
             const prepReq = await fetch('/api/prepare-source', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
@@ -592,6 +597,7 @@ export default function App() {
                 video_id: result.video_id,
                 cookies: userCookies || undefined,
                 max_end_time: maxEndTime > 0 ? maxEndTime : undefined,
+                clips: prepClips
               })
             });
             if (!prepReq.ok) {
