@@ -2657,12 +2657,12 @@ export default function App() {
         msg.includes('NetworkError') ||
         msg.includes('503') ||
         msg.includes('ECONNREFUSED') ||
-        msg.includes('server on port 8000') ||
+        msg.includes('server on port') ||
         msg.includes('not running')
       ) {
         setError(
-          '[CONN] Backend API Server is unreachable (Port 8000).\n' +
-          'Please ensure the full app is running in your terminal (`npm run dev`).\n' +
+          '[CONN] Backend API Server is unreachable.\n' +
+          'Please ensure the full app is running in your terminal (`npm run dev` or `start.bat`).\n' +
           'If Python dependencies were not installed yet, run: `pip install -r requirements.txt`'
         );
       } else {

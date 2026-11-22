@@ -240,6 +240,42 @@ async function start() {
   const pythonExe = selectedCandidate.exe;
   const baseArgs = selectedCandidate.args;
   const backendEnv = getSanitizedEnv(pythonExe);
+  const backendPort = process.env.BACKEND_PORT || process.env.PORT || '27889';
+
+  // Automatically terminate any zombie process holding the target port before starting
+  try {
+    if (isWindows) {
+      const netstat = spawnSync('cmd.exe', ['/c', `netstat -ano | findstr :${backendPort}`], { encoding: 'utf8' });
+      if (netstat.stdout) {
+        const lines = netstat.stdout.trim().split('\n');
+        for (const line of lines) {
+          if (line.includes('LISTENING') || line.includes(`:${backendPort}`)) {
+            const parts = line.trim().split(/\s+/);
+            const pid = parts[parts.length - 1];
+            if (pid && pid !== '0' && pid !== String(process.pid)) {
+              try {
+                spawnSync('taskkill', ['/F', '/PID', pid], { stdio: 'ignore' });
+                console.log(`\x1b[33m[INFO] Automatically freed port ${backendPort} by terminating stale process (PID: ${pid}).\x1b[0m`);
+              } catch {}
+            }
+          }
+        }
+      }
+    } else {
+      const lsof = spawnSync('lsof', ['-ti', `:${backendPort}`], { encoding: 'utf8' });
+      if (lsof.stdout) {
+        const pids = lsof.stdout.trim().split('\n');
+        for (const pid of pids) {
+          if (pid && pid !== String(process.pid)) {
+            try {
+              process.kill(Number(pid), 'SIGKILL');
+              console.log(`\x1b[33m[INFO] Automatically freed port ${backendPort} by terminating stale process (PID: ${pid}).\x1b[0m`);
+            } catch {}
+          }
+        }
+      }
+    }
+  } catch {}
 
   const uvicornArgs = [
     ...baseArgs,
@@ -249,13 +285,13 @@ async function start() {
     '--host',
     '0.0.0.0',
     '--port',
-    '8000',
+    backendPort,
     '--reload',
     '--reload-dir',
     path.join(rootDir, 'backend')
   ];
 
-  console.log('\x1b[34m%s\x1b[0m', `🚀 Launching FastAPI server on http://127.0.0.1:8000 ...`);
+  console.log('\x1b[34m%s\x1b[0m', `🚀 Launching FastAPI server on http://127.0.0.1:${backendPort} ...`);
 
   const backendProc = spawn(pythonExe, uvicornArgs, {
     cwd: rootDir,
@@ -273,7 +309,7 @@ async function start() {
     if (code !== 0 && code !== null) {
       console.error('\x1b[31m%s\x1b[0m', `⚠️ Backend server process exited with code ${code}.`);
       console.error('\x1b[33m%s\x1b[0m', `💡 Common reasons:`);
-      console.error('\x1b[33m%s\x1b[0m', `   1. Port 8000 is already in use by another app or zombie process.`);
+      console.error('\x1b[33m%s\x1b[0m', `   1. Port ${backendPort} is already in use by another app or zombie process.`);
       console.error('\x1b[33m%s\x1b[0m', `   2. Missing dependencies. Run: pip install -r backend/requirements.txt`);
       console.error('\x1b[33m%s\x1b[0m', `   3. If space in username path on Windows, ensure venv was created properly.`);
     }

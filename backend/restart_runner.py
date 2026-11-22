@@ -16,7 +16,9 @@ from pathlib import Path
 logging.basicConfig(level=logging.INFO, format="[restart_runner] %(message)s")
 logger = logging.getLogger("restart_runner")
 
-def free_ports_windows(ports=(8000, 5173)):
+DEFAULT_PORTS = (27889, 27888, 8000, 5173)
+
+def free_ports_windows(ports=DEFAULT_PORTS):
     """Frees specified ports on Windows using PowerShell or taskkill."""
     current_pid = os.getpid()
     
@@ -64,7 +66,7 @@ def free_ports_windows(ports=(8000, 5173)):
     except Exception:
         pass
 
-def free_ports_unix(ports=(8000, 5173)):
+def free_ports_unix(ports=DEFAULT_PORTS):
     """Frees specified ports on Unix/macOS."""
     for p in ports:
         try:
@@ -93,11 +95,11 @@ def main():
     logger.info(f"Waiting {args.delay}s to allow client response to complete...")
     time.sleep(args.delay)
 
-    logger.info("Freeing ports 8000 and 5173...")
+    logger.info("Freeing local dev ports...")
     if os.name == "nt":
-        free_ports_windows((8000, 5173))
+        free_ports_windows()
     else:
-        free_ports_unix((8000, 5173))
+        free_ports_unix()
 
     time.sleep(1.0)
 

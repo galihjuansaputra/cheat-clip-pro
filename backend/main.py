@@ -103,6 +103,10 @@ if allowed_origins_env:
     allow_origins = [orig.strip() for orig in allowed_origins_env.split(",") if orig.strip()]
 else:
     allow_origins = [
+        "http://localhost:27888",
+        "http://127.0.0.1:27888",
+        "http://localhost:27889",
+        "http://127.0.0.1:27889",
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:8000",
@@ -175,5 +179,5 @@ else:
 if __name__ == "__main__":
     import uvicorn
     host = os.environ.get("HOST", "127.0.0.1")
-    port = int(os.environ.get("PORT", "8000"))
+    port = int(os.environ.get("PORT", "27889"))
     uvicorn.run("backend.main:app", host=host, port=port, reload=True)

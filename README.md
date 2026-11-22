@@ -88,9 +88,9 @@ Launch both the frontend and backend servers concurrently:
 npm run dev
 ```
 
-* **Web App:** [`http://localhost:5173`](http://localhost:5173)
-* **Backend API:** [`http://localhost:8000`](http://localhost:8000)
-* **API Documentation:** [`http://localhost:8000/docs`](http://localhost:8000/docs)
+* **Web App:** [`http://localhost:27888`](http://localhost:27888)
+* **Backend API:** [`http://localhost:27889`](http://localhost:27889)
+* **API Documentation:** [`http://localhost:27889/docs`](http://localhost:27889/docs)
 
 ---
 

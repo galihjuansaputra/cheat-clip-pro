@@ -105,9 +105,17 @@ function runService(name, command, args, color) {
   return proc;
 }
 
+const BACKEND_PORT = process.env.BACKEND_PORT || process.env.PORT || '27889';
+const FRONTEND_PORT = process.env.FRONTEND_PORT || process.env.VITE_PORT || '27888';
+process.env.BACKEND_PORT = BACKEND_PORT;
+process.env.FRONTEND_PORT = FRONTEND_PORT;
+
 console.log(`${COLORS.bold}${COLORS.cyan}===================================================${COLORS.reset}`);
 console.log(`${COLORS.bold}  Starting Cheat Clip PRO Development Environment   ${COLORS.reset}`);
-console.log(`${COLORS.bold}${COLORS.cyan}===================================================${COLORS.reset}\n`);
+console.log(`${COLORS.bold}${COLORS.cyan}===================================================${COLORS.reset}`);
+console.log(`  ${COLORS.cyan}Web App UI:     ${COLORS.reset}http://localhost:${FRONTEND_PORT}`);
+console.log(`  ${COLORS.magenta}Backend API:    ${COLORS.reset}http://localhost:${BACKEND_PORT}`);
+console.log(`  ${COLORS.gray}API Docs:       ${COLORS.reset}http://localhost:${BACKEND_PORT}/docs\n`);
 
 // 1. Start Python FastAPI Backend Server
 const backendScript = path.join(rootDir, 'scripts', 'start-backend.js');
