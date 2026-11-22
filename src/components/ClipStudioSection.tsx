@@ -678,11 +678,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           const wEnd = wStart + wDur;
           curTime = wEnd;
 
-          allWords.push({
-            text: tok,
-            start: wStart,
-            end: wEnd,
-          });
+          if (wEnd > clipStart + 0.05 && wStart < clipEnd - 0.05) {
+            allWords.push({
+              text: tok,
+              start: Math.max(clipStart, wStart),
+              end: Math.min(clipEnd, Math.max(wStart + 0.1, wEnd)),
+            });
+          }
         });
       }
     }
@@ -706,11 +708,13 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
           const wEnd = wStart + wDur;
           curTime = wEnd;
 
-          allWords.push({
-            text: tok,
-            start: wStart,
-            end: wEnd,
-          });
+          if (wEnd > clipStart + 0.05 && wStart < clipEnd - 0.05) {
+            allWords.push({
+              text: tok,
+              start: Math.max(clipStart, wStart),
+              end: Math.min(clipEnd, Math.max(wStart + 0.1, wEnd)),
+            });
+          }
         });
       }
     }

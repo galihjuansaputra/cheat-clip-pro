@@ -480,7 +480,35 @@ async def run_raw_clip_download_job(
                     raw_clip_download_jobs[job_id]["stage"] = p["stage"]
 
         success = False
-        if source_video and Path(source_video).exists():
+
+        # 0. Check if direct HD clip segment was already acquired by Stage 1 master acquisition
+        stream_id = None
+        if "v=" in v_url:
+            v_match = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', v_url)
+            if v_match:
+                stream_id = v_match.group(1)
+        elif "youtu.be/" in v_url:
+            v_match = re.search(r'youtu\.be/([a-zA-Z0-9_-]{11})', v_url)
+            if v_match:
+                stream_id = v_match.group(1)
+        safe_id = stream_id or re.sub(r'[^a-zA-Z0-9_-]', '_', v_url.split("?")[0])
+
+        pre_candidates = [
+            TEMP_DIR / f"clip_bahan_{safe_id}_{int(start_time)}_{int(end_time)}.mp4",
+            EXPORTS_DIR / f"clip_bahan_{safe_id}_{int(start_time)}_{int(end_time)}.mp4",
+        ]
+        for pre in pre_candidates:
+            if pre.exists() and pre.stat().st_size > 50 * 1024 and is_valid_mp4(pre):
+                logger.info(f"Reusing pre-acquired Stage 1 HD clip segment for download: {pre.name} -> {out_path}")
+                raw_clip_download_jobs[job_id]["step_name"] = "Potong Klip"
+                raw_clip_download_jobs[job_id]["stage"] = "Menyiapkan klip HD..."
+                raw_clip_download_jobs[job_id]["progress_percent"] = 90.0
+                shutil.copyfile(str(pre), str(out_path))
+                if out_path.exists() and is_valid_mp4(out_path):
+                    success = True
+                    break
+
+        if not success and source_video and Path(source_video).exists():
             source_video_str = str(source_video)
             raw_clip_download_jobs[job_id]["step_name"] = "Potong Klip"
             raw_clip_download_jobs[job_id]["stage"] = "Memotong klip dari video master lokal..."
@@ -498,13 +526,13 @@ async def run_raw_clip_download_job(
                     *ACTIVE_ENCODER_ARGS,
                     "-c:a", "aac",
                     "-b:a", "192k",
-                    "-avoid_negative_ts", "make_zero",
+                    "-af", "aresample=async=1:first_pts=0",
                     "-movflags", "+faststart",
                     str(out_path)
                 ]
                 trim_timeout = max(60, int(duration_sec * 3) + 30)
                 await asyncio.to_thread(subprocess.run, trim_cmd, check=True, timeout=trim_timeout)
-                if out_path.exists() and out_path.stat().st_size > 1000:
+                if out_path.exists() and is_valid_mp4(out_path):
                     success = True
             except Exception as trim_err:
                 logger.warning(f"Hardware trimming failed ({trim_err}), retrying with CPU libx264...")
@@ -519,12 +547,12 @@ async def run_raw_clip_download_job(
                         "-crf", "18",
                         "-c:a", "aac",
                         "-b:a", "192k",
-                        "-avoid_negative_ts", "make_zero",
+                        "-af", "aresample=async=1:first_pts=0",
                         "-movflags", "+faststart",
                         str(out_path)
                     ]
                     await asyncio.to_thread(subprocess.run, cpu_trim_cmd, check=True, timeout=trim_timeout)
-                    if out_path.exists() and out_path.stat().st_size > 1000:
+                    if out_path.exists() and is_valid_mp4(out_path):
                         success = True
                 except Exception as cpu_err:
                     logger.warning(f"CPU trimming also failed ({cpu_err}), falling back to direct stream download...")
@@ -562,18 +590,17 @@ async def run_raw_clip_download_job(
                         out_path.unlink()
                     except Exception:
                         pass
-                # Fast timestamp and keyframe normalization to eliminate any playback stutter
+                # Fast timestamp and keyframe normalization without stripping audio edit lists
                 fix_cmd = [
                     "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
                     "-i", downloaded_temp,
                     "-c", "copy",
-                    "-avoid_negative_ts", "make_zero",
                     "-movflags", "+faststart",
                     str(out_path)
                 ]
                 try:
                     await asyncio.to_thread(subprocess.run, fix_cmd, check=True, timeout=45)
-                    if out_path.exists() and out_path.stat().st_size > 1000:
+                    if out_path.exists() and is_valid_mp4(out_path):
                         success = True
                         try:
                             os.unlink(downloaded_temp)
@@ -581,7 +608,7 @@ async def run_raw_clip_download_job(
                             pass
                 except Exception:
                     shutil.move(downloaded_temp, str(out_path))
-                    if out_path.exists() and out_path.stat().st_size > 1000:
+                    if out_path.exists() and is_valid_mp4(out_path):
                         success = True
 
         if raw_clip_download_jobs[job_id].get("status") == "cancelled":

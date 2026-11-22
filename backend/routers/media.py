@@ -248,6 +248,7 @@ async def extract_clip_audio_stream(
 
     cmd.extend([
         "-vn",
+        "-af", "aresample=async=1:first_pts=0",
         "-c:a", "pcm_s16le",
         "-ar", "44100",
         "-ac", "2",

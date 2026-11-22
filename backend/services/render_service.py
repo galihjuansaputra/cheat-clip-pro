@@ -610,7 +610,6 @@ async def render_merged_batch_clips(
                 "-map", "[v]", "-map", "[a]",
                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "18",
                 "-c:a", "aac", "-b:a", "192k",
-                "-avoid_negative_ts", "make_zero",
                 "-movflags", "+faststart",
                 raw_merged_path
             ]

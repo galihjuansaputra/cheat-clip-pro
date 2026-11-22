@@ -1029,7 +1029,7 @@ def download_clip_segment(
             "-t", str(clip_duration),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
             "-c:a", "aac", "-b:a", "192k",
-            "-avoid_negative_ts", "make_zero",
+            "-af", "aresample=async=1:first_pts=0",
             "-movflags", "+faststart",
             str(output_path)
         ]
@@ -1236,7 +1236,7 @@ def download_clip_segment(
                         *ACTIVE_ENCODER_ARGS,
                         "-c:a", "aac",
                         "-b:a", "192k",
-                        "-avoid_negative_ts", "make_zero",
+                        "-af", "aresample=async=1:first_pts=0",
                         "-movflags", "+faststart",
                         str(output_path)
                     ]
@@ -2904,19 +2904,16 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             vid_end = max(last_e, float(duration_seconds) - 0.05)
             chunk_bounds[-1] = (last_s, vid_end)
 
-        # Ensure subtitle visibility from frame 0 (0:00:00.00):
-        # If speech starts after 0.05s, display the first chunk in neutral/primary color
-        # from 0:00:00.00 until speech start, so viewers immediately see captions without waiting
-        if chunks:
+        # Natural subtitle entry alignment:
+        # If the first chunk's speech starts almost immediately (<= 0.15s), clamp start to 0.0
+        # for instant seamless appearance; otherwise let captions appear naturally when speech starts.
+        if chunks and chunk_bounds:
             first_speech_time = max(0.0, chunks[0][0]["start"])
-            if first_speech_time > 0.05:
-                intro_text = " ".join(item["word_text"] for item in chunks[0])
-                events.append(
-                    f"Dialogue: 0,0:00:00.00,{format_ass_timestamp(first_speech_time)},SubStyle,,0,0,0,,{{\\q2\\an{sub_align}\\pos({center_x},{sub_y})}}{intro_text}"
-                )
-            else:
-                c_s, c_e = chunk_bounds[0]
+            c_s, c_e = chunk_bounds[0]
+            if first_speech_time <= 0.15:
                 chunk_bounds[0] = (0.0, c_e)
+            else:
+                chunk_bounds[0] = (max(0.0, first_speech_time - 0.08), c_e)
 
         # Step D: Partition each chunk into strictly contiguous active-word time slices
         for chunk_idx, chunk in enumerate(chunks):
