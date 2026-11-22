@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import time
 import urllib.parse
-from typing import Dict, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from urllib.parse import quote
 
 from backend.utils.text import canonical_video_url
