@@ -1081,6 +1081,23 @@ export default function App() {
         return;
       } catch (clientErr: any) {
         console.error('Client rendering failed:', clientErr);
+        if (clientRenderCancelledRef.current) return;
+
+        // If video is available on the server (not an unsynced local upload), seamlessly fall back to server-side render
+        if (!(sourceMode === 'upload' && Boolean(uploadedVideoFile))) {
+          console.warn('[Render Engine] Client rendering encountered error, falling back to server-side render...');
+          try {
+            await handleStartBatchRender({
+              ...settings,
+              renderEngine: 'server',
+              hardwareAccel: 'auto'
+            }, true);
+            return;
+          } catch (serverFallbackErr) {
+            console.error('Server render fallback also failed:', serverFallbackErr);
+          }
+        }
+
         let errorMsg = clientErr?.message || 'Client-side rendering error';
         if (errorMsg.includes('Failed to fetch') || errorMsg.includes('NetworkError') || errorMsg.includes('Load failed')) {
           errorMsg = 'Koneksi ke backend server terputus saat merender. Silakan klik [~] Retry untuk mencoba kembali.';

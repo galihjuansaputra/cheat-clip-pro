@@ -116,7 +116,7 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
     targetWidth = 1080;
     targetHeight = 1920;
     if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
-      filterStr = `[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=8:2,scale=${targetWidth}:${targetHeight}[bg];[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2[v]`;
+      filterStr = `[0:v]split=2[in_bg][in_fg];[in_bg]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=8:2,scale=${targetWidth}:${targetHeight}[bg];[in_fg]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2:shortest=1[v]`;
     } else if (backgroundStyle === 'black') {
       filterStr = `[0:v]scale=${targetWidth}:${targetHeight}:force_original_aspect_ratio=decrease,pad=${targetWidth}:${targetHeight}:(ow-iw)/2:(oh-ih)/2:black[v]`;
     } else {
@@ -127,7 +127,7 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
     targetWidth = 1080;
     targetHeight = 1920;
     if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
-      filterStr = `[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=8:2,scale=${targetWidth}:${targetHeight}[bg];[0:v]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg];[bg][fg]overlay=0:420[v]`;
+      filterStr = `[0:v]split=2[in_bg][in_fg];[in_bg]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=8:2,scale=${targetWidth}:${targetHeight}[bg];[in_fg]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg];[bg][fg]overlay=0:420:shortest=1[v]`;
     } else {
       filterStr = `[0:v]scale=1080:1080:force_original_aspect_ratio=increase,crop=1080:1080[fg];[fg]pad=1080:1920:0:420:black[v]`;
     }
@@ -135,7 +135,7 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
     targetWidth = 1080;
     targetHeight = 1920;
     if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
-      filterStr = `[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=8:2,scale=${targetWidth}:${targetHeight}[bg];[0:v]scale=1080:810:force_original_aspect_ratio=increase,crop=1080:810[fg];[bg][fg]overlay=0:555[v]`;
+      filterStr = `[0:v]split=2[in_bg][in_fg];[in_bg]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=8:2,scale=${targetWidth}:${targetHeight}[bg];[in_fg]scale=1080:810:force_original_aspect_ratio=increase,crop=1080:810[fg];[bg][fg]overlay=0:555:shortest=1[v]`;
     } else {
       filterStr = `[0:v]scale=1080:810:force_original_aspect_ratio=increase,crop=1080:810[fg];[fg]pad=1080:1920:0:555:black[v]`;
     }
@@ -144,7 +144,7 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
     targetWidth = 1080;
     targetHeight = 1920;
     if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
-      filterStr = `[0:v]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=8:2,scale=${targetWidth}:${targetHeight}[bg];[0:v]scale=1080:608:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=0:656[v]`;
+      filterStr = `[0:v]split=2[in_bg][in_fg];[in_bg]scale=360:640:force_original_aspect_ratio=increase,crop=360:640,boxblur=8:2,scale=${targetWidth}:${targetHeight}[bg];[in_fg]scale=1080:608:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=0:656:shortest=1[v]`;
     } else {
       filterStr = `[0:v]scale=1080:608:force_original_aspect_ratio=decrease[fg];[fg]pad=1080:1920:0:656:black[v]`;
     }
@@ -167,9 +167,12 @@ export async function renderClipClientSide(options: ClientRenderOptions): Promis
     '-c:v', 'libx264',
     '-preset', 'ultrafast',
     '-threads', '1',
+    '-pix_fmt', 'yuv420p',
     '-crf', '26',
     '-c:a', 'aac',
     '-b:a', '128k',
+    '-shortest',
+    '-max_muxing_queue_size', '1024',
     '-movflags', '+faststart',
     outputName
   );

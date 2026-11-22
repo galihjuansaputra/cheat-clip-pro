@@ -598,10 +598,16 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
   video.preload = 'auto';
 
   await new Promise<void>((resolve, reject) => {
+    if (video.readyState >= 1) {
+      resolve();
+      return;
+    }
     let done = false;
+    let timer: any = null;
     const finish = () => {
       if (done) return;
       done = true;
+      if (timer) clearTimeout(timer);
       resolve();
     };
     video.onloadedmetadata = finish;
@@ -609,9 +615,25 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
     video.onerror = () => {
       if (done) return;
       done = true;
+      if (timer) clearTimeout(timer);
       const errInfo = video.error ? `code ${video.error.code} (${video.error.message || 'playback error'})` : 'media format error';
       reject(new Error(`Failed to load video element for WebCodecs processing: ${errInfo}`));
     };
+    timer = setTimeout(() => {
+      if (!done) {
+        if (video.videoWidth > 0 && video.duration > 0) {
+          finish();
+        } else {
+          done = true;
+          reject(new Error('Timeout loading video metadata in browser'));
+        }
+      }
+    }, 10000);
+    try {
+      video.load();
+    } catch {
+      // ignore
+    }
   });
 
   // Preload watermark image if enabled
