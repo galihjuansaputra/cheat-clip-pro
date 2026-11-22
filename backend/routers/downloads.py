@@ -13,6 +13,8 @@ from backend.config import EXPORTS_DIR, logger
 from backend.schemas.downloads import PrepareSourceRequest, RawClipDownloadRequest, RawVideoDownloadRequest
 from backend.services.download_service import (
     cancel_master_source_job,
+    cancel_raw_download_job,
+    cancel_raw_clip_download_job,
     find_master_source_video,
     master_source_jobs,
     raw_clip_download_jobs,
@@ -171,7 +173,7 @@ async def handle_download_raw_video(req: RawVideoDownloadRequest, background_tas
         "error": None
     }
 
-    background_tasks.add_task(run_raw_download_job, job_id, v_url, out_path, filename, download_title, req.cookies)
+    background_tasks.add_task(run_raw_download_job, job_id, v_url, out_path, filename, download_title, req.cookies, req.video_id)
     return {"job_id": job_id, "status": "starting"}
 
 
@@ -181,6 +183,12 @@ async def get_raw_download_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Download job not found")
     return job
+
+
+@router.post("/api/download-raw-cancel/{job_id}")
+async def handle_cancel_raw_download(job_id: str):
+    cancelled = cancel_raw_download_job(job_id)
+    return {"job_id": job_id, "cancelled": cancelled}
 
 
 @router.post("/api/download-raw-clip")
@@ -208,6 +216,10 @@ async def handle_download_raw_clip(req: RawClipDownloadRequest, background_tasks
         "step_name": "Ambil Bahan",
         "started_at": time.time(),
         "progress_percent": 0.0,
+        "downloaded": "",
+        "total": "",
+        "speed": "",
+        "eta": "",
         "title": download_title,
         "download_url": None,
         "filename": f"{download_title}.mp4",
@@ -234,3 +246,9 @@ async def get_raw_clip_download_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Clip download job not found")
     return job
+
+
+@router.post("/api/download-raw-clip-cancel/{job_id}")
+async def handle_cancel_raw_clip_download(job_id: str):
+    cancelled = cancel_raw_clip_download_job(job_id)
+    return {"job_id": job_id, "cancelled": cancelled}

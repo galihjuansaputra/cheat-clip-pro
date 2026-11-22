@@ -28,9 +28,49 @@ from backend.config import (
 from pathlib import Path
 
 raw_download_jobs: Dict[str, dict] = {}
+raw_download_procs: Dict[str, subprocess.Popen] = {}
 raw_clip_download_jobs: Dict[str, dict] = {}
+raw_clip_download_procs: Dict[str, subprocess.Popen] = {}
 master_source_jobs: Dict[str, dict] = {}
 master_source_procs: Dict[str, subprocess.Popen] = {}
+
+
+def cancel_raw_download_job(job_id: str) -> bool:
+    """Cancels an active raw full video download job and terminates any running subprocess."""
+    job = raw_download_jobs.get(job_id)
+    if not job:
+        return False
+    job["status"] = "cancelled"
+    job["error"] = "Unduhan video lengkap dibatalkan oleh pengguna."
+    proc = raw_download_procs.pop(job_id, None)
+    if proc:
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+            else:
+                proc.kill()
+        except Exception:
+            pass
+    return True
+
+
+def cancel_raw_clip_download_job(job_id: str) -> bool:
+    """Cancels an active raw clip download job and terminates any running subprocess."""
+    job = raw_clip_download_jobs.get(job_id)
+    if not job:
+        return False
+    job["status"] = "cancelled"
+    job["error"] = "Unduhan klip dibatalkan oleh pengguna."
+    proc = raw_clip_download_procs.pop(job_id, None)
+    if proc:
+        try:
+            if os.name == "nt":
+                subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)], capture_output=True)
+            else:
+                proc.kill()
+        except Exception:
+            pass
+    return True
 
 
 def get_video_duration_quick(file_path: Union[str, Path]) -> float:
@@ -245,18 +285,37 @@ async def run_raw_download_job(
     out_path: str,
     filename: str,
     download_title: Optional[str] = None,
-    cookies_content: Optional[str] = None
+    cookies_content: Optional[str] = None,
+    video_id: Optional[str] = None
 ):
     def on_progress(p: dict):
         if job_id in raw_download_jobs:
+            if raw_download_jobs[job_id].get("status") == "cancelled":
+                return
             raw_download_jobs[job_id]["progress_percent"] = p.get("percent", 0.0)
             raw_download_jobs[job_id]["downloaded"] = p.get("downloaded", "")
             raw_download_jobs[job_id]["total"] = p.get("total", "")
             raw_download_jobs[job_id]["speed"] = p.get("speed", "")
             raw_download_jobs[job_id]["eta"] = p.get("eta", "")
 
+    def on_spawn(p):
+        raw_download_procs[job_id] = p
+
     try:
         raw_download_jobs[job_id]["status"] = "downloading"
+
+        # 1. First check if master source video exists locally (e.g. from Stage 1 or cache)
+        if video_id:
+            master_video = find_master_source_video(video_id, v_url)
+            if master_video and Path(master_video).exists():
+                logger.info(f"Serving local master video {master_video} directly as full download {out_path}")
+                shutil.copy2(str(master_video), out_path)
+                raw_download_jobs[job_id]["status"] = "ready"
+                raw_download_jobs[job_id]["progress_percent"] = 100.0
+                dl_name = download_title or filename
+                raw_download_jobs[job_id]["download_url"] = f"/api/download-rendered/{filename}?title={quote(dl_name)}"
+                raw_download_jobs[job_id]["filename"] = f"{dl_name}.mp4" if not dl_name.endswith(".mp4") else dl_name
+                return
 
         # Check if local video exists (e.g. Google Drive or Uploaded video)
         clean_vname = urllib.parse.unquote(os.path.basename(v_url.split("?")[0])).strip()
@@ -300,16 +359,28 @@ async def run_raw_download_job(
             raw_download_jobs[job_id]["filename"] = f"{dl_name}.mp4" if not dl_name.endswith(".mp4") else dl_name
             return
 
-        await asyncio.to_thread(download_full_raw_video, v_url, out_path, on_progress, cookies_content)
+        if raw_download_jobs[job_id].get("status") == "cancelled":
+            return
+
+        await asyncio.to_thread(download_full_raw_video, v_url, out_path, on_progress, cookies_content, None, on_spawn)
+
+        if raw_download_jobs[job_id].get("status") == "cancelled":
+            logger.info(f"Raw download job {job_id} cancelled by user")
+            return
+
         raw_download_jobs[job_id]["status"] = "ready"
         raw_download_jobs[job_id]["progress_percent"] = 100.0
         dl_name = download_title or filename
         raw_download_jobs[job_id]["download_url"] = f"/api/download-rendered/{filename}?title={quote(dl_name)}"
         raw_download_jobs[job_id]["filename"] = f"{dl_name}.mp4" if not dl_name.endswith(".mp4") else dl_name
     except Exception as e:
+        if raw_download_jobs.get(job_id, {}).get("status") == "cancelled":
+            return
         logger.error(f"Raw video download job {job_id} failed: {e}")
         raw_download_jobs[job_id]["status"] = "failed"
         raw_download_jobs[job_id]["error"] = str(e)
+    finally:
+        raw_download_procs.pop(job_id, None)
 
 
 async def run_raw_clip_download_job(
@@ -388,12 +459,35 @@ async def run_raw_clip_download_job(
 
         duration_sec = max(1.0, end_time - start_time)
 
+        def on_spawn(p):
+            raw_clip_download_procs[job_id] = p
+
+        def _on_progress(p: dict):
+            if job_id in raw_clip_download_jobs:
+                if raw_clip_download_jobs[job_id].get("status") == "cancelled":
+                    return
+                if "percent" in p:
+                    raw_clip_download_jobs[job_id]["progress_percent"] = p["percent"]
+                if "downloaded" in p:
+                    raw_clip_download_jobs[job_id]["downloaded"] = p["downloaded"]
+                if "total" in p:
+                    raw_clip_download_jobs[job_id]["total"] = p["total"]
+                if "speed" in p:
+                    raw_clip_download_jobs[job_id]["speed"] = p["speed"]
+                if "eta" in p:
+                    raw_clip_download_jobs[job_id]["eta"] = p["eta"]
+                if "stage" in p:
+                    raw_clip_download_jobs[job_id]["stage"] = p["stage"]
+
         success = False
         if source_video and Path(source_video).exists():
             source_video_str = str(source_video)
             raw_clip_download_jobs[job_id]["step_name"] = "Potong Klip"
             raw_clip_download_jobs[job_id]["stage"] = "Memotong klip dari video master lokal..."
             raw_clip_download_jobs[job_id]["progress_percent"] = 50.0
+            raw_clip_download_jobs[job_id]["downloaded"] = "Memotong klip..."
+            raw_clip_download_jobs[job_id]["speed"] = "Direct Render"
+            raw_clip_download_jobs[job_id]["eta"] = "00:02"
             try:
                 logger.info(f"Trimming local video with {ACTIVE_ENCODER_NAME} for clip {download_title} ({start_time}-{end_time}) from {source_video_str}")
                 trim_cmd = [
@@ -435,11 +529,14 @@ async def run_raw_clip_download_job(
                 except Exception as cpu_err:
                     logger.warning(f"CPU trimming also failed ({cpu_err}), falling back to direct stream download...")
 
+        if raw_clip_download_jobs[job_id].get("status") == "cancelled":
+            return
+
         if not success:
             logger.info(f"Downloading clip segment from YouTube for {download_title} ({start_time}-{end_time})")
             raw_clip_download_jobs[job_id]["step_name"] = "Potong Klip"
             raw_clip_download_jobs[job_id]["stage"] = "Connecting to YouTube..."
-            raw_clip_download_jobs[job_id]["progress_percent"] = 40.0
+            raw_clip_download_jobs[job_id]["progress_percent"] = 20.0
             temp_name = f"temp_{seg_filename}"
 
             def _on_stage(text: str, pct: float):
@@ -454,9 +551,10 @@ async def run_raw_clip_download_job(
                 end_time,
                 temp_name,
                 cookies_content,
-                None,
+                on_spawn,
                 proxy,
-                _on_stage
+                _on_stage,
+                _on_progress
             )
             if downloaded_temp and os.path.exists(downloaded_temp):
                 if out_path.exists():
@@ -486,6 +584,9 @@ async def run_raw_clip_download_job(
                     if out_path.exists() and out_path.stat().st_size > 1000:
                         success = True
 
+        if raw_clip_download_jobs[job_id].get("status") == "cancelled":
+            return
+
         if success and out_path.exists() and is_valid_mp4(out_path):
             raw_clip_download_jobs[job_id]["status"] = "ready"
             raw_clip_download_jobs[job_id]["current_step"] = 1
@@ -499,6 +600,10 @@ async def run_raw_clip_download_job(
             raise RuntimeError("Generated clip file is missing or invalid.")
 
     except Exception as e:
+        if raw_clip_download_jobs.get(job_id, {}).get("status") == "cancelled":
+            return
         logger.error(f"Raw clip download job {job_id} failed: {e}")
         raw_clip_download_jobs[job_id]["status"] = "failed"
         raw_clip_download_jobs[job_id]["error"] = str(e)
+    finally:
+        raw_clip_download_procs.pop(job_id, None)

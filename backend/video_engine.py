@@ -849,6 +849,7 @@ def download_clip_segment(
     on_process_spawned: Optional[Callable[[subprocess.Popen], None]] = None,
     proxy: Optional[str] = None,
     stage_callback: Optional[Callable[[str, float], None]] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> str:
     """
     Downloads or slices the requested time slice in high definition (1080p).
@@ -1068,6 +1069,8 @@ def download_clip_segment(
             # Method 1: yt-dlp --download-sections with multi-fragment acceleration, socket timeout, & retries
             cmd = [
                 *base_cmd,
+                "--newline",
+                "--no-colors",
                 "--download-sections", f"*{t_start_fmt}-{t_end_fmt}",
                 "-f", "bestvideo[height<=1080]+bestaudio/best[height<=1080]/bestvideo+bestaudio/best",
                 "-N", "16",
@@ -1084,8 +1087,89 @@ def download_clip_segment(
                 clean_url
             ]
             try:
-                res = _run_subproc(cmd, timeout=timeout_sec)
-                if res.returncode == 0 and is_valid_mp4(output_path):
+                popen_kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True, "bufsize": 1}
+                if os.name != "nt":
+                    popen_kwargs["start_new_session"] = True
+                proc = subprocess.Popen(cmd, **popen_kwargs)
+                if on_process_spawned:
+                    try:
+                        on_process_spawned(proc)
+                    except Exception:
+                        pass
+
+                last_clip_pct = 20.0
+                for clean_line in read_subprocess_lines(proc.stdout):
+                    clean_line = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', clean_line).strip()
+                    if not clean_line:
+                        continue
+                    if "[youtube]" in clean_line or "[info]" in clean_line:
+                        if progress_callback:
+                            progress_callback({
+                                "percent": 25.0,
+                                "downloaded": "Menghubungkan...",
+                                "total": "",
+                                "speed": "",
+                                "eta": "",
+                                "stage": "Menghubungkan ke YouTube..."
+                            })
+                    elif "[download]" in clean_line:
+                        pct_m = re.search(r'([0-9]+(?:\.[0-9]+)?)\s*%', clean_line)
+                        tot_m = re.search(r'of\s*~?\s*([0-9.]+\s*[a-zA-Z]+)', clean_line)
+                        spd_m = re.search(r'at\s+([0-9.]+\s*[a-zA-Z]+/s)', clean_line)
+                        eta_m = re.search(r'ETA\s+([0-9:]+)', clean_line)
+                        if pct_m:
+                            try:
+                                raw_pct = float(pct_m.group(1))
+                                calc_pct = round(30.0 + (raw_pct / 100.0) * 60.0, 1)
+                                if calc_pct > last_clip_pct:
+                                    last_clip_pct = calc_pct
+                            except Exception:
+                                pass
+                        tot_bytes = parse_bytes_from_string(tot_m.group(1)) if tot_m else 0.0
+                        total_str = format_human_size(tot_bytes) if tot_bytes > 0 else (tot_m.group(1).strip() if tot_m else "")
+                        speed_str = format_human_speed(spd_m.group(1).strip()) if spd_m else ""
+                        eta_str = eta_m.group(1).strip() if (eta_m and eta_m.group(1) != "Unknown") else ""
+                        dl_str = ""
+                        if tot_bytes > 0 and last_clip_pct > 30:
+                            dl_bytes = ((last_clip_pct - 30.0) / 60.0) * tot_bytes
+                            dl_str = format_human_size(dl_bytes)
+                        elif last_clip_pct > 0:
+                            dl_str = f"{last_clip_pct:.0f}%"
+
+                        if progress_callback:
+                            progress_callback({
+                                "percent": last_clip_pct,
+                                "downloaded": dl_str,
+                                "total": total_str,
+                                "speed": speed_str,
+                                "eta": eta_str,
+                                "stage": f"Mengunduh potongan klip 1080p ({last_clip_pct:.0f}%)..."
+                            })
+                        if stage_callback:
+                            stage_callback(f"Mengunduh potongan klip 1080p ({last_clip_pct:.0f}%)...", last_clip_pct)
+                    elif "[Merger]" in clean_line or "Merging formats" in clean_line:
+                        if progress_callback:
+                            progress_callback({
+                                "percent": 95.0,
+                                "downloaded": "Menyelesaikan",
+                                "total": "",
+                                "speed": "",
+                                "eta": "00:01",
+                                "stage": "Menyelesaikan penggabungan klip..."
+                            })
+
+                proc.stdout.close()
+                ret = proc.wait()
+                if ret == 0 and output_path.exists() and is_valid_mp4(output_path):
+                    if progress_callback:
+                        progress_callback({
+                            "percent": 100.0,
+                            "downloaded": "Selesai",
+                            "total": format_human_size(output_path.stat().st_size),
+                            "speed": "",
+                            "eta": "",
+                            "stage": "Potongan klip siap!"
+                        })
                     logger.info(f"Successfully downloaded section ({mode_label}): {output_path} ({output_path.stat().st_size} bytes)")
                     return str(output_path)
                 # If not valid or returncode != 0, clean up any incomplete/corrupt partial file immediately
@@ -1094,7 +1178,7 @@ def download_clip_segment(
                         output_path.unlink()
                     except Exception:
                         pass
-                last_err_snippet = res.stderr[:300] if (res and res.stderr) else "empty output or invalid file (moov atom missing)"
+                last_err_snippet = f"exit code {ret}"
             except subprocess.TimeoutExpired:
                 logger.warning(f"yt-dlp download-sections timed out after {timeout_sec}s for {clean_url} ({mode_label}).")
                 if output_path.exists():

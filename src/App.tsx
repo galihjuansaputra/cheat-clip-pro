@@ -142,7 +142,14 @@ export default function App() {
     error?: string;
   } | null>(null);
   const [clipDownloadStates, setClipDownloadStates] = useState<Record<string, {
-    status: 'idle' | 'downloading' | 'ready' | 'error';
+    status: 'idle' | 'downloading' | 'ready' | 'error' | 'cancelled';
+    percent?: number;
+    downloaded?: string;
+    total?: string;
+    speed?: string;
+    eta?: string;
+    stage?: string;
+    jobId?: string;
     error?: string;
   }>>({});
   const [trimmerClip, setTrimmerClip] = useState<ViralClip | null>(null);
@@ -2841,10 +2848,15 @@ export default function App() {
                 setRawDownloadProgress(null);
               }, 4000);
               resolve();
-            } else if (statusData.status === 'failed') {
+            } else if (statusData.status === 'failed' || statusData.status === 'cancelled') {
               clearInterval(intervalId);
               setIsDownloadingRaw(false);
-              reject(new Error(statusData.error || t.rawDownload.failedToast));
+              setRawDownloadProgress(null);
+              if (statusData.status !== 'cancelled') {
+                reject(new Error(statusData.error || t.rawDownload.failedToast));
+              } else {
+                resolve();
+              }
             }
           } catch (pollErr) {
             clearInterval(intervalId);
@@ -2858,6 +2870,26 @@ export default function App() {
       setIsDownloadingRaw(false);
       setRawDownloadProgress(null);
     }
+  };
+
+  const handleCancelRawDownload = async (jobId: string) => {
+    try {
+      await fetch(`/api/download-raw-cancel/${jobId}`, { method: 'POST' });
+    } catch {}
+    setIsDownloadingRaw(false);
+    setRawDownloadProgress(null);
+    setToastMessage('Unduhan video lengkap dibatalkan');
+  };
+
+  const handleCancelRawClipDownload = async (jobId: string, clipKey: string) => {
+    try {
+      await fetch(`/api/download-raw-clip-cancel/${jobId}`, { method: 'POST' });
+    } catch {}
+    setClipDownloadStates(prev => ({
+      ...prev,
+      [clipKey]: { status: 'idle' }
+    }));
+    setToastMessage('Unduhan klip dibatalkan');
   };
 
   const handleApplyAdjustedClipToResults = (adjustedClip: ViralClip) => {
@@ -2989,6 +3021,19 @@ export default function App() {
       }
 
       const jobId = startData.job_id;
+      setClipDownloadStates(prev => ({
+        ...prev,
+        [clipKey]: {
+          status: 'downloading',
+          percent: 5,
+          downloaded: '',
+          total: '',
+          speed: '',
+          eta: '',
+          stage: 'Menghubungkan...',
+          jobId
+        }
+      }));
 
       await new Promise<void>((resolve, reject) => {
         const intervalId = setInterval(async () => {
@@ -3004,9 +3049,9 @@ export default function App() {
               clearInterval(intervalId);
               setClipDownloadStates(prev => ({
                 ...prev,
-                [clipKey]: { status: 'ready' }
+                [clipKey]: { status: 'ready', percent: 100 }
               }));
-              setToastMessage(`[OK] ${clip.title} (raw)`);
+              setToastMessage(`✓ ${clip.title} (raw)`);
               const a = document.createElement("a");
               a.href = statusData.download_url;
               a.download = statusData.filename || `${clip.title} (raw).mp4`;
@@ -3020,19 +3065,37 @@ export default function App() {
                 }));
               }, 4000);
               resolve();
-            } else if (statusData.status === 'failed') {
+            } else if (statusData.status === 'failed' || statusData.status === 'cancelled') {
               clearInterval(intervalId);
               setClipDownloadStates(prev => ({
                 ...prev,
-                [clipKey]: { status: 'error', error: statusData.error }
+                [clipKey]: { status: 'idle' }
               }));
-              reject(new Error(statusData.error || "Clip download failed"));
+              if (statusData.status !== 'cancelled') {
+                reject(new Error(statusData.error || "Clip download failed"));
+              } else {
+                resolve();
+              }
+            } else {
+              setClipDownloadStates(prev => ({
+                ...prev,
+                [clipKey]: {
+                  status: 'downloading',
+                  percent: statusData.progress_percent || 0,
+                  downloaded: statusData.downloaded || '',
+                  total: statusData.total || '',
+                  speed: statusData.speed || '',
+                  eta: statusData.eta || '',
+                  stage: statusData.stage || statusData.step_name || 'Mengunduh potongan klip...',
+                  jobId
+                }
+              }));
             }
           } catch (pollErr) {
             clearInterval(intervalId);
             reject(pollErr);
           }
-        }, 1200);
+        }, 750);
       });
     } catch (err: any) {
       setClipDownloadStates(prev => ({
@@ -6098,7 +6161,7 @@ Transcript:
                             fontSize: '0.78rem',
                             padding: '0.55rem 1rem',
                             borderRadius: 0,
-                            cursor: isDownloadingRaw ? 'not-allowed' : 'pointer',
+                            cursor: isDownloadingRaw ? 'wait' : 'pointer',
                             background: 'rgba(0, 229, 255, 0.15)',
                             border: '1px solid #00e5ff',
                             color: '#00e5ff',
@@ -6112,12 +6175,12 @@ Transcript:
                               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
                                 <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
                               </svg>
-                              {t.results.downloadingRawVideo}
+                              <span>{t.results.downloadingRawVideo} ({(rawDownloadProgress?.percent || 0).toFixed(0)}%)</span>
                             </>
                           ) : (
                             <>
                               <Download size={13} />
-                              {t.results.downloadRawVideo}
+                              <span>{t.results.downloadRawVideo}</span>
                             </>
                           )}
                         </button>
@@ -6129,7 +6192,7 @@ Transcript:
                           <div className="progress-card-header">
                             <span className="progress-card-title">
                               {rawDownloadProgress.status === 'ready' ? (
-                                <span style={{ color: '#4ade80' }}>[OK] {t.rawDownload.readyBadge}</span>
+                                <span style={{ color: '#4ade80' }}>✓ {t.rawDownload.readyBadge}</span>
                               ) : (
                                 <>
                                   <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon">
@@ -6139,9 +6202,33 @@ Transcript:
                                 </>
                               )}
                             </span>
-                            {rawDownloadProgress.eta && rawDownloadProgress.status !== 'ready' && (
-                              <span className="progress-card-eta">{t.rawDownload.eta(rawDownloadProgress.eta)}</span>
-                            )}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                              {rawDownloadProgress.eta && rawDownloadProgress.status !== 'ready' && (
+                                <span className="progress-card-eta">{t.rawDownload.eta(rawDownloadProgress.eta)}</span>
+                              )}
+                              {rawDownloadProgress.status === 'downloading' && rawDownloadProgress.jobId && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleCancelRawDownload(rawDownloadProgress.jobId)}
+                                  title="Batalkan unduhan"
+                                  style={{
+                                    background: 'transparent',
+                                    border: '1px solid rgba(255, 30, 39, 0.4)',
+                                    color: '#ff4d4d',
+                                    padding: '0.15rem 0.45rem',
+                                    fontSize: '0.7rem',
+                                    cursor: 'pointer',
+                                    borderRadius: 0,
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '0.2rem'
+                                  }}
+                                >
+                                  <X size={11} />
+                                  <span>Batal</span>
+                                </button>
+                              )}
+                            </div>
                           </div>
                           <div className="progress-track">
                             <div
@@ -6712,21 +6799,21 @@ Transcript:
                                   return (
                                     <button
                                       type="button"
-                                      className={`clip-dl-btn ${isReady ? 'state-ready' : 'state-downloading'}`}
+                                      className={`clip-dl-btn ${isReady ? 'state-ready' : isDl ? 'state-downloading' : 'state-idle'}`}
                                       disabled={isDl}
                                       onClick={(e) => {
                                         e.stopPropagation();
-                                        setTrimmerClip(clip);
+                                        handleDownloadRawClip(clip, e);
                                       }}
                                       title={t.results.downloadRawClipTooltip}
-                                      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}
+                                      style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', cursor: isDl ? 'wait' : 'pointer' }}
                                     >
                                       {isDl ? (
                                         <>
                                           <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
                                             <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
                                           </svg>
-                                          <span>{t.results.downloadingRawClip}</span>
+                                          <span>{t.results.downloadingRawClip} ({(clipDlState?.percent || 0).toFixed(0)}%)</span>
                                         </>
                                       ) : isReady ? (
                                         <>
@@ -6744,8 +6831,21 @@ Transcript:
                                 })()}
                               </div>
 
-                              {/* Row 2: Secondary Utilities (Copy Timestamp, Copy Details, Show Transcript) */}
+                              {/* Row 2: Secondary Utilities (Adjust Duration, Copy Timestamp, Copy Details, Show Transcript) */}
                               <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '0.45rem', marginTop: '0.4rem', flexWrap: 'wrap' }}>
+                                <button
+                                  type="button"
+                                  className="form-input"
+                                  style={{ padding: '0.35rem 0.65rem', fontSize: '0.76rem', width: 'auto', borderRadius: 0, cursor: 'pointer', background: '#0a0a0f', border: '1px solid #201e2c', whiteSpace: 'nowrap', display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setTrimmerClip(clip);
+                                  }}
+                                  title={t.results.adjustDurationTooltip}
+                                >
+                                  <Scissors size={12} />
+                                  {t.results.adjustDuration}
+                                </button>
                                 <button
                                   type="button"
                                   className="form-input"
@@ -6772,6 +6872,70 @@ Transcript:
                                   {isExpanded ? t.results.hideTranscript : t.results.showTranscript}
                                 </span>
                               </div>
+
+                              {/* Real-time Clip Download Progress Preview */}
+                              {(() => {
+                                const clipKey = `${clip.start_time}_${clip.end_time}`;
+                                const clipDlState = clipDownloadStates[clipKey];
+                                if (!clipDlState || clipDlState.status !== 'downloading') return null;
+
+                                return (
+                                  <div className="clip-download-progress-card">
+                                    <div className="progress-card-header">
+                                      <div className="progress-card-title">
+                                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="spinner-icon" style={{ animation: 'spin 1s linear infinite' }}>
+                                          <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="8"></circle>
+                                        </svg>
+                                        <span>{clipDlState.stage || t.results.downloadingRawClip} ({(clipDlState.percent || 0).toFixed(0)}%)</span>
+                                      </div>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem' }}>
+                                        {clipDlState.eta && (
+                                          <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>ETA {clipDlState.eta}</span>
+                                        )}
+                                        {clipDlState.jobId && (
+                                          <button
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              handleCancelRawClipDownload(clipDlState.jobId!, clipKey);
+                                            }}
+                                            title="Batalkan unduhan klip"
+                                            style={{
+                                              background: 'transparent',
+                                              border: '1px solid rgba(255, 30, 39, 0.4)',
+                                              color: '#ff4d4d',
+                                              padding: '0.15rem 0.45rem',
+                                              fontSize: '0.7rem',
+                                              cursor: 'pointer',
+                                              borderRadius: 0,
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '0.2rem'
+                                            }}
+                                          >
+                                            <X size={11} />
+                                            <span>Batal</span>
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                    <div className="progress-track">
+                                      <div
+                                        className="progress-fill-bar"
+                                        style={{
+                                          width: `${Math.min(100, Math.max(0, clipDlState.percent || 0))}%`
+                                        }}
+                                      />
+                                    </div>
+                                    {(clipDlState.downloaded || clipDlState.speed) && (
+                                      <div className="progress-card-meta">
+                                        <span>{clipDlState.downloaded} {clipDlState.total ? `/ ${clipDlState.total}` : ''}</span>
+                                        <span>{clipDlState.speed}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })()}
 
                               {/* Expandable transcript text block */}
                               {isExpanded && (
@@ -7087,11 +7251,11 @@ Transcript:
               </div>
 
               <p style={{ color: '#cbd5e1', fontSize: '0.86rem', lineHeight: 1.6, marginBottom: '1rem' }}>
-                Fitur Auto Clipper saat ini sedang dalam proses perbaikan dan pemeliharaan sistem.
+                Fitur Auto Clipper saat ini sedang dalam proses perbaikan dan pemeliharaan sistem. silahkan gunakan versi lokal untuk mengakses fitur ini.
               </p>
 
               <div style={{ padding: '0.75rem 0.9rem', background: 'rgba(217, 70, 239, 0.08)', border: '1px solid rgba(217, 70, 239, 0.25)', marginBottom: '1.25rem', fontSize: '0.82rem', color: '#f1f5f9', lineHeight: 1.5 }}>
-                💡 <strong>Tips:</strong> Anda tetap dapat melihat, memutar, dan mengekspor seluruh daftar rekomendasi klip viral beserta timestamp di <strong>Tab 02 // RECOMMENDED CLIPS</strong>.
+                💡 <strong>Tips:</strong> Anda tetap dapat melihat, memutar, dan mengekspor seluruh daftar rekomendasi klip viral beserta timestamp di <strong>Tab 02 | RECOMMENDED CLIPS</strong>.
               </div>
 
               <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center' }}>

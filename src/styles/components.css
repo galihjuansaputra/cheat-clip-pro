@@ -228,22 +228,94 @@
   transition: var(--transition-smooth);
 }
 
+.clip-dl-btn:hover {
+  cursor: pointer;
+}
+
+.clip-dl-btn.state-idle {
+  background: rgba(0, 229, 255, 0.15);
+  border: 1px solid #00e5ff;
+  color: #00e5ff;
+  cursor: pointer;
+}
+
+.clip-dl-btn.state-idle:hover {
+  background: rgba(0, 229, 255, 0.28);
+  box-shadow: 0 0 10px rgba(0, 229, 255, 0.4);
+  cursor: pointer;
+}
+
 .clip-dl-btn.state-ready {
   background: rgba(0, 255, 102, 0.15);
   border: 1px solid var(--neon-green);
   color: var(--neon-green);
+  cursor: pointer;
 }
 
 .clip-dl-btn.state-downloading {
   background: rgba(0, 229, 255, 0.15);
   border: 1px solid #00e5ff;
   color: #00e5ff;
-  cursor: not-allowed;
+  cursor: wait;
 }
 
 .clip-dl-btn.state-ready:hover {
   background: rgba(0, 255, 102, 0.25);
   box-shadow: 0 0 10px rgba(0, 255, 102, 0.35);
+  cursor: pointer;
+}
+
+/* --------------------------------------------------------------------------
+   INLINE CLIP REAL-TIME DOWNLOAD PROGRESS CARD
+   -------------------------------------------------------------------------- */
+
+.clip-download-progress-card {
+  margin-top: 0.55rem;
+  padding: 0.55rem 0.75rem;
+  background: #0a0a0f;
+  border: 1px solid rgba(0, 229, 255, 0.35);
+  border-radius: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+  animation: fadeIn 0.2s ease;
+}
+
+.clip-download-progress-card .progress-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.clip-download-progress-card .progress-card-title {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.74rem;
+  color: #00e5ff;
+  font-weight: 700;
+}
+
+.clip-download-progress-card .progress-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+}
+
+.clip-download-progress-card .progress-fill-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #00e5ff 0%, #00ff66 100%);
+  transition: width 0.3s ease;
+}
+
+.clip-download-progress-card .progress-card-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: #94a3b8;
 }
 
 /* --------------------------------------------------------------------------
