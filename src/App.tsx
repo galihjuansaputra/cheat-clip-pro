@@ -7031,7 +7031,7 @@ Transcript:
                   🛠️ FITUR AUTO CLIPPER SEDANG DALAM PENINGKATAN
                 </h3>
                 <p style={{ color: '#cbd5e1', fontSize: '0.92rem', lineHeight: 1.6, maxWidth: '540px', margin: '0 auto 1.5rem' }}>
-                  Fitur rendering &amp; auto-cropping video pada server deployment sedang dioptimasi untuk menghasilkan proses render yang lebih cepat dan bebas antrean.
+                  Fitur rendering &amp; auto-cropping video pada server deployment sedang dioptimasi untuk menghasilkan proses render yang lebih cepat dan bebas antrean. silahkan gunakan versi lokal (localhost) untuk mengakses fitur ini, atau tunggu hingga perbaikan selesai.
                 </p>
                 <div style={{
                   padding: '1rem',
