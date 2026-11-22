@@ -1537,18 +1537,6 @@ def download_full_raw_video(
             if v_match:
                 stream_id_match = v_match.group(1)
 
-        # Check if direct clip material was already acquired by Stage 1
-        stream_id = stream_id_match or re.sub(r'[^a-zA-Z0-9_-]', '_', clean_url.split("?")[0])
-        pre_candidates = [
-            TEMP_DIR / f"clip_bahan_{stream_id}_{int(start_time)}_{int(end_time)}.mp4",
-            EXPORTS_DIR / f"clip_bahan_{stream_id}_{int(start_time)}_{int(end_time)}.mp4",
-        ]
-        for pre in pre_candidates:
-            if pre.exists() and pre.stat().st_size > 50 * 1024 and is_valid_mp4(pre):
-                logger.info(f"Reusing pre-acquired Stage 1 HD clip segment: {pre.name} -> {output_path}")
-                shutil.copyfile(str(pre), str(output_path))
-                return str(output_path)
-
         candidate_sources: List[Path] = []
         for d in [EXPORTS_DIR, TEMP_DIR, UPLOADS_DIR]:
             if d.exists():
@@ -1915,12 +1903,19 @@ def transcribe_clip_words(
                         video_path,
                         **transcribe_kwargs
                     )
-                except RuntimeError as re_err:
-                    logger.warning(f"Whisper word_timestamps failed ({re_err}). Retrying with standard segment timestamps...")
-                    transcribe_kwargs["word_timestamps"] = False
+                except Exception as w_err:
+                    logger.warning(f"Whisper word_timestamps failed ({w_err}). Retrying with standard segment timestamps...")
+                    safe_kwargs = {
+                        "word_timestamps": False,
+                        "fp16": False,
+                        "verbose": False,
+                        "condition_on_previous_text": False,
+                    }
+                    if target_language in ("id", "en"):
+                        safe_kwargs["language"] = target_language
                     result = whisper_model.transcribe(
                         video_path,
-                        **transcribe_kwargs
+                        **safe_kwargs
                     )
 
             words = []
@@ -1957,6 +1952,8 @@ def transcribe_clip_words(
                                 })
 
             if words:
+                if words[0]["start"] <= 0.75:
+                    words[0]["start"] = 0.0
                 logger.info(f"Whisper successfully transcribed {len(words)} acoustic words for clip.")
                 return words
         except Exception as e:
@@ -2012,6 +2009,8 @@ def transcribe_clip_words(
                 })
                 cur_s = w_e
         if words:
+            if words[0]["start"] <= 1.5:
+                words[0]["start"] = 0.0
             logger.info(f"Fallback: using transcript words for clip range [{clip_start_time:.1f}s -> {clip_end_time:.1f}s].")
             return words
 
@@ -2905,15 +2904,22 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             chunk_bounds[-1] = (last_s, vid_end)
 
         # Natural subtitle entry alignment:
-        # If the first chunk's speech starts almost immediately (<= 0.15s), clamp start to 0.0
-        # for instant seamless appearance; otherwise let captions appear naturally when speech starts.
+        # Guarantee captions are NEVER missing in the first few seconds (from frame 0:00:00.00):
+        # 1. If speech starts within 0.75s, start chunk 0 right at 0:00:00.00 with active word timing.
+        # 2. If speech starts after 0.75s (e.g. intro beat/pause), display the opening chunk
+        #    in neutral/primary text from 0:00:00.00 until speech starts, so viewers see the hook immediately,
+        #    then seamlessly transition into active word-by-word highlight without gap or flicker.
         if chunks and chunk_bounds:
             first_speech_time = max(0.0, chunks[0][0]["start"])
             c_s, c_e = chunk_bounds[0]
-            if first_speech_time <= 0.15:
+            if first_speech_time <= 0.75:
                 chunk_bounds[0] = (0.0, c_e)
             else:
-                chunk_bounds[0] = (max(0.0, first_speech_time - 0.08), c_e)
+                chunk_bounds[0] = (first_speech_time, c_e)
+                intro_text = " ".join(item["word_text"] for item in chunks[0])
+                events.append(
+                    f"Dialogue: 0,0:00:00.00,{format_ass_timestamp(first_speech_time)},SubStyle,,0,0,0,,{{\\q2\\an{sub_align}\\pos({center_x},{sub_y})}}{intro_text}"
+                )
 
         # Step D: Partition each chunk into strictly contiguous active-word time slices
         for chunk_idx, chunk in enumerate(chunks):

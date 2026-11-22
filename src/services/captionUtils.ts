@@ -167,6 +167,13 @@ export function buildCaptionChunksForClip(
 
   if (allWords.length === 0) return [];
 
+  // Guarantee seamless opening subtitle:
+  // If the first word starts close to the beginning (<= 1.5s), clamp to clipStart
+  // so the opening caption is immediately visible from frame 0
+  if (allWords.length > 0 && (allWords[0].start - clipStart) <= 1.5) {
+    allWords[0].start = clipStart;
+  }
+
   // Group words into punchy chunks of 1 to 3 words (max 18 chars), splitting on punctuation or pauses >= 0.28s
   const chunks: CaptionChunk[] = [];
   let currentWords: CaptionWord[] = [];
