@@ -2,6 +2,7 @@ import { Muxer, ArrayBufferTarget } from 'mp4-muxer';
 import { CAPTION_STYLE_CONFIG, applyLetterCase, getFontWeightForFamily, getFontFamilyWithFallback, wrapTitleSmart } from './captionUtils';
 import type { CaptionChunk } from './captionUtils';
 import type { CaptionStyle, SubtitlePositionMode } from '../types';
+import { detectFaceClientSide } from '../utils/clientFaceDetector';
 
 export interface WebCodecsRenderOptions {
   videoSourceUrl: string;
@@ -30,6 +31,8 @@ export interface WebCodecsRenderOptions {
   // Streamer & Facecam
   streamerPreset?: 'none' | 'split_top_cam' | 'pip_corner';
   facecamPosition?: string;
+  faceBox?: { found?: boolean; cx: number; cy: number; w?: number; h?: number };
+  cropXPercent?: number;
   // Watermark
   watermarkEnabled?: boolean;
   watermarkType?: 'image' | 'text';
@@ -555,6 +558,8 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
     subtitleCenterYPercent = 50,
     streamerPreset = 'none',
     facecamPosition = 'auto',
+    faceBox,
+    cropXPercent,
     watermarkEnabled = false,
     watermarkType = 'image',
     watermarkUrl,
@@ -579,12 +584,30 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
   const targetWidth = isLandscape ? 1920 : 1080;
   const targetHeight = isLandscape ? 1080 : 1920;
 
+  // Pre-buffer remote HTTP video URL to memory Blob URL to eliminate range-request network stalls and seek latency
+  let effectiveVideoUrl = videoSourceUrl;
+  let localBlobUrl: string | null = null;
+  if (typeof videoSourceUrl === 'string' && (videoSourceUrl.startsWith('http://') || videoSourceUrl.startsWith('https://') || videoSourceUrl.startsWith('/api/'))) {
+    try {
+      if (onProgress) onProgress(6, 'Buffering video ke memory device...');
+      const resp = await fetch(videoSourceUrl);
+      if (resp.ok) {
+        const b = await resp.blob();
+        localBlobUrl = URL.createObjectURL(b);
+        effectiveVideoUrl = localBlobUrl;
+      }
+    } catch (err) {
+      console.warn('[WebCodecs GPU] Video prebuffering warning, falling back to direct URL:', err);
+    }
+  }
+
+  try {
   // 2. Load video element to inspect metadata and extract frames
   if (onProgress) onProgress(8, 'Loading media source into GPU canvas pipeline...');
   const video = document.createElement('video');
-  if (typeof window !== 'undefined' && videoSourceUrl.startsWith('http')) {
+  if (typeof window !== 'undefined' && effectiveVideoUrl.startsWith('http')) {
     try {
-      const u = new URL(videoSourceUrl);
+      const u = new URL(effectiveVideoUrl);
       if (u.origin !== window.location.origin) {
         video.crossOrigin = 'anonymous';
       }
@@ -592,7 +615,7 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
       // ignore
     }
   }
-  video.src = videoSourceUrl;
+  video.src = effectiveVideoUrl;
   video.muted = true;
   video.playsInline = true;
   video.preload = 'auto';
@@ -655,7 +678,46 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
   const duration = (endTime && endTime > startTime) ? (endTime - startTime) : (video.duration - startTime);
   const totalDuration = Math.max(1, duration);
 
-  // 3. Extract audio data if AudioEncoder is available
+  // 3. Resolve facecam coordinates (client-side AI detection or preset)
+  let effectiveFaceBox = faceBox;
+  if (!effectiveFaceBox || !effectiveFaceBox.found || typeof effectiveFaceBox.cx !== 'number') {
+    try {
+      const sampleTime = startTime + Math.min(2.0, totalDuration * 0.15);
+      video.currentTime = sampleTime;
+      await new Promise<void>(resolve => {
+        const onReady = () => resolve();
+        video.addEventListener('seeked', onReady, { once: true });
+        setTimeout(onReady, 250);
+      });
+      effectiveFaceBox = await detectFaceClientSide(video, facecamPosition, streamerPreset);
+    } catch {
+      // ignore
+    }
+  }
+
+  let defaultFcX = (streamerPreset !== 'none') ? 0.85 : 0.50;
+  let defaultFcY = (streamerPreset !== 'none') ? 0.78 : 0.35;
+  const posLower = (facecamPosition || 'auto').toLowerCase().trim();
+  if (posLower === 'bottom_right') { defaultFcX = 0.85; defaultFcY = 0.78; }
+  else if (posLower === 'top_right') { defaultFcX = 0.85; defaultFcY = 0.22; }
+  else if (posLower === 'bottom_left') { defaultFcX = 0.16; defaultFcY = 0.78; }
+  else if (posLower === 'top_left') { defaultFcX = 0.16; defaultFcY = 0.22; }
+  else if (posLower === 'center') { defaultFcX = 0.50; defaultFcY = 0.50; }
+  else if (posLower === 'left') { defaultFcX = 0.28; defaultFcY = 0.35; }
+  else if (posLower === 'right') { defaultFcX = 0.72; defaultFcY = 0.35; }
+
+  let fcx = defaultFcX;
+  let fcy = defaultFcY;
+  if (effectiveFaceBox && typeof effectiveFaceBox.cx === 'number') {
+    fcx = effectiveFaceBox.cx;
+    if (typeof effectiveFaceBox.cy === 'number') fcy = effectiveFaceBox.cy;
+  } else if (cropXPercent !== undefined) {
+    fcx = Math.max(0.05, Math.min(0.95, cropXPercent / 100));
+  }
+  fcx = Math.max(0.08, Math.min(0.92, fcx));
+  fcy = Math.max(0.08, Math.min(0.92, fcy));
+
+  // 4. Extract audio data if AudioEncoder is available
   if (onProgress) onProgress(12, 'Preparing audio tracks...');
   const hasAudioEncoder = typeof (window as any).AudioEncoder === 'function';
   let audioData: { channelData: Float32Array[]; sampleRate: number; numberOfChannels: number } | null = null;
@@ -857,9 +919,22 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
   if (onProgress) onProgress(20, 'Memulai render frame dengan GPU hardware acceleration...', { frameIndex: 0, totalFrames });
   const renderStartTime = performance.now();
 
-  // Frame stepping helper with safety timeout
+  // Setup low-res offscreen canvas for high-performance background blur (20x faster, zero CPU bottleneck)
+  const bgCanvas = document.createElement('canvas');
+  bgCanvas.width = 270;
+  bgCanvas.height = isLandscape ? 152 : 480;
+  const bgCtx = bgCanvas.getContext('2d');
+  if (bgCtx) {
+    bgCtx.filter = 'blur(6px)';
+  }
+
+  // Frame stepping helper with safety timeout & hardware decode readiness
   const seekTo = (time: number): Promise<void> => {
     return new Promise((resolve) => {
+      if (Math.abs(video.currentTime - time) < 0.005) {
+        resolve();
+        return;
+      }
       let resolved = false;
       let timer: any = null;
 
@@ -867,14 +942,22 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
         if (resolved) return;
         resolved = true;
         if (timer) clearTimeout(timer);
-        video.removeEventListener('seeked', finish);
+        video.removeEventListener('seeked', onSeeked);
         video.removeEventListener('error', finish);
         resolve();
       };
 
-      video.addEventListener('seeked', finish);
-      video.addEventListener('error', finish);
-      timer = setTimeout(finish, 800);
+      const onSeeked = () => {
+        if (typeof (video as any).requestVideoFrameCallback === 'function') {
+          (video as any).requestVideoFrameCallback(() => finish());
+        } else {
+          finish();
+        }
+      };
+
+      video.addEventListener('seeked', onSeeked, { once: true });
+      video.addEventListener('error', finish, { once: true });
+      timer = setTimeout(finish, 500);
       video.currentTime = time;
     });
   };
@@ -889,104 +972,163 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
     ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, targetWidth, targetHeight);
 
-    // Composite Background (blurred or black)
-    if (backgroundStyle === 'blur' || backgroundStyle === 'blurred') {
-      ctx.save();
-      ctx.filter = 'blur(16px)';
-      const scaleBg = Math.max(targetWidth / video.videoWidth, targetHeight / video.videoHeight);
-      const bgW = video.videoWidth * scaleBg;
-      const bgH = video.videoHeight * scaleBg;
-      ctx.drawImage(video, (targetWidth - bgW) / 2, (targetHeight - bgH) / 2, bgW, bgH);
-      ctx.restore();
+    // Composite Background (blurred or black) via ultra-fast GPU offscreen buffer
+    if ((backgroundStyle === 'blur' || backgroundStyle === 'blurred') && bgCtx) {
+      bgCtx.drawImage(video, 0, 0, bgCanvas.width, bgCanvas.height);
+      ctx.drawImage(bgCanvas, 0, 0, targetWidth, targetHeight);
     }
 
     // Composite Foreground Video according to Streamer Preset & Aspect Ratio (100% parity with server NVENC engine)
     if (!isLandscape && streamerPreset === 'split_top_cam') {
-      // Split layout: 1080x810 top facecam + 1080x1110 bottom gameplay
-      const pos = (facecamPosition || 'auto').toLowerCase();
-      let fcx = 0.84;
-      let fcy = 0.78;
-      if (pos === 'bottom_left') {
-        fcx = 0.16;
-        fcy = 0.78;
-      } else if (pos === 'top_left') {
-        fcx = 0.16;
-        fcy = 0.22;
-      } else if (pos === 'top_right') {
-        fcx = 0.84;
-        fcy = 0.22;
-      } else if (pos === 'center') {
-        fcx = 0.50;
-        fcy = 0.50;
-      } else if (pos === 'bottom_right') {
-        fcx = 0.84;
-        fcy = 0.78;
+      if (aspectRatio === '16:9') {
+        // 16:9 Split: top cam 1080x608, bottom gameplay 1080x608 (centered at Y=352)
+        const camH = Math.min(video.videoHeight, Math.max(240, video.videoHeight * 0.38));
+        const camW = Math.min(video.videoWidth, camH * (16 / 9));
+        const camX = Math.max(0, Math.min(video.videoWidth - camW, video.videoWidth * fcx - camW / 2));
+        const camY = Math.max(0, Math.min(video.videoHeight - camH, video.videoHeight * fcy - camH / 2));
+        ctx.drawImage(video, camX, camY, camW, camH, 0, 352, 1080, 608);
+
+        const gameH = Math.min(video.videoHeight, video.videoWidth * (9 / 16));
+        const gameW = Math.min(video.videoWidth, video.videoHeight * (16 / 9));
+        const gameX = Math.max(0, (video.videoWidth - gameW) / 2);
+        const gameY = Math.max(0, (video.videoHeight - gameH) / 2);
+        ctx.drawImage(video, gameX, gameY, gameW, gameH, 0, 960, 1080, 608);
+      } else if (aspectRatio === '1:1') {
+        // 1:1 Split: top cam 960x960, bottom gameplay 960x960 (centered at X=60, Y=0)
+        const camH = Math.min(video.videoHeight, Math.max(260, video.videoHeight * 0.38));
+        const camW = Math.min(video.videoWidth, camH);
+        const camX = Math.max(0, Math.min(video.videoWidth - camW, video.videoWidth * fcx - camW / 2));
+        const camY = Math.max(0, Math.min(video.videoHeight - camH, video.videoHeight * fcy - camH / 2));
+        ctx.drawImage(video, camX, camY, camW, camH, 60, 0, 960, 960);
+
+        const gameSize = Math.min(video.videoWidth, video.videoHeight);
+        const gameX = Math.max(0, (video.videoWidth - gameSize) / 2);
+        const gameY = Math.max(0, (video.videoHeight - gameSize) / 2);
+        ctx.drawImage(video, gameX, gameY, gameSize, gameSize, 60, 960, 960, 960);
+      } else if (aspectRatio === '4:3') {
+        // 4:3 Split: top cam 1080x810, bottom gameplay 1080x810 (centered at Y=150)
+        const camH = Math.min(video.videoHeight, Math.max(260, video.videoHeight * 0.38));
+        const camW = Math.min(video.videoWidth, camH * (4 / 3));
+        const camX = Math.max(0, Math.min(video.videoWidth - camW, video.videoWidth * fcx - camW / 2));
+        const camY = Math.max(0, Math.min(video.videoHeight - camH, video.videoHeight * fcy - camH / 2));
+        ctx.drawImage(video, camX, camY, camW, camH, 0, 150, 1080, 810);
+
+        const gameH = Math.min(video.videoHeight, video.videoWidth * (3 / 4));
+        const gameW = Math.min(video.videoWidth, video.videoHeight * (4 / 3));
+        const gameX = Math.max(0, (video.videoWidth - gameW) / 2);
+        const gameY = Math.max(0, (video.videoHeight - gameH) / 2);
+        ctx.drawImage(video, gameX, gameY, gameW, gameH, 0, 960, 1080, 810);
+      } else {
+        // 9:16 Full Bleed Vertical Split (1080x810 top facecam + 1080x1110 bottom gameplay)
+        const camH = Math.min(video.videoHeight, Math.max(260, video.videoHeight * 0.38));
+        const camW = Math.min(video.videoWidth, camH * (4 / 3));
+        const camX = Math.max(0, Math.min(video.videoWidth - camW, video.videoWidth * fcx - camW / 2));
+        const camY = Math.max(0, Math.min(video.videoHeight - camH, video.videoHeight * fcy - camH / 2));
+        ctx.drawImage(video, camX, camY, camW, camH, 0, 0, 1080, 810);
+
+        const gameH = video.videoHeight;
+        const gameW = Math.min(video.videoWidth, gameH * (1080 / 1110));
+        const gameX = Math.max(0, (video.videoWidth - gameW) / 2);
+        const gameY = Math.max(0, (video.videoHeight - gameH) / 2);
+        ctx.drawImage(video, gameX, gameY, gameW, gameH, 0, 810, 1080, 1110);
+      }
+    } else {
+      // 1. Draw base main video
+      if (isLandscape) {
+        const scaleFg = Math.min(targetWidth / video.videoWidth, targetHeight / video.videoHeight);
+        const fgW = video.videoWidth * scaleFg;
+        const fgH = video.videoHeight * scaleFg;
+        const fgX = (targetWidth - fgW) / 2;
+        const fgY = (targetHeight - fgH) / 2;
+        ctx.drawImage(video, fgX, fgY, fgW, fgH);
+      } else if (aspectRatio === '9:16') {
+        const cropW = Math.min(video.videoWidth, video.videoHeight * (9 / 16));
+        const cropH = video.videoHeight;
+        const cropX = Math.max(0, Math.min(video.videoWidth - cropW, video.videoWidth * fcx - cropW / 2));
+        const cropY = 0;
+        ctx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, 1080, 1920);
+      } else if (aspectRatio === '1:1') {
+        const squareSize = 1080;
+        const scaleSquare = Math.max(squareSize / video.videoWidth, squareSize / video.videoHeight);
+        const cropW = video.videoWidth * scaleSquare;
+        const cropH = video.videoHeight * scaleSquare;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 420, squareSize, squareSize);
+        ctx.clip();
+        ctx.drawImage(video, (squareSize - cropW) / 2, 420 + (squareSize - cropH) / 2, cropW, cropH);
+        ctx.restore();
+      } else if (aspectRatio === '4:3') {
+        const boxW = 1080;
+        const boxH = 810;
+        const scale43 = Math.max(boxW / video.videoWidth, boxH / video.videoHeight);
+        const cropW = video.videoWidth * scale43;
+        const cropH = video.videoHeight * scale43;
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 555, boxW, boxH);
+        ctx.clip();
+        ctx.drawImage(video, (boxW - cropW) / 2, 555 + (boxH - cropH) / 2, cropW, cropH);
+        ctx.restore();
+      } else {
+        const boxW = 1080;
+        const boxH = 608;
+        const scale169 = Math.min(boxW / video.videoWidth, boxH / video.videoHeight);
+        const fgW = video.videoWidth * scale169;
+        const fgH = video.videoHeight * scale169;
+        const fgX = (targetWidth - fgW) / 2;
+        const fgY = 656 + (boxH - fgH) / 2;
+        ctx.drawImage(video, fgX, fgY, fgW, fgH);
       }
 
-      // 1. Top Cam Box (1080x810, 4:3 cropped tightly around facecam)
-      const camH = Math.min(video.videoHeight, Math.max(260, video.videoHeight * 0.40));
-      const camW = Math.min(video.videoWidth, camH * (4 / 3));
-      const camX = Math.max(0, Math.min(video.videoWidth - camW, video.videoWidth * fcx - camW / 2));
-      const camY = Math.max(0, Math.min(video.videoHeight - camH, video.videoHeight * fcy - camH / 2));
-      ctx.drawImage(video, camX, camY, camW, camH, 0, 0, 1080, 810);
+      // 2. Picture-in-Picture Streamer Facecam
+      if (streamerPreset === 'pip_corner') {
+        let pipX = 736;
+        let pipY = 1400;
+        if (isLandscape) {
+          pipX = 1550;
+          pipY = 780;
+        } else if (aspectRatio === '1:1') {
+          pipX = 736;
+          pipY = 444;
+        } else if (aspectRatio === '4:3') {
+          pipX = 736;
+          pipY = 579;
+        } else if (aspectRatio === '16:9') {
+          pipX = 736;
+          pipY = 676;
+        }
 
-      // 2. Bottom Gameplay Box (1080x1110, centered game action)
-      const gameH = video.videoHeight;
-      const gameW = Math.min(video.videoWidth, gameH * (1080 / 1110));
-      const gameX = Math.max(0, (video.videoWidth - gameW) / 2);
-      const gameY = Math.max(0, (video.videoHeight - gameH) / 2);
-      ctx.drawImage(video, gameX, gameY, gameW, gameH, 0, 810, 1080, 1110);
-    } else if (isLandscape) {
-      // 16:9 Landscape: fit inside 1920x1080
-      const scaleFg = Math.min(targetWidth / video.videoWidth, targetHeight / video.videoHeight);
-      const fgW = video.videoWidth * scaleFg;
-      const fgH = video.videoHeight * scaleFg;
-      const fgX = (targetWidth - fgW) / 2;
-      const fgY = (targetHeight - fgH) / 2;
-      ctx.drawImage(video, fgX, fgY, fgW, fgH);
-    } else if (aspectRatio === '9:16') {
-      // 9:16 Full Bleed Vertical: Crop to cover 1080x1920 full screen
-      const scaleCover = Math.max(targetWidth / video.videoWidth, targetHeight / video.videoHeight);
-      const fgW = video.videoWidth * scaleCover;
-      const fgH = video.videoHeight * scaleCover;
-      const fgX = (targetWidth - fgW) / 2;
-      const fgY = (targetHeight - fgH) / 2;
-      ctx.drawImage(video, fgX, fgY, fgW, fgH);
-    } else if (aspectRatio === '1:1') {
-      // 1:1 Square on 1080x1920 vertical canvas: video is 1080x1080 centered at Y=420 (matching backend content_top=420)
-      const squareSize = 1080;
-      const scaleSquare = Math.max(squareSize / video.videoWidth, squareSize / video.videoHeight);
-      const cropW = video.videoWidth * scaleSquare;
-      const cropH = video.videoHeight * scaleSquare;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, 420, squareSize, squareSize);
-      ctx.clip();
-      ctx.drawImage(video, (squareSize - cropW) / 2, 420 + (squareSize - cropH) / 2, cropW, cropH);
-      ctx.restore();
-    } else if (aspectRatio === '4:3') {
-      // 4:3 on 1080x1920 vertical canvas: video is 1080x810 centered at Y=555 (matching backend content_top=555)
-      const boxW = 1080;
-      const boxH = 810;
-      const scale43 = Math.max(boxW / video.videoWidth, boxH / video.videoHeight);
-      const cropW = video.videoWidth * scale43;
-      const cropH = video.videoHeight * scale43;
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(0, 555, boxW, boxH);
-      ctx.clip();
-      ctx.drawImage(video, (boxW - cropW) / 2, 555 + (boxH - cropH) / 2, cropW, cropH);
-      ctx.restore();
-    } else {
-      // 16:9 Letterbox on 1080x1920 vertical canvas (Foto 1!): video is 1080x608 centered at Y=656
-      const boxW = 1080;
-      const boxH = 608;
-      const scale169 = Math.min(boxW / video.videoWidth, boxH / video.videoHeight);
-      const fgW = video.videoWidth * scale169;
-      const fgH = video.videoHeight * scale169;
-      const fgX = (targetWidth - fgW) / 2;
-      const fgY = 656 + (boxH - fgH) / 2;
-      ctx.drawImage(video, fgX, fgY, fgW, fgH);
+        const pipCamH = Math.min(video.videoHeight, Math.max(200, video.videoHeight * 0.35));
+        const pipCamW = Math.min(video.videoWidth, pipCamH * (4 / 3));
+        const pipCamX = Math.max(0, Math.min(video.videoWidth - pipCamW, video.videoWidth * fcx - pipCamW / 2));
+        const pipCamY = Math.max(0, Math.min(video.videoHeight - pipCamH, video.videoHeight * fcy - pipCamH / 2));
+
+        const pipW = 320;
+        const pipH = 240;
+
+        ctx.save();
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.75)';
+        ctx.shadowBlur = 14;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 4;
+
+        if (typeof (ctx as any).roundRect === 'function') {
+          ctx.beginPath();
+          (ctx as any).roundRect(pipX, pipY, pipW, pipH, 10);
+          ctx.clip();
+          ctx.drawImage(video, pipCamX, pipCamY, pipCamW, pipCamH, pipX, pipY, pipW, pipH);
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 4;
+          ctx.stroke();
+        } else {
+          ctx.drawImage(video, pipCamX, pipCamY, pipCamW, pipCamH, pipX, pipY, pipW, pipH);
+          ctx.strokeStyle = '#ffffff';
+          ctx.lineWidth = 4;
+          ctx.strokeRect(pipX, pipY, pipW, pipH);
+        }
+        ctx.restore();
+      }
     }
 
     const elapsedSec = currentSec - startTime;
@@ -1079,6 +1221,11 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
     videoEncoder.encode(frame, { keyFrame: isKeyFrame });
     frame.close();
 
+    // Prevent encoder queue overflow (maintains full hardware GPU throughput without memory crashes)
+    while (videoEncoder.encodeQueueSize > 5) {
+      await new Promise(r => setTimeout(r, 4));
+    }
+
     frameIndex++;
     currentSec += frameIntervalSec;
 
@@ -1115,4 +1262,13 @@ export async function renderClipWebCodecs(options: WebCodecsRenderOptions): Prom
 
   if (onProgress) onProgress(100, 'Render Selesai!');
   return blob;
+  } finally {
+    if (localBlobUrl) {
+      try {
+        URL.revokeObjectURL(localBlobUrl);
+      } catch {
+        // ignore
+      }
+    }
+  }
 }

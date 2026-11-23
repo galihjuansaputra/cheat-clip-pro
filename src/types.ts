@@ -102,6 +102,7 @@ export interface RenderSettings {
   enableFaceTracking: boolean;
   streamerPreset: StreamerPreset;
   facecamPosition?: FacecamPosition;
+  faceBox?: { found?: boolean; cx: number; cy: number; w?: number; h?: number; type?: string };
   titleText?: string;
   titlePrefix?: string;
   titleSuffix?: string;
