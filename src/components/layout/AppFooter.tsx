@@ -29,9 +29,7 @@ export const AppFooter: React.FC = () => {
           lineHeight: 1.6,
         }}
       >
-        <span>Made with</span>
-        <span style={{ color: '#ff00ff', fontSize: '0.95rem' }}>❤️</span>
-        <span>by</span>
+        <span>Made with love by Galih</span>
         <a
           href="https://johansa.com"
           target="_blank"
@@ -54,8 +52,9 @@ export const AppFooter: React.FC = () => {
             e.currentTarget.style.textShadow = 'none';
           }}
         >
-          Galih Johansa Juansaputra
+          Johansa
         </a>
+        <span>Juansaputra</span>  
       </div>
     </footer>
   );
