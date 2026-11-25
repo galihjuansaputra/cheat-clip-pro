@@ -20,7 +20,7 @@ import { useLanguage } from '../locales';
 import { resilientFetch } from '../utils/api';
 import { getStoredCookies, hasStoredCookies } from '../utils/cookieUtils';
 import { detectFaceClientSide } from '../utils/clientFaceDetector';
-import { isMobileDevice } from '../utils/deviceUtils';
+import { isMobileDevice, isLocalEnvironment } from '../utils/deviceUtils';
 import { isWebCodecsGpuSupported } from '../services/webcodecsRenderer';
 import type {
   ViralClip,
@@ -291,6 +291,40 @@ export interface StudioPreferences {
   titleSuffix?: string;
 }
 
+/**
+ * Resolves the optimal default hardware acceleration:
+ * - On Local environment (localhost / 127.0.0.1): defaults to best host GPU hardware encoder
+ *   (e.g. NVIDIA NVENC, AMD AMF, Intel QuickSync, or Auto) if available, or client_gpu.
+ * - On Deployment environment (cloud/VPS/remote server): defaults to browser render (client_gpu / browser_wasm)
+ *   to offload 100% of video rendering to the client's device (0% server load).
+ */
+export const getDefaultHardwareAccel = (hardwareInfo?: HardwareAccelInfo | null): HardwareAccelOption => {
+  const isLocal = isLocalEnvironment();
+
+  if (isLocal) {
+    if (hardwareInfo) {
+      const rec = hardwareInfo.recommended;
+      // If server hardware support detected a dedicated GPU encoder (nvenc, amf, qsv)
+      if (rec && (rec === 'nvenc' || rec === 'amf' || rec === 'qsv')) {
+        return rec;
+      }
+      if (hardwareInfo.support?.nvenc) return 'nvenc';
+      if (hardwareInfo.support?.amf) return 'amf';
+      if (hardwareInfo.support?.qsv) return 'qsv';
+      // If server has no dedicated GPU encoder (CPU only), check if client browser supports WebCodecs GPU
+      if (isWebCodecsGpuSupported()) {
+        return 'client_gpu';
+      }
+      return 'auto';
+    }
+    // Prioritize auto GPU detection on local environment before info finishes loading
+    return 'auto';
+  }
+
+  // In deployment (remote/VPS/cloud), always default to client hardware (browser render)
+  return isWebCodecsGpuSupported() ? 'client_gpu' : 'browser_wasm';
+};
+
 export const DEFAULT_STUDIO_PREFS: Required<StudioPreferences> = {
   aspectRatio: '9:16',
   backgroundStyle: 'black',
@@ -312,7 +346,7 @@ export const DEFAULT_STUDIO_PREFS: Required<StudioPreferences> = {
   subtitlePositionMode: 'bottom',
   titleDuration: 'entire',
   originalAudioVolume: 100,
-  hardwareAccel: 'client_gpu',
+  hardwareAccel: getDefaultHardwareAccel(),
   titleYPercent: 17,
   titleXPercent: 50,
   subtitleYPercent: 21,
@@ -484,15 +518,17 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
   const [hasWebCodecs] = useState<boolean>(() => isWebCodecsGpuSupported());
 
   // Hardware acceleration / Video Encoder state:
-  // Defaults to Client GPU Hardware Acceleration ('client_gpu') to offload all rendering work to user's device (0% server load)
+  // - On local: defaults to best host GPU hardware encoder (NVENC, AMF, QSV, or Auto) if available, or client_gpu
+  // - On deployment: defaults to Client GPU Hardware Acceleration ('client_gpu') to offload all rendering work to user's device (0% server load)
   const [hardwareAccel, setHardwareAccel] = useState<HardwareAccelOption>(() => {
+    const isManual = typeof window !== 'undefined' && localStorage.getItem('cheat_clip_hw_manually_set') === 'true';
     const saved = getSavedStudioPreferences().hardwareAccel;
-    if (saved) {
+    if (saved && isManual) {
       if (saved === 'client_gpu' && isWebCodecsGpuSupported()) return 'client_gpu';
       if (saved === 'browser_wasm') return 'browser_wasm';
-      if (saved === 'auto' || saved === 'cpu') return saved;
+      if (saved === 'auto' || saved === 'cpu' || saved === 'nvenc' || saved === 'amf' || saved === 'qsv') return saved;
     }
-    return isWebCodecsGpuSupported() ? 'client_gpu' : 'browser_wasm';
+    return getDefaultHardwareAccel(null);
   });
   const [hardwareInfo, setHardwareInfo] = useState<HardwareAccelInfo | null>(null);
   const [hwDropdownOpen, setHwDropdownOpen] = useState<boolean>(false);
@@ -505,9 +541,17 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
         if (res.ok) {
           const data: HardwareAccelInfo = await res.json();
           setHardwareInfo(data);
-          // If user previously had a server encoder selected that is unavailable on this host (e.g. nvenc on VPS),
-          // automatically fallback to client_gpu instead of keeping an unavailable selection!
+          const isManual = typeof window !== 'undefined' && localStorage.getItem('cheat_clip_hw_manually_set') === 'true';
+
           setHardwareAccel(current => {
+            // If running on local and user hasn't manually locked an encoder:
+            // automatically select the best detected local hardware acceleration (e.g. host GPU)
+            if (isLocalEnvironment() && !isManual) {
+              return getDefaultHardwareAccel(data);
+            }
+
+            // If user previously had a server encoder selected that is unavailable on this host (e.g. nvenc on VPS),
+            // automatically fallback to client_gpu instead of keeping an unavailable selection!
             if (current === 'nvenc' && !data.support?.nvenc) {
               return isWebCodecsGpuSupported() ? 'client_gpu' : 'browser_wasm';
             }
@@ -1867,7 +1911,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     setSubtitlePositionMode(DEFAULT_STUDIO_PREFS.subtitlePositionMode);
     setTitleDuration(DEFAULT_STUDIO_PREFS.titleDuration);
     setOriginalAudioVolume(DEFAULT_STUDIO_PREFS.originalAudioVolume);
-    setHardwareAccel(DEFAULT_STUDIO_PREFS.hardwareAccel);
+    setHardwareAccel(getDefaultHardwareAccel(hardwareInfo));
     setTitleYPercent(DEFAULT_STUDIO_PREFS.titleYPercent);
     setTitleXPercent(DEFAULT_STUDIO_PREFS.titleXPercent);
     setManualCropX(DEFAULT_STUDIO_PREFS.manualCropX);
@@ -1887,6 +1931,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
     handleResetSubtitlePosition();
     try {
       localStorage.removeItem(STUDIO_PREFS_KEY);
+      localStorage.removeItem('cheat_clip_hw_manually_set');
     } catch (e) {
       console.warn('Failed to clear studio preferences from localStorage:', e);
     }
@@ -4450,15 +4495,15 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                       {hardwareAccel === 'auto'
                         ? (hardwareInfo?.recommended ? `[${t.studio.hwDetectedPill}: ${(hardwareInfo.gpu_name || hardwareInfo.recommended).toUpperCase()}]` : `[${t.studio.hwDetectedPill}]`)
                         : hardwareAccel === 'client_gpu'
-                        ? '[WebCodecs GPU Accel]'
+                        ? (isLocalEnvironment() ? '[Client GPU Accel]' : '[Default: Client GPU]')
                         : hardwareAccel === 'browser_wasm'
                         ? '[Client Engine]'
                         : hardwareAccel === 'nvenc'
-                        ? (hardwareInfo?.support?.nvenc ? `[${t.studio.hwSupportedPill}]` : `[${t.studio.hwUnavailablePill}]`)
+                        ? (hardwareInfo?.support?.nvenc ? (isLocalEnvironment() && hardwareInfo?.recommended === 'nvenc' ? '[Default: NVENC GPU]' : `[${t.studio.hwSupportedPill}]`) : `[${t.studio.hwUnavailablePill}]`)
                         : hardwareAccel === 'amf'
-                        ? (hardwareInfo?.support?.amf ? `[${t.studio.hwSupportedPill}]` : `[${t.studio.hwUnavailablePill}]`)
+                        ? (hardwareInfo?.support?.amf ? (isLocalEnvironment() && hardwareInfo?.recommended === 'amf' ? '[Default: AMF GPU]' : `[${t.studio.hwSupportedPill}]`) : `[${t.studio.hwUnavailablePill}]`)
                         : hardwareAccel === 'qsv'
-                        ? (hardwareInfo?.support?.qsv ? `[${t.studio.hwSupportedPill}]` : `[${t.studio.hwUnavailablePill}]`)
+                        ? (hardwareInfo?.support?.qsv ? (isLocalEnvironment() && hardwareInfo?.recommended === 'qsv' ? '[Default: QSV GPU]' : `[${t.studio.hwSupportedPill}]`) : `[${t.studio.hwUnavailablePill}]`)
                         : `[${t.studio.hwSupportedPill}]`}
                     </span>
                   </div>
@@ -4485,7 +4530,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         badge: 'GPU',
                         title: 'Browser Client GPU',
                         desc: 'Native WebCodecs VideoEncoder running in browser (0% Server CPU · Client GPU Accel)',
-                        status: 'Default (Client GPU)',
+                        status: isLocalEnvironment() ? 'Client GPU' : 'Default (Client GPU)',
                         isReady: true,
                         disabled: false,
                       }] : []),
@@ -4503,7 +4548,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         badge: 'AUTO',
                         title: hardwareInfo?.gpu_name ? `${t.studio.hwAuto} (${hardwareInfo.gpu_name})` : t.studio.hwAuto,
                         desc: hardwareInfo?.recommended ? `${t.studio.hwAutoDesc} · Server Encoder: ${(hardwareInfo.gpu_name || hardwareInfo.recommended).toUpperCase()}` : t.studio.hwAutoDesc,
-                        status: hardwareInfo?.recommended ? `Server ${(hardwareInfo.gpu_name || hardwareInfo.recommended).toUpperCase()}` : t.studio.hwDetectedPill,
+                        status: isLocalEnvironment() && (!hardwareInfo?.recommended || hardwareInfo.recommended === 'cpu') ? `Default (${t.studio.hwAuto})` : (hardwareInfo?.recommended ? `Server ${(hardwareInfo.gpu_name || hardwareInfo.recommended).toUpperCase()}` : t.studio.hwDetectedPill),
                         isReady: true,
                         disabled: false,
                       },
@@ -4512,7 +4557,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         badge: 'NVENC',
                         title: hardwareInfo?.gpu_name ? `NVIDIA NVENC (${hardwareInfo.gpu_name})` : t.studio.hwNvenc,
                         desc: hardwareInfo?.gpu_name ? `Server GPU Hardware Encoding using ${hardwareInfo.gpu_name}` : t.studio.hwNvencDesc,
-                        status: hardwareInfo?.support?.nvenc ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill,
+                        status: isLocalEnvironment() && hardwareInfo?.recommended === 'nvenc' ? `Default (${t.studio.hwSupportedPill})` : (hardwareInfo?.support?.nvenc ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill),
                         isReady: Boolean(hardwareInfo?.support?.nvenc),
                         disabled: Boolean(hardwareInfo?.support && !hardwareInfo.support.nvenc),
                       },
@@ -4521,7 +4566,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         badge: 'AMF',
                         title: t.studio.hwAmf,
                         desc: t.studio.hwAmfDesc,
-                        status: hardwareInfo?.support?.amf ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill,
+                        status: isLocalEnvironment() && hardwareInfo?.recommended === 'amf' ? `Default (${t.studio.hwSupportedPill})` : (hardwareInfo?.support?.amf ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill),
                         isReady: Boolean(hardwareInfo?.support?.amf),
                         disabled: Boolean(hardwareInfo?.support && !hardwareInfo.support.amf),
                       },
@@ -4530,7 +4575,7 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                         badge: 'QSV',
                         title: t.studio.hwQsv,
                         desc: t.studio.hwQsvDesc,
-                        status: hardwareInfo?.support?.qsv ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill,
+                        status: isLocalEnvironment() && hardwareInfo?.recommended === 'qsv' ? `Default (${t.studio.hwSupportedPill})` : (hardwareInfo?.support?.qsv ? t.studio.hwSupportedPill : t.studio.hwUnavailablePill),
                         isReady: Boolean(hardwareInfo?.support?.qsv),
                         disabled: Boolean(hardwareInfo?.support && !hardwareInfo.support.qsv),
                       },
@@ -4552,6 +4597,9 @@ export const ClipStudioSection: React.FC<ClipStudioSectionProps> = ({
                           onClick={() => {
                             if (opt.disabled) return;
                             setHardwareAccel(opt.value);
+                            try {
+                              localStorage.setItem('cheat_clip_hw_manually_set', 'true');
+                            } catch {}
                             setHwDropdownOpen(false);
                           }}
                           role="option"

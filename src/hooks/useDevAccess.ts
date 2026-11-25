@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { AnalyzeResponse } from '../types';
+import { isLocalEnvironment } from '../utils/deviceUtils';
 
 interface UseDevAccessOptions {
   result: AnalyzeResponse | null;
@@ -8,12 +9,7 @@ interface UseDevAccessOptions {
 }
 
 export function useDevAccess({ result, workflowTab, setWorkflowTab }: UseDevAccessOptions) {
-  const isLocalhost = typeof window !== 'undefined' && (
-    window.location.hostname === 'localhost' ||
-    window.location.hostname === '127.0.0.1' ||
-    window.location.hostname === '::1' ||
-    window.location.hostname.endsWith('.local')
-  );
+  const isLocalhost = isLocalEnvironment();
 
   const DEV_PASSCODE = ((import.meta.env as any)?.VITE_DEV_PASSCODE || 'cheatclipdev').trim();
 

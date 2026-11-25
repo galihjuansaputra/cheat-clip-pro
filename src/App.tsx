@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
 import { hasStoredCookies } from './utils/cookieUtils';
+import { isLocalEnvironment } from './utils/deviceUtils';
 import { LayoutMetricsSync } from './utils/layoutMetricsSync';
 import { useLanguage } from './locales';
 
@@ -76,13 +77,7 @@ export default function App() {
   // System modals & updates state
   const [isCookiesModalOpen, setIsCookiesModalOpen] = useState(false);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
-  const [allowAppUpdates, setAllowAppUpdates] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const host = window.location.hostname;
-      return host === 'localhost' || host === '127.0.0.1';
-    }
-    return false;
-  });
+  const [allowAppUpdates, setAllowAppUpdates] = useState<boolean>(() => isLocalEnvironment());
   const [hasCookies, setHasCookies] = useState<boolean>(() => hasStoredCookies());
   const [cookieWarningState, setCookieWarningState] = useState<{
     isOpen: boolean;
@@ -420,8 +415,7 @@ export default function App() {
         }
       })
       .catch(() => {
-        const host = window.location.hostname;
-        setAllowAppUpdates(host === 'localhost' || host === '127.0.0.1');
+        setAllowAppUpdates(isLocalEnvironment());
       });
   }, []);
 

@@ -18,6 +18,15 @@ export function isMobileDevice(): boolean {
 }
 
 /**
+ * Detects if the app is currently running in a local environment (localhost, 127.0.0.1, etc.).
+ */
+export function isLocalEnvironment(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  return host === 'localhost' || host === '127.0.0.1' || host === '::1' || host.endsWith('.local');
+}
+
+/**
  * Screen WakeLock manager to keep screen alive during intensive
  * client decoding, audio analysis, or video rendering.
  */
