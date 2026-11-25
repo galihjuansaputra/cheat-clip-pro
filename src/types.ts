@@ -1,3 +1,19 @@
+export interface HistoryEntry {
+  video_id: string;
+  title: string;
+  duration_pref: string;
+  clip_count: number;
+  analyzed_at: string;
+  thumbnail: string;
+  url: string;
+  source_type?: 'youtube' | 'upload' | 'gdrive' | 'twitch';
+  video_url?: string;
+  range_suffix?: string;
+  summary?: string;
+  clip_titles?: string[];
+  key_quotes?: string[];
+}
+
 export interface HeatmapPoint {
   start_time: number;
   end_time: number;
