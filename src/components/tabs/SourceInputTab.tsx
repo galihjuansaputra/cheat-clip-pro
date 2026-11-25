@@ -1013,8 +1013,8 @@ export const SourceInputTab: React.FC<SourceInputTabProps> = ({
                           ))
                         ) : (
                           <>
-                            <option value="gemini-2.5-flash" style={{ background: '#0a0a0f', color: '#fff' }}>gemini-2.5-flash (Fast & recommended - Free tier friendly)</option>
-                            <option value="gemini-2.5-flash-lite" style={{ background: '#0a0a0f', color: '#fff' }}>gemini-2.5-flash-lite (Ultra-fast & lightweight)</option>
+                            <option value="gemini-2.0-flash" style={{ background: '#0a0a0f', color: '#fff' }}>gemini-2.0-flash (Fast & recommended - Free tier friendly)</option>
+                            <option value="gemini-2.0-flash-lite" style={{ background: '#0a0a0f', color: '#fff' }}>gemini-2.0-flash-lite (Ultra-fast & lightweight)</option>
                             <option value="gemini-2.0-flash" style={{ background: '#0a0a0f', color: '#fff' }}>gemini-2.0-flash (Fast & responsive)</option>
                             <option value="gemini-2.0-flash-lite" style={{ background: '#0a0a0f', color: '#fff' }}>gemini-2.0-flash-lite (Lightweight flash)</option>
                             <option value="gemini-1.5-flash" style={{ background: '#0a0a0f', color: '#fff' }}>gemini-1.5-flash (Fallback flash)</option>

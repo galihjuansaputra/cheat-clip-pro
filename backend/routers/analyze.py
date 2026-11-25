@@ -1522,10 +1522,10 @@ async def analyze_video(request: AnalyzeRequest):
             f"Return clips sorted by virality_score desc."
         )
 
-        requested_model = (request.model or 'gemini-2.5-flash').strip()
-        if any(dep in requested_model.lower() for dep in ['gemini-1.0', 'gemini-pro-vision']):
-            logger.info(f"Requested model '{requested_model}' is outdated. Upgrading to gemini-2.5-flash.")
-            requested_model = 'gemini-2.5-flash'
+        requested_model = (request.model or 'gemini-2.0-flash').strip()
+        if any(dep in requested_model.lower() for dep in ['gemini-1.0', 'gemini-pro-vision', 'gemini-2.5-flash']):
+            logger.info(f"Requested model '{requested_model}' is outdated or invalid. Upgrading to gemini-2.0-flash.")
+            requested_model = 'gemini-2.0-flash'
 
         yield _sse({
             "step": 4,

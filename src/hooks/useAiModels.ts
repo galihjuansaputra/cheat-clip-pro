@@ -48,7 +48,7 @@ export function useAiModels({
           if (data.models && data.models.length > 0) {
             setAvailableModels(data.models);
             if (!data.models.includes(selectedModel) || selectedModel.includes('1.5') || selectedModel.includes('1.0')) {
-              const fallback = data.models.find((m: string) => m.includes('flash')) || data.models[0] || 'gemini-2.5-flash';
+              const fallback = data.models.find((m: string) => m.includes('flash')) || data.models[0] || 'gemini-2.0-flash';
               setSelectedModel(fallback);
               localStorage.setItem('cheat_clip_selected_model', fallback);
             }

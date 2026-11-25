@@ -42,11 +42,11 @@ export function useSourceForm() {
   // Selected Gemini model
   const [selectedModel, setSelectedModel] = useState<string>(() => {
     const saved = localStorage.getItem('cheat_clip_selected_model');
-    if (saved && (saved.includes('1.0') || saved.includes('vision'))) {
-      localStorage.setItem('cheat_clip_selected_model', 'gemini-2.5-flash');
-      return 'gemini-2.5-flash';
+    if (saved && (saved.includes('1.0') || saved.includes('vision') || saved.includes('2.5'))) {
+      localStorage.setItem('cheat_clip_selected_model', 'gemini-2.0-flash');
+      return 'gemini-2.0-flash';
     }
-    return saved || 'gemini-2.5-flash';
+    return saved || 'gemini-2.0-flash';
   });
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const [targetClipCount, setTargetClipCount] = useState<number>(() => {

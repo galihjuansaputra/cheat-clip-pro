@@ -8,8 +8,6 @@ from google import genai
 from backend.config import logger
 
 KNOWN_FLASH_MODELS = [
-    'gemini-2.5-flash',
-    'gemini-2.5-flash-lite',
     'gemini-2.0-flash',
     'gemini-2.0-flash-lite',
     'gemini-1.5-flash',
@@ -73,12 +71,11 @@ def get_flash_models_for_key(client: genai.Client) -> List[str]:
 def list_available_gemini_models(api_key: str = "") -> List[str]:
     """Fetches list of available Gemini models using the user's API key, prioritizing Flash models (newest first)."""
     default_models = [
-        'gemini-2.5-flash',
-        'gemini-2.5-flash-lite',
         'gemini-2.0-flash',
         'gemini-2.0-flash-lite',
         'gemini-1.5-flash',
-        'gemini-2.5-pro'
+        'gemini-1.5-flash-8b',
+        'gemini-2.0-pro-exp-02-05'
     ]
     key_to_use = (api_key or os.environ.get("GEMINI_API_KEY") or "").strip()
     if not key_to_use or key_to_use.lower() == "mock":
