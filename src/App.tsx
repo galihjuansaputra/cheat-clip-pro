@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
 import { hasStoredCookies } from './utils/cookieUtils';
 import { isLocalEnvironment } from './utils/deviceUtils';
-import { LayoutMetricsSync } from './utils/layoutMetricsSync';
+import { AppFooter } from './components/layout/AppFooter';
 import { useLanguage } from './locales';
 
 import type { AnalyzeResponse, ViralClip } from './types';
@@ -525,8 +525,8 @@ export default function App() {
           onBackToClips={() => setWorkflowTab('clips')}
         />
 
-        {/* Viewport and Hardware Metrics Sync Pipeline */}
-        <LayoutMetricsSync />
+        {/* Standard Clean Footer */}
+        <AppFooter />
 
         {/* Transcript Language Confirmation Notice Modal */}
         <LanguageConfirmModal
