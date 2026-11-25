@@ -1223,7 +1223,7 @@ export const RecommendedClipsTab: React.FC<RecommendedClipsTabProps> = ({
                           </div>
                         </div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '250px', overflowY: 'auto', paddingRight: '0.5rem' }}>
-                          {result.clips.map((clip, idx) => {
+                          {(result.clips || []).map((clip, idx) => {
                             const isSelected = activeClip?.start_time === clip.start_time && activeClip?.end_time === clip.end_time;
                             const clipKey = `${clip.start_time}_${clip.end_time}`;
                             const isMarked = !!markedClips[clipKey];
@@ -1342,14 +1342,14 @@ export const RecommendedClipsTab: React.FC<RecommendedClipsTabProps> = ({
                           <FileText size={14} />
                           <span>{t.results.generatedClipsBadge}</span>
                           <strong style={{ color: 'var(--text-primary)', fontWeight: 600 }}>
-                            {result.clips.length}
+                            {(result.clips || []).length}
                           </strong>
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
                           <Bookmark size={14} color="var(--secondary)" />
                           <span>{t.results.markedClipsBadge}</span>
                           <strong style={{ color: 'var(--secondary)', fontWeight: 600 }}>
-                            {result.clips.filter(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]).length}
+                            {(result.clips || []).filter(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]).length}
                           </strong>
                         </div>
                       </div>
@@ -1393,15 +1393,15 @@ export const RecommendedClipsTab: React.FC<RecommendedClipsTabProps> = ({
                       {/* Stats and Exports */}
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-secondary)', marginTop: '0.25rem', flexWrap: 'wrap', gap: '0.5rem' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-                          <span>{t.results.showingClipsCount(sortedClips.length, result.clips.length)}</span>
+                          <span>{t.results.showingClipsCount(sortedClips.length, (result.clips || []).length)}</span>
                           {result.clips && result.clips.length > 0 && (
                             <button
                               type="button"
                               className="action-link-btn mark-all-clips-btn"
                               onClick={() => toggleAllMarkedClips()}
-                              title={result.clips.every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]) ? t.results.unmarkAllClips : t.results.markAllClips}
+                              title={(result.clips || []).every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]) ? t.results.unmarkAllClips : t.results.markAllClips}
                               style={{
-                                background: result.clips.every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]) ? 'rgba(255, 51, 102, 0.12)' : 'rgba(176, 38, 255, 0.12)',
+                                background: (result.clips || []).every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]) ? 'rgba(255, 51, 102, 0.12)' : 'rgba(176, 38, 255, 0.12)',
                                 border: result.clips.every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]) ? '1.5px solid #ff3366' : '1.5px solid #b026ff',
                                 color: result.clips.every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]) ? '#ff3366' : '#c084fc',
                                 borderRadius: 0,
@@ -1414,10 +1414,10 @@ export const RecommendedClipsTab: React.FC<RecommendedClipsTabProps> = ({
                                 alignItems: 'center',
                                 gap: '0.3rem',
                                 transition: 'var(--transition-smooth)',
-                                boxShadow: result.clips.every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]) ? '0 0 8px rgba(255, 51, 102, 0.25)' : '0 0 8px rgba(176, 38, 255, 0.25)'
+                                boxShadow: (result.clips || []).every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`]) ? '0 0 8px rgba(255, 51, 102, 0.25)' : '0 0 8px rgba(176, 38, 255, 0.25)'
                               }}
                             >
-                              {result.clips.every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`])
+                              {(result.clips || []).every(clip => !!markedClips[`${clip.start_time}_${clip.end_time}`])
                                 ? t.results.unmarkAllClips
                                 : t.results.markAllClips}
                             </button>
@@ -1619,7 +1619,7 @@ export const RecommendedClipsTab: React.FC<RecommendedClipsTabProps> = ({
                                           {(() => {
                                             const lowercaseHashtags = (clip.hashtag_suggestion || '').toLowerCase();
                                             if (!lowercaseHashtags) return clip.caption_suggestion;
-                                            if (clip.caption_suggestion.toLowerCase().includes(lowercaseHashtags)) return clip.caption_suggestion;
+                                            if (String(clip.caption_suggestion || '').toLowerCase().includes(lowercaseHashtags)) return clip.caption_suggestion;
                                             return `${clip.caption_suggestion} ${lowercaseHashtags}`;
                                           })()}
                                         </span>
@@ -1633,7 +1633,7 @@ export const RecommendedClipsTab: React.FC<RecommendedClipsTabProps> = ({
                                             const caption = clip.caption_suggestion || '';
                                             const lowercaseHashtags = (clip.hashtag_suggestion || '').toLowerCase();
                                             if (!lowercaseHashtags) return caption;
-                                            if (caption.toLowerCase().includes(lowercaseHashtags)) return caption;
+                                            if (String(caption).toLowerCase().includes(lowercaseHashtags)) return caption;
                                             return `${caption} ${lowercaseHashtags}`;
                                           })();
                                           handleCopyText(captionText, 'Caption');

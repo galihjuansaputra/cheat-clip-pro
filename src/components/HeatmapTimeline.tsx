@@ -44,12 +44,14 @@ export const HeatmapTimeline: React.FC<HeatmapTimelineProps> = ({
   const getCoordinates = (svgWidth: number) => {
     if (!heatmap || heatmap.length === 0 || duration === 0) return [];
     
+    const divisor = heatmap.length > 1 ? heatmap.length - 1 : 1;
     return heatmap.map((point, index) => {
       // Position x based on time or index (index is safer for uniform distribution)
-      const x = (index / (heatmap.length - 1)) * svgWidth;
+      const x = (index / divisor) * svgWidth;
       // Invert Y coordinate so 1.0 value is at top
-      const y = paddingTop + chartHeight - (point.value * chartHeight);
-      return { x, y, value: point.value, time: point.start_time };
+      const val = typeof point.value === 'number' ? point.value : 0;
+      const y = paddingTop + chartHeight - (val * chartHeight);
+      return { x, y, value: val, time: point.start_time ?? 0 };
     });
   };
 

@@ -26,18 +26,27 @@ export function useClipFilters({
 
   // Filter clips based on query and virality filters
   const filteredClips = useMemo(() => {
-    if (!result?.clips) return [];
+    if (!result?.clips || !Array.isArray(result.clips)) return [];
+    const q = (searchQuery || '').trim().toLowerCase();
+
     return result.clips.filter((clip) => {
+      if (!clip) return false;
+      const title = (clip.title || '').toLowerCase();
+      const transcript = (clip.transcript || '').toLowerCase();
+
       const matchesSearch =
-        searchQuery.trim() === '' ||
-        clip.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        clip.transcript.toLowerCase().includes(searchQuery.toLowerCase());
+        q === '' ||
+        title.includes(q) ||
+        transcript.includes(q);
+
+      const score = typeof clip.virality_score === 'number' ? clip.virality_score : 0;
+      const clipKey = `${clip.start_time ?? 0}_${clip.end_time ?? 0}`;
 
       const matchesVirality =
         viralityFilter === 'all' ||
-        (viralityFilter === 'high' && clip.virality_score >= 90) ||
-        (viralityFilter === 'medium' && clip.virality_score < 90) ||
-        (viralityFilter === 'marked' && !!markedClips[`${clip.start_time}_${clip.end_time}`]);
+        (viralityFilter === 'high' && score >= 90) ||
+        (viralityFilter === 'medium' && score < 90) ||
+        (viralityFilter === 'marked' && !!markedClips[clipKey]);
 
       return matchesSearch && matchesVirality;
     });
@@ -46,18 +55,26 @@ export function useClipFilters({
   // Sort the filtered clips based on selected sortBy
   const sortedClips = useMemo(() => {
     return [...filteredClips].sort((a, b) => {
+      if (!a || !b) return 0;
+      const aScore = typeof a.virality_score === 'number' ? a.virality_score : 0;
+      const bScore = typeof b.virality_score === 'number' ? b.virality_score : 0;
+      const aStart = typeof a.start_time === 'number' ? a.start_time : 0;
+      const bStart = typeof b.start_time === 'number' ? b.start_time : 0;
+      const aEnd = typeof a.end_time === 'number' ? a.end_time : aStart;
+      const bEnd = typeof b.end_time === 'number' ? b.end_time : bStart;
+
       if (sortBy === 'virality') {
-        return b.virality_score - a.virality_score;
+        return bScore - aScore;
       } else if (sortBy === 'time') {
-        return a.start_time - b.start_time;
+        return aStart - bStart;
       } else if (sortBy === 'duration') {
-        return b.end_time - b.start_time - (a.end_time - a.start_time);
+        return (bEnd - bStart) - (aEnd - aStart);
       } else if (sortBy === 'marked') {
-        const aMarked = !!markedClips[`${a.start_time}_${a.end_time}`];
-        const bMarked = !!markedClips[`${b.start_time}_${b.end_time}`];
+        const aMarked = !!markedClips[`${aStart}_${aEnd}`];
+        const bMarked = !!markedClips[`${bStart}_${bEnd}`];
         if (aMarked && !bMarked) return -1;
         if (!aMarked && bMarked) return 1;
-        return b.virality_score - a.virality_score;
+        return bScore - aScore;
       }
       return 0;
     });
